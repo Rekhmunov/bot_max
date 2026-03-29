@@ -59,12 +59,40 @@ def run() -> None:
         assert webhook_customer.status_code == 200
         assert webhook_customer.json().get("ok") is True
 
+        webhook_customer_official = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_created",
+                "message": {
+                    "sender": {"user_id": 9001},
+                    "recipient": {"chat_id": chat_id},
+                    "body": {"text": "Здравствуйте"},
+                },
+            },
+        )
+        assert webhook_customer_official.status_code == 200
+        assert webhook_customer_official.json().get("ok") is True
+
         webhook_manager = client.post(
             "/webhook/max",
             json={"chat_id": chat_id, "sender_id": "manager_1", "text": f"/{command}"},
         )
         assert webhook_manager.status_code == 200
         assert webhook_manager.json().get("command_sent") is True
+
+        webhook_manager_official = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_created",
+                "message": {
+                    "sender": {"user_id": "manager_1"},
+                    "recipient": {"chat_id": chat_id},
+                    "body": {"text": f"/{command}"},
+                },
+            },
+        )
+        assert webhook_manager_official.status_code == 200
+        assert webhook_manager_official.json().get("command_sent") is True
 
 
 if __name__ == "__main__":

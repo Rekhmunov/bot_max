@@ -15,7 +15,11 @@ class MaxClient:
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+            token_value = self.token.strip()
+            if token_value.lower().startswith("bearer "):
+                headers["Authorization"] = token_value
+            else:
+                headers["Authorization"] = token_value
         return headers
 
     async def _post(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -33,16 +37,16 @@ class MaxClient:
             return response.json()
 
     async def send_text(self, chat_id: str, text: str) -> dict[str, Any]:
-        return await self._post("/messages/send", {"chat_id": chat_id, "text": text})
+        return await self._post(f"/messages?chat_id={chat_id}", {"text": text})
 
     async def send_photo(self, chat_id: str, photo_url: str, caption: str | None = None) -> dict[str, Any]:
-        payload: dict[str, Any] = {"chat_id": chat_id, "photo_url": photo_url}
-        if caption:
-            payload["caption"] = caption
-        return await self._post("/messages/send-photo", payload)
+        # Max API requires media upload, so for now we send URL as text fallback.
+        # This keeps quick replies functional even without implementing /uploads flow.
+        text = f"{caption}\n{photo_url}" if caption else photo_url
+        return await self.send_text(chat_id=chat_id, text=text)
 
     async def add_member_to_chat(self, chat_id: str, account_id: str) -> dict[str, Any]:
         return await self._post(
-            "/chats/add-member",
-            {"chat_id": chat_id, "account_id": account_id},
+            f"/chats/{chat_id}/members",
+            {"user_ids": [int(account_id)] if str(account_id).isdigit() else [account_id]},
         )

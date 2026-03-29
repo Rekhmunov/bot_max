@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
@@ -226,7 +226,22 @@ def delete_quick_reply(
 
 
 @app.post(webhook_path)
-async def max_webhook(event: MaxWebhookEvent, db: Session = Depends(get_db)) -> dict:
+@app.post("/webhook/max")
+@app.post("/max-webhook")
+@app.post("/max-webhok")
+@app.post("/webhok/max")
+async def max_webhook(
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    event = MaxWebhookEvent.from_payload(payload)
+    if event is None:
+        # Ignore non-message updates or malformed events without failing webhook delivery.
+        return {"ok": True, "ignored": "unsupported_payload"}
+
+    if event.update_type and event.update_type != "message_created":
+        return {"ok": True, "ignored": event.update_type}
+
     settings_db = get_or_create_settings(db)
     max_client = MaxClient()
 
