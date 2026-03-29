@@ -33,8 +33,22 @@ class MaxClient:
                 json=payload,
                 headers=self._headers(),
             )
-            response.raise_for_status()
-            return response.json()
+            try:
+                data: Any = response.json()
+            except ValueError:
+                data = {"raw": response.text}
+
+            if response.is_error:
+                return {
+                    "success": False,
+                    "status_code": response.status_code,
+                    "endpoint": endpoint,
+                    "response": data,
+                }
+
+            if isinstance(data, dict):
+                return data
+            return {"success": True, "data": data}
 
     async def send_text(self, chat_id: str, text: str) -> dict[str, Any]:
         return await self._post(f"/messages?chat_id={chat_id}", {"text": text})

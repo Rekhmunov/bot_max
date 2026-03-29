@@ -94,6 +94,16 @@ def run() -> None:
         assert webhook_manager_official.status_code == 200
         assert webhook_manager_official.json().get("command_sent") is True
 
+        webhook_unknown = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_created",
+                "message": {"sender": {"user_id": 1}},
+            },
+        )
+        assert webhook_unknown.status_code == 200
+        assert webhook_unknown.json().get("ignored") == "unsupported_payload"
+
 
 if __name__ == "__main__":
     run()

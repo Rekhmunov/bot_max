@@ -51,10 +51,25 @@ async def process_incoming_customer_message(
     if not conversation.manager_added:
         await client.send_text(chat_id=chat_id, text=bot_settings.greeting_text)
         if bot_settings.manager_account_id:
-            await client.add_member_to_chat(chat_id=chat_id, account_id=bot_settings.manager_account_id)
-            if bot_settings.manager_added_notice_text:
-                await client.send_text(chat_id=chat_id, text=bot_settings.manager_added_notice_text)
-            conversation.manager_added = True
+            add_result = await client.add_member_to_chat(
+                chat_id=chat_id,
+                account_id=bot_settings.manager_account_id,
+            )
+            add_ok = bool(add_result.get("success", True))
+            if add_ok:
+                if bot_settings.manager_added_notice_text:
+                    await client.send_text(chat_id=chat_id, text=bot_settings.manager_added_notice_text)
+                conversation.manager_added = True
+            else:
+                error_message = f"manager_add_failed: {add_result}"
+                db.add(
+                    MessageLog(
+                        conversation_id=conversation.id,
+                        sender_account_id="bot",
+                        message_text=error_message,
+                        message_type="error",
+                    ),
+                )
 
     db.add(conversation)
     db.commit()
@@ -79,10 +94,14 @@ async def handle_manager_command(
         return False
 
     if quick_reply.text:
-        await client.send_text(chat_id=chat_id, text=quick_reply.text)
+        send_result = await client.send_text(chat_id=chat_id, text=quick_reply.text)
+        if not send_result.get("success", True):
+            return False
 
     if quick_reply.image_path:
         image_url = f"{settings.public_base_url.rstrip('/')}{quick_reply.image_path}"
-        await client.send_photo(chat_id=chat_id, photo_url=image_url)
+        image_result = await client.send_photo(chat_id=chat_id, photo_url=image_url)
+        if not image_result.get("success", True):
+            return False
 
     return True
