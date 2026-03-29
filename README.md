@@ -50,6 +50,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ## Основные переменные окружения
 
 - `ADMIN_USERNAME`, `ADMIN_PASSWORD` — доступ к админке
+- `MAX_API_BASE_URL` — базовый URL API Max (должен быть `https://platform-api.max.ru`)
 - `MAX_BOT_TOKEN` — токен бота Max
 - `MAX_BOT_ACCOUNT_ID` — ID аккаунта бота в Max
 - `PUBLIC_BASE_URL` — публичный HTTPS URL сервера (важно для фото в быстрых ответах)
