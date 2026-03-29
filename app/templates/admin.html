@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Админка Max Support Bot</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --text: #1f2430;
+      --muted: #5b6372;
+      --line: #dbe1eb;
+      --primary: #2459f2;
+      --danger: #bd2c2c;
+      --ok-bg: #e9f9ef;
+      --ok-border: #bde6ca;
+      --error-bg: #fde9e9;
+      --error-border: #f2caca;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .container {
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 0 16px 32px;
+    }
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 26px;
+    }
+    .logout-btn {
+      border: 1px solid var(--line);
+      background: white;
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 4px 16px rgba(0,0,0,.04);
+    }
+    h2 {
+      margin: 0 0 10px 0;
+      font-size: 20px;
+    }
+    label {
+      display: block;
+      margin: 10px 0 6px;
+      font-weight: 600;
+      font-size: 14px;
+    }
+    input, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      font: inherit;
+      background: #fff;
+    }
+    textarea { min-height: 90px; resize: vertical; }
+    .btn {
+      margin-top: 12px;
+      background: var(--primary);
+      border: 0;
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+    .notice {
+      margin: 8px 0 16px;
+      padding: 10px;
+      border-radius: 8px;
+      font-size: 14px;
+    }
+    .notice.ok {
+      background: var(--ok-bg);
+      border: 1px solid var(--ok-border);
+    }
+    .notice.error {
+      background: var(--error-bg);
+      border: 1px solid var(--error-border);
+      color: var(--danger);
+    }
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 8px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 14px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .preview {
+      max-width: 120px;
+      max-height: 90px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      object-fit: cover;
+    }
+    .delete {
+      border: 1px solid #ebc5c5;
+      background: #fff2f2;
+      color: var(--danger);
+      border-radius: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    code { background: #eef1f8; padding: 2px 6px; border-radius: 6px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="top">
+      <h1>Админ-панель бота Max</h1>
+      <form method="post" action="/admin/logout">
+        <button class="logout-btn" type="submit">Выйти</button>
+      </form>
+    </div>
+
+    {% if message %}
+      <div class="notice ok">{{ message }}</div>
+    {% endif %}
+    {% if error %}
+      <div class="notice error">{{ error }}</div>
+    {% endif %}
+
+    <div class="grid">
+      <section class="card">
+        <h2>Настройки бота</h2>
+        <form method="post" action="/admin/settings">
+          <label for="greeting_text">Приветственное сообщение</label>
+          <textarea id="greeting_text" name="greeting_text" required>{{ settings.greeting_text }}</textarea>
+
+          <label for="manager_account_id">ID аккаунта менеджера в Max</label>
+          <input id="manager_account_id" name="manager_account_id" value="{{ settings.manager_account_id }}" required />
+
+          <label for="admin_account_id">ID аккаунта администратора в Max</label>
+          <input id="admin_account_id" name="admin_account_id" value="{{ settings.admin_account_id }}" />
+
+          <label for="manager_added_notice_text">Сообщение после добавления менеджера</label>
+          <textarea id="manager_added_notice_text" name="manager_added_notice_text">{{ settings.manager_added_notice_text }}</textarea>
+
+          <button class="btn" type="submit">Сохранить настройки</button>
+        </form>
+        <div class="hint">
+          После первого сообщения покупателя бот отправит приветствие, добавит менеджера в чат и передаст диалог менеджеру.
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Добавить быстрый ответ</h2>
+        <form method="post" action="/admin/quick-replies" enctype="multipart/form-data">
+          <label for="command">Команда менеджера (без /)</label>
+          <input id="command" name="command" placeholder="price" required />
+
+          <label for="title">Название в админке</label>
+          <input id="title" name="title" placeholder="Прайс" required />
+
+          <label for="text">Текст ответа</label>
+          <textarea id="text" name="text" placeholder="Текст, который бот отправит по команде /price"></textarea>
+
+          <label for="photo">Фото (необязательно)</label>
+          <input id="photo" type="file" name="photo" accept=".png,.jpg,.jpeg,.gif,.webp" />
+
+          <button class="btn" type="submit">Добавить быстрый ответ</button>
+        </form>
+        <div class="hint">Менеджер вызывает ответ в чате командой вида <code>/price</code>.</div>
+      </section>
+    </div>
+
+    <section class="card" style="margin-top:16px;">
+      <h2>Webhook для Max</h2>
+      <div class="hint">
+        Укажите этот URL в настройках бота Max:
+        <code>{{ webhook_url }}</code>
+      </div>
+      <div class="hint">Путь webhook на сервере: <code>{{ webhook_path }}</code></div>
+    </section>
+
+    <section class="card" style="margin-top:16px;">
+      <h2>Список быстрых ответов</h2>
+      {% if quick_replies %}
+        <table>
+          <thead>
+            <tr>
+              <th>Команда</th>
+              <th>Название</th>
+              <th>Текст</th>
+              <th>Фото</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in quick_replies %}
+              <tr>
+                <td><code>/{{ item.command }}</code></td>
+                <td>{{ item.title }}</td>
+                <td>{{ item.text }}</td>
+                <td>
+                  {% if item.image_path %}
+                    <img class="preview" src="{{ item.image_path }}" alt="{{ item.title }}" />
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td>
+                  <form method="post" action="/admin/quick-replies/{{ item.id }}/delete">
+                    <button class="delete" type="submit">Удалить</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="hint">Быстрые ответы пока не созданы.</div>
+      {% endif %}
+    </section>
+  </div>
+</body>
+</html>
