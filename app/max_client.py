@@ -27,28 +27,36 @@ class MaxClient:
         if not self.token:
             return {"mock": True, "endpoint": endpoint, "payload": payload}
 
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(
-                f"{self.base_url}{endpoint}",
-                json=payload,
-                headers=self._headers(),
-            )
-            try:
-                data: Any = response.json()
-            except ValueError:
-                data = {"raw": response.text}
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.post(
+                    f"{self.base_url}{endpoint}",
+                    json=payload,
+                    headers=self._headers(),
+                )
+                try:
+                    data: Any = response.json()
+                except ValueError:
+                    data = {"raw": response.text}
 
-            if response.is_error:
-                return {
-                    "success": False,
-                    "status_code": response.status_code,
-                    "endpoint": endpoint,
-                    "response": data,
-                }
+                if response.is_error:
+                    return {
+                        "success": False,
+                        "status_code": response.status_code,
+                        "endpoint": endpoint,
+                        "response": data,
+                    }
 
-            if isinstance(data, dict):
-                return data
-            return {"success": True, "data": data}
+                if isinstance(data, dict):
+                    return data
+                return {"success": True, "data": data}
+        except httpx.HTTPError as exc:
+            return {
+                "success": False,
+                "endpoint": endpoint,
+                "error": "http_error",
+                "details": str(exc),
+            }
 
     async def send_text(self, chat_id: str, text: str) -> dict[str, Any]:
         return await self._post(f"/messages?chat_id={chat_id}", {"text": text})
