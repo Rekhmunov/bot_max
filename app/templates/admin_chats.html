@@ -61,6 +61,34 @@
     .send-box textarea { min-height: 84px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
     .send-box input[type="file"] { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff; }
     .send-box button { border: 0; border-radius: 8px; background: var(--primary); color: #fff; padding: 10px 12px; font-weight: 700; }
+    .quick-box {
+      margin-top: 12px;
+      border-top: 1px dashed var(--line);
+      padding-top: 10px;
+    }
+    .quick-title { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+    .quick-list { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .quick-list form { display: inline-flex; }
+    .quick-btn {
+      border: 1px solid #c9d7ff;
+      background: #edf3ff;
+      color: #1f4fd8;
+      border-radius: 999px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .quick-manual {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+    }
+    .quick-manual input {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+    }
     .empty { color: var(--muted); padding: 14px; }
     @media (max-width: 980px) {
       .layout { grid-template-columns: 1fr; height: auto; }
@@ -160,6 +188,27 @@
               <input type="file" name="photo" accept=".png,.jpg,.jpeg,.gif,.webp" />
               <button type="submit">Отправить в чат</button>
             </form>
+
+            <div class="quick-box">
+              <div class="quick-title">Быстрые ответы</div>
+              {% if quick_replies %}
+                <div class="quick-list">
+                  {% for qr in quick_replies %}
+                    <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/quick-reply">
+                      <input type="hidden" name="command" value="{{ qr.command }}" />
+                      <button class="quick-btn" type="submit">/{{ qr.command }}</button>
+                    </form>
+                  {% endfor %}
+                </div>
+              {% else %}
+                <div class="empty" style="padding:0 0 8px;">Нет активных быстрых ответов.</div>
+              {% endif %}
+
+              <form class="quick-manual" method="post" action="/admin/chats/{{ active_thread.conversation_id }}/quick-reply">
+                <input type="text" name="command" placeholder="Или введите команду: /price" />
+                <button type="submit">Применить</button>
+              </form>
+            </div>
           </section>
         </div>
       {% else %}

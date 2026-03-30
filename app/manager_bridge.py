@@ -486,7 +486,7 @@ async def handle_manager_message(
         return {"ok": True, "phone_captured_from_manager": True}
 
     if text_value.startswith("/"):
-        sent = await _send_quick_reply_to_customer(
+        sent = await send_quick_reply_to_customer(
             db=db,
             client=client,
             conversation_id=target_conversation.id,
@@ -514,12 +514,16 @@ async def handle_manager_message(
     return {"ok": True, "ignored": "empty_manager_message"}
 
 
-async def _send_quick_reply_to_customer(
+async def send_quick_reply_to_customer(
     db: Session,
     client: MaxClient,
     conversation_id: int,
     customer_chat_id: str,
     command_text: str,
+    *,
+    sender_prefix: str | None = "Менеджер: ",
+    source: str = "manager",
+    image_caption: str = "Менеджер отправил изображение",
 ) -> bool:
     command = command_text.strip().lstrip("/").strip().lower()
     if not command:
@@ -534,15 +538,18 @@ async def _send_quick_reply_to_customer(
         return False
 
     if quick_reply.text:
-        send_result = await client.send_text(chat_id=customer_chat_id, text=f"Менеджер: {quick_reply.text}")
+        rendered_text = (
+            f"{sender_prefix}{quick_reply.text}" if sender_prefix is not None else quick_reply.text
+        )
+        send_result = await client.send_text(chat_id=customer_chat_id, text=rendered_text)
         if not send_result.get("success", True) and "message" not in send_result:
             return False
         _store_chat_message(
             db,
             conversation_id=conversation_id,
             direction="bot",
-            source="manager",
-            text=f"Менеджер: {quick_reply.text}",
+            source=source,
+            text=rendered_text,
             max_message_mid=_extract_sent_mid(send_result),
         )
 
@@ -551,7 +558,7 @@ async def _send_quick_reply_to_customer(
         image_result = await client.send_photo(
             chat_id=customer_chat_id,
             photo_url=image_url,
-            caption="Менеджер отправил изображение",
+            caption=image_caption,
         )
         if not image_result.get("success", True) and "message" not in image_result:
             return False
@@ -559,13 +566,44 @@ async def _send_quick_reply_to_customer(
             db,
             conversation_id=conversation_id,
             direction="bot",
-            source="manager",
-            text="Менеджер отправил изображение",
+            source=source,
+            text=image_caption,
             image_url=image_url,
             max_message_mid=_extract_sent_mid(image_result),
         )
 
     return True
+
+
+def list_active_quick_replies(db: Session) -> list[QuickReply]:
+    return (
+        db.query(QuickReply)
+        .filter(QuickReply.is_active.is_(True))
+        .order_by(QuickReply.command.asc())
+        .all()
+    )
+
+
+async def send_admin_quick_reply(
+    db: Session,
+    *,
+    conversation_id: int,
+    command_text: str,
+) -> bool:
+    conversation = get_conversation_by_id(db, conversation_id)
+    if conversation is None:
+        return False
+    client = MaxClient()
+    return await send_quick_reply_to_customer(
+        db=db,
+        client=client,
+        conversation_id=conversation_id,
+        customer_chat_id=conversation.chat_id,
+        command_text=command_text,
+        sender_prefix=None,
+        source="bot_system",
+        image_caption="Изображение от оператора",
+    )
 
 
 def load_chat_threads(db: Session, query: str = "") -> list[ChatThreadItem]:

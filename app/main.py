@@ -18,6 +18,7 @@ from app.manager_bridge import (
     TEMPLATE_START,
     ensure_default_templates,
     get_template_text,
+    list_active_quick_replies,
     load_chat_messages,
     load_chat_threads,
     mark_thread_read,
@@ -26,6 +27,7 @@ from app.manager_bridge import (
     remove_chat_message,
     set_template_text,
     send_admin_chat_message,
+    send_admin_quick_reply,
     update_chat_message_text,
 )
 from app.max_client import MaxClient
@@ -264,12 +266,27 @@ def admin_chats_page(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     sent_flag = request.query_params.get("sent")
+    quick_flag = request.query_params.get("quick")
+    edited_flag = request.query_params.get("edited")
+    deleted_flag = request.query_params.get("deleted")
     op_message = None
     op_error = None
     if sent_flag == "1":
         op_message = "Сообщение отправлено"
     if sent_flag == "0":
         op_error = "Не удалось отправить сообщение"
+    if quick_flag == "1":
+        op_message = "Быстрый ответ отправлен"
+    if quick_flag == "0":
+        op_error = "Не удалось отправить быстрый ответ"
+    if edited_flag == "1":
+        op_message = "Сообщение изменено"
+    if edited_flag == "0":
+        op_error = "Не удалось изменить сообщение"
+    if deleted_flag == "1":
+        op_message = "Сообщение удалено"
+    if deleted_flag == "0":
+        op_error = "Не удалось удалить сообщение"
 
     threads = load_chat_threads(db, query=q)
     active_thread = None
@@ -296,6 +313,7 @@ def admin_chats_page(
             "query": q,
             "message": op_message,
             "error": op_error,
+            "quick_replies": list_active_quick_replies(db),
         },
     )
 
@@ -308,6 +326,7 @@ async def admin_chats_send_message(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    text_value = text.strip()
     image_path = None
     if photo and photo.filename:
         ext = Path(photo.filename).suffix.lower()
@@ -320,15 +339,46 @@ async def admin_chats_send_message(
         target.write_bytes(content)
         image_path = f"/static/uploads/{safe_name}"
 
+    if text_value.startswith("/") and not image_path:
+        sent_ok = await send_admin_quick_reply(
+            db=db,
+            conversation_id=conversation_id,
+            command_text=text_value,
+        )
+        suffix = "1" if sent_ok else "0"
+        return RedirectResponse(
+            url=f"/admin/chats?conversation_id={conversation_id}&quick={suffix}",
+            status_code=302,
+        )
+
     sent_ok = await send_admin_chat_message(
         db=db,
         conversation_id=conversation_id,
-        text=text.strip(),
+        text=text_value,
         image_path=image_path,
     )
     suffix = "1" if sent_ok else "0"
     return RedirectResponse(
         url=f"/admin/chats?conversation_id={conversation_id}&sent={suffix}",
+        status_code=302,
+    )
+
+
+@app.post("/admin/chats/{conversation_id}/quick-reply", response_class=RedirectResponse)
+async def admin_chats_send_quick_reply(
+    conversation_id: int,
+    command: str = Form(""),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    sent_ok = await send_admin_quick_reply(
+        db=db,
+        conversation_id=conversation_id,
+        command_text=command,
+    )
+    suffix = "1" if sent_ok else "0"
+    return RedirectResponse(
+        url=f"/admin/chats?conversation_id={conversation_id}&quick={suffix}",
         status_code=302,
     )
 
