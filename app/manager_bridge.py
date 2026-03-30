@@ -221,6 +221,25 @@ async def handle_customer_event(
     )
     db.commit()
 
+    phone_just_verified = False
+    # If phone is already available (privacy allows it), skip explicit phone-confirmation step.
+    if event.contact_phone and not meta.phone_verified:
+        meta.phone_verified = True
+        meta.phone_number = event.contact_phone
+        if meta.status == "new":
+            meta.status = "waiting_manager"
+        db.add(meta)
+        db.commit()
+        phone_just_verified = True
+        _upsert_customer_profile(
+            db=db,
+            customer_id=event.sender_id,
+            chat_id=event.chat_id,
+            first_name=event.sender_first_name,
+            username=event.sender_username,
+            phone_number=event.contact_phone,
+        )
+
     is_bot_started = event.update_type == "bot_started"
 
     # Message before Start (custom behavior for message_created before start)
@@ -234,26 +253,14 @@ async def handle_customer_event(
         meta.start_prompt_sent = True
         db.add(meta)
         db.commit()
+        if meta.phone_verified:
+            await client.send_text(chat_id=event.chat_id, text=get_template_text(db, TEMPLATE_AFTER_PHONE))
+            return {"ok": True, "flow": "start_prompt_skipped_phone"}
         start_text = get_template_text(db, TEMPLATE_START)
         await _send_contact_request_prompt(client=client, chat_id=event.chat_id, text=start_text)
         return {"ok": True, "flow": "start_prompt"}
 
-    if event.contact_phone and not meta.phone_verified:
-        meta.phone_verified = True
-        meta.phone_number = event.contact_phone
-        meta.status = "waiting_manager"
-        db.add(meta)
-        db.commit()
-
-        _upsert_customer_profile(
-            db=db,
-            customer_id=event.sender_id,
-            chat_id=event.chat_id,
-            first_name=event.sender_first_name,
-            username=event.sender_username,
-            phone_number=event.contact_phone,
-        )
-
+    if phone_just_verified:
         await client.send_text(chat_id=event.chat_id, text=get_template_text(db, TEMPLATE_AFTER_PHONE))
         await forward_customer_message_to_manager(
             db=db,

@@ -66,6 +66,20 @@ def run() -> None:
         assert webhook_customer_start.status_code == 200
         assert webhook_customer_start.json().get("flow") == "start_prompt"
 
+        chat_id_skip = f"chat_{uuid4().hex[:8]}"
+        webhook_customer_start_with_phone = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "bot_started",
+                "chat_id": chat_id_skip,
+                "sender_id": "buyer_2",
+                "text": "",
+                "contact_phone": "+79992223344",
+            },
+        )
+        assert webhook_customer_start_with_phone.status_code == 200
+        assert webhook_customer_start_with_phone.json().get("flow") == "start_prompt_skipped_phone"
+
         webhook_customer_verified = client.post(
             "/webhook/max",
             json={

@@ -70,6 +70,16 @@ class MaxWebhookEvent(BaseModel):
             if contact_phone:
                 break
 
+        contact_phone = _pick_first(
+            contact_phone,
+            payload.get("contact_phone"),
+            payload.get("phone"),
+            message.get("contact_phone"),
+            message.get("phone"),
+            body.get("contact_phone"),
+            body.get("phone"),
+        )
+
         chat_id = _pick_first(
             payload.get("chat_id"),
             message.get("chat_id"),
