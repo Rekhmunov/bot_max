@@ -12,14 +12,20 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_admin, require_admin, sign_in_admin
 from app.config import settings
 from app.database import get_db, init_db
+from app.manager_bridge import (
+    TEMPLATE_AFTER_PHONE,
+    TEMPLATE_PRESTART,
+    TEMPLATE_START,
+    ensure_default_templates,
+    get_template_text,
+    handle_customer_event,
+    handle_manager_message,
+    set_template_text,
+)
 from app.max_client import MaxClient
 from app.models import QuickReply
 from app.schemas import MaxWebhookEvent
-from app.services import (
-    get_or_create_settings,
-    handle_manager_command,
-    process_incoming_customer_message,
-)
+from app.services import get_or_create_settings
 from fastapi.templating import Jinja2Templates
 
 app = FastAPI(title=settings.app_name)
@@ -34,6 +40,10 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    from app.database import SessionLocal
+
+    with SessionLocal() as db:
+        ensure_default_templates(db)
 
 
 @app.get("/", response_class=RedirectResponse)
@@ -87,6 +97,9 @@ def admin_page(
         {
             "request": request,
             "settings": bot_settings,
+            "template_prestart": get_template_text(db, TEMPLATE_PRESTART),
+            "template_start": get_template_text(db, TEMPLATE_START),
+            "template_after_phone": get_template_text(db, TEMPLATE_AFTER_PHONE),
             "quick_replies": replies,
             "webhook_path": webhook_path,
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
@@ -99,10 +112,11 @@ def admin_page(
 @app.post("/admin/settings", response_class=HTMLResponse)
 def update_settings(
     request: Request,
-    greeting_text: str = Form(...),
+    prestart_message: str = Form(...),
+    start_message: str = Form(...),
+    after_phone_message: str = Form(...),
     manager_account_id: str = Form(...),
     admin_account_id: str = Form(""),
-    manager_added_notice_text: str = Form("Менеджер подключен к диалогу."),
     _admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -110,11 +124,12 @@ def update_settings(
         return RedirectResponse(url="/admin/login", status_code=302)
 
     bot_settings = get_or_create_settings(db)
-    bot_settings.greeting_text = greeting_text.strip()
     bot_settings.manager_account_id = manager_account_id.strip()
     bot_settings.admin_account_id = admin_account_id.strip()
-    bot_settings.manager_added_notice_text = manager_added_notice_text.strip()
     db.add(bot_settings)
+    set_template_text(db, TEMPLATE_PRESTART, prestart_message)
+    set_template_text(db, TEMPLATE_START, start_message)
+    set_template_text(db, TEMPLATE_AFTER_PHONE, after_phone_message)
     db.commit()
 
     replies = db.query(QuickReply).order_by(QuickReply.command.asc()).all()
@@ -124,6 +139,9 @@ def update_settings(
         {
             "request": request,
             "settings": bot_settings,
+            "template_prestart": get_template_text(db, TEMPLATE_PRESTART),
+            "template_start": get_template_text(db, TEMPLATE_START),
+            "template_after_phone": get_template_text(db, TEMPLATE_AFTER_PHONE),
             "quick_replies": replies,
             "webhook_path": webhook_path,
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
@@ -160,6 +178,9 @@ async def create_quick_reply(
             {
                 "request": request,
                 "settings": bot_settings,
+                "template_prestart": get_template_text(db, TEMPLATE_PRESTART),
+                "template_start": get_template_text(db, TEMPLATE_START),
+                "template_after_phone": get_template_text(db, TEMPLATE_AFTER_PHONE),
                 "quick_replies": replies,
                 "webhook_path": webhook_path,
                 "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
@@ -198,6 +219,9 @@ async def create_quick_reply(
         {
             "request": request,
             "settings": bot_settings,
+            "template_prestart": get_template_text(db, TEMPLATE_PRESTART),
+            "template_start": get_template_text(db, TEMPLATE_START),
+            "template_after_phone": get_template_text(db, TEMPLATE_AFTER_PHONE),
             "quick_replies": replies,
             "webhook_path": webhook_path,
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
@@ -248,25 +272,20 @@ async def max_webhook(
     if event.sender_id == settings.max_bot_account_id:
         return {"ok": True}
 
-    # Manager commands in shared chat (/command)
-    if event.sender_id == settings_db.manager_account_id and event.text.startswith("/"):
-        sent = await handle_manager_command(
+    if settings_db.admin_account_id and event.sender_id == settings_db.admin_account_id:
+        return {"ok": True, "ignored": "admin"}
+
+    if event.sender_id == settings_db.manager_account_id:
+        return await handle_manager_message(
             db=db,
             client=max_client,
-            chat_id=event.chat_id,
-            command_text=event.text,
-        )
-        return {"ok": True, "command_sent": sent}
-
-    # First contact from customer: greet and add manager.
-    if event.sender_id != settings_db.manager_account_id:
-        if settings_db.admin_account_id and event.sender_id == settings_db.admin_account_id:
-            return {"ok": True, "ignored": "admin"}
-        await process_incoming_customer_message(
-            db=db,
-            client=max_client,
-            customer_id=event.sender_id,
-            chat_id=event.chat_id,
+            settings=settings_db,
+            event=event,
         )
 
-    return {"ok": True}
+    return await handle_customer_event(
+        db=db,
+        client=max_client,
+        settings=settings_db,
+        event=event,
+    )

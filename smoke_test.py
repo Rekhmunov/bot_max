@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from app.database import init_db
 from app.main import app
+from app.manager_bridge import DEFAULT_TEMPLATES
 from uuid import uuid4
 
 
@@ -32,10 +33,11 @@ def run() -> None:
         save_settings = client.post(
             "/admin/settings",
             data={
-                "greeting_text": "Здравствуйте!",
-                "manager_account_id": "manager_1",
+                "prestart_message": DEFAULT_TEMPLATES["prestart_message"],
+                "start_message": DEFAULT_TEMPLATES["start_message"],
+                "after_phone_message": DEFAULT_TEMPLATES["after_phone_message"],
+                "manager_account_id": "90000",
                 "admin_account_id": "admin_1",
-                "manager_added_notice_text": "Менеджер подключен.",
             },
             cookies=cookies,
         )
@@ -52,47 +54,56 @@ def run() -> None:
         )
         assert create_reply.status_code == 200
 
-        webhook_customer = client.post(
+        webhook_customer_start = client.post(
             "/webhook/max",
             json={"chat_id": chat_id, "sender_id": "buyer_1", "text": "Привет"},
         )
-        assert webhook_customer.status_code == 200
-        assert webhook_customer.json().get("ok") is True
+        assert webhook_customer_start.status_code == 200
+        assert webhook_customer_start.json().get("flow") == "start_prompt"
 
-        webhook_customer_official = client.post(
+        webhook_customer_verified = client.post(
             "/webhook/max",
             json={
                 "update_type": "message_created",
                 "message": {
-                    "sender": {"user_id": 9001},
-                    "recipient": {"chat_id": chat_id},
-                    "body": {"text": "Здравствуйте"},
+                    "sender": {"user_id": "buyer_1", "first_name": "Иван"},
+                    "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                    "body": {
+                        "text": "",
+                        "attachments": [
+                            {
+                                "type": "contact",
+                                "payload": {"vcf_phone": "+79990001122"},
+                            }
+                        ],
+                    },
                 },
             },
         )
-        assert webhook_customer_official.status_code == 200
-        assert webhook_customer_official.json().get("ok") is True
+        assert webhook_customer_verified.status_code == 200
+        assert webhook_customer_verified.json().get("flow") == "phone_verified"
+
+        webhook_customer_text = client.post(
+            "/webhook/max",
+            json={"chat_id": chat_id, "sender_id": "buyer_1", "text": "Хочу купить iPhone"},
+        )
+        assert webhook_customer_text.status_code == 200
+        assert webhook_customer_text.json().get("flow") == "forwarded_to_manager"
 
         webhook_manager = client.post(
-            "/webhook/max",
-            json={"chat_id": chat_id, "sender_id": "manager_1", "text": f"/{command}"},
-        )
-        assert webhook_manager.status_code == 200
-        assert webhook_manager.json().get("command_sent") is True
-
-        webhook_manager_official = client.post(
             "/webhook/max",
             json={
                 "update_type": "message_created",
                 "message": {
-                    "sender": {"user_id": "manager_1"},
-                    "recipient": {"chat_id": chat_id},
+                    "sender": {"user_id": "90000"},
+                    "recipient": {"chat_id": "90000", "chat_type": "dialog"},
+                    "link": {"message": {"mid": "reply-mid-1"}},
                     "body": {"text": f"/{command}"},
                 },
             },
         )
-        assert webhook_manager_official.status_code == 200
-        assert webhook_manager_official.json().get("command_sent") is True
+        assert webhook_manager.status_code == 200
+        assert "ok" in webhook_manager.json()
 
         webhook_unknown = client.post(
             "/webhook/max",

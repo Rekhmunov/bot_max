@@ -58,8 +58,30 @@ class MaxClient:
                 "details": str(exc),
             }
 
+    async def send_message(
+        self,
+        *,
+        text: str | None = None,
+        chat_id: str | None = None,
+        user_id: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        if not chat_id and not user_id:
+            return {"success": False, "error": "chat_id_or_user_id_required"}
+
+        query_part = f"chat_id={chat_id}" if chat_id else f"user_id={user_id}"
+        body: dict[str, Any] = {}
+        if text is not None:
+            body["text"] = text
+        if attachments is not None:
+            body["attachments"] = attachments
+        return await self._post(f"/messages?{query_part}", body)
+
     async def send_text(self, chat_id: str, text: str) -> dict[str, Any]:
-        return await self._post(f"/messages?chat_id={chat_id}", {"text": text})
+        return await self.send_message(text=text, chat_id=chat_id)
+
+    async def send_text_to_user(self, user_id: str, text: str) -> dict[str, Any]:
+        return await self.send_message(text=text, user_id=user_id)
 
     async def send_photo(self, chat_id: str, photo_url: str, caption: str | None = None) -> dict[str, Any]:
         # Max API requires media upload, so for now we send URL as text fallback.

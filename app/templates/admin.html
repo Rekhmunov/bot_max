@@ -158,22 +158,25 @@
       <section class="card">
         <h2>Настройки бота</h2>
         <form method="post" action="/admin/settings">
-          <label for="greeting_text">Приветственное сообщение</label>
-          <textarea id="greeting_text" name="greeting_text" required>{{ settings.greeting_text }}</textarea>
+          <label for="prestart_message">Сообщение до нажатия Start</label>
+          <textarea id="prestart_message" name="prestart_message" required>{{ template_prestart }}</textarea>
 
-          <label for="manager_account_id">ID аккаунта менеджера в Max</label>
+          <label for="start_message">Сообщение после Start (просим номер)</label>
+          <textarea id="start_message" name="start_message" required>{{ template_start }}</textarea>
+
+          <label for="after_phone_message">Сообщение после подтверждения номера</label>
+          <textarea id="after_phone_message" name="after_phone_message" required>{{ template_after_phone }}</textarea>
+
+          <label for="manager_account_id">ID чата менеджер-бот в Max</label>
           <input id="manager_account_id" name="manager_account_id" value="{{ settings.manager_account_id }}" required />
 
           <label for="admin_account_id">ID аккаунта администратора в Max</label>
           <input id="admin_account_id" name="admin_account_id" value="{{ settings.admin_account_id }}" />
 
-          <label for="manager_added_notice_text">Сообщение после добавления менеджера</label>
-          <textarea id="manager_added_notice_text" name="manager_added_notice_text">{{ settings.manager_added_notice_text }}</textarea>
-
           <button class="btn" type="submit">Сохранить настройки</button>
         </form>
         <div class="hint">
-          После первого сообщения покупателя бот отправит приветствие, добавит менеджера в чат и передаст диалог менеджеру.
+          Логика: бот общается с покупателем, а менеджер отвечает в своем чате с ботом через reply.
         </div>
       </section>
 
