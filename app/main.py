@@ -18,9 +18,15 @@ from app.manager_bridge import (
     TEMPLATE_START,
     ensure_default_templates,
     get_template_text,
+    load_chat_messages,
+    load_chat_threads,
+    mark_thread_read,
     handle_customer_event,
     handle_manager_message,
+    remove_chat_message,
     set_template_text,
+    send_admin_chat_message,
+    update_chat_message_text,
 )
 from app.max_client import MaxClient
 from app.models import QuickReply
@@ -247,6 +253,119 @@ def delete_quick_reply(
         db.delete(reply)
         db.commit()
     return RedirectResponse(url="/admin", status_code=302)
+
+
+@app.get("/admin/chats", response_class=HTMLResponse)
+def admin_chats_page(
+    request: Request,
+    conversation_id: int | None = None,
+    q: str = "",
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    sent_flag = request.query_params.get("sent")
+    op_message = None
+    op_error = None
+    if sent_flag == "1":
+        op_message = "Сообщение отправлено"
+    if sent_flag == "0":
+        op_error = "Не удалось отправить сообщение"
+
+    threads = load_chat_threads(db, query=q)
+    active_thread = None
+    if conversation_id is not None:
+        for item in threads:
+            if item.conversation_id == conversation_id:
+                active_thread = item
+                break
+    if active_thread is None and threads:
+        active_thread = threads[0]
+    messages = []
+    if active_thread:
+        mark_thread_read(db, active_thread.conversation_id)
+        messages = load_chat_messages(db, active_thread.conversation_id)
+
+    return templates.TemplateResponse(
+        request,
+        "admin_chats.html",
+        {
+            "request": request,
+            "threads": threads,
+            "active_thread": active_thread,
+            "messages": messages,
+            "query": q,
+            "message": op_message,
+            "error": op_error,
+        },
+    )
+
+
+@app.post("/admin/chats/{conversation_id}/send", response_class=RedirectResponse)
+async def admin_chats_send_message(
+    conversation_id: int,
+    text: str = Form(""),
+    photo: UploadFile | None = File(default=None),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    image_path = None
+    if photo and photo.filename:
+        ext = Path(photo.filename).suffix.lower()
+        allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+        if ext not in allowed:
+            raise HTTPException(status_code=400, detail="Неподдерживаемый формат фото")
+        safe_name = f"{uuid4().hex}{ext}"
+        target = Path("app/static/uploads") / safe_name
+        content = await photo.read()
+        target.write_bytes(content)
+        image_path = f"/static/uploads/{safe_name}"
+
+    sent_ok = await send_admin_chat_message(
+        db=db,
+        conversation_id=conversation_id,
+        text=text.strip(),
+        image_path=image_path,
+    )
+    suffix = "1" if sent_ok else "0"
+    return RedirectResponse(
+        url=f"/admin/chats?conversation_id={conversation_id}&sent={suffix}",
+        status_code=302,
+    )
+
+
+@app.post("/admin/chats/{conversation_id}/messages/{chat_message_id}/edit", response_class=RedirectResponse)
+async def admin_chats_edit_message(
+    conversation_id: int,
+    chat_message_id: int,
+    text: str = Form(""),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    updated = await update_chat_message_text(
+        db=db,
+        chat_message_id=chat_message_id,
+        new_text=text.strip(),
+    )
+    suffix = "1" if updated else "0"
+    return RedirectResponse(
+        url=f"/admin/chats?conversation_id={conversation_id}&edited={suffix}",
+        status_code=302,
+    )
+
+
+@app.post("/admin/chats/{conversation_id}/messages/{chat_message_id}/delete", response_class=RedirectResponse)
+async def admin_chats_delete_message(
+    conversation_id: int,
+    chat_message_id: int,
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    removed = await remove_chat_message(db=db, chat_message_id=chat_message_id)
+    suffix = "1" if removed else "0"
+    return RedirectResponse(
+        url=f"/admin/chats?conversation_id={conversation_id}&deleted={suffix}",
+        status_code=302,
+    )
 
 
 @app.post(webhook_path)

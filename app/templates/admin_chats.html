@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Чаты покупателей</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --line: #dbe1eb;
+      --text: #202637;
+      --muted: #637089;
+      --primary: #2459f2;
+      --card: #ffffff;
+      --ok: #e9f9ef;
+      --err: #fde9e9;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; color: var(--text); background: var(--bg); }
+    .top {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 16px; background: #fff; border-bottom: 1px solid var(--line);
+    }
+    .top a { color: var(--primary); text-decoration: none; font-weight: 700; }
+    .layout { display: grid; grid-template-columns: 360px 1fr; height: calc(100vh - 58px); }
+    .left { border-right: 1px solid var(--line); background: #fff; overflow: auto; }
+    .right { overflow: auto; padding: 14px; }
+    .search { padding: 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: #fff; }
+    .search form { display: flex; gap: 8px; }
+    .search input { flex: 1; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
+    .search button { border: 0; border-radius: 8px; background: var(--primary); color: #fff; padding: 10px 12px; font-weight: 700; }
+    .thread {
+      display: block; text-decoration: none; color: inherit;
+      padding: 12px; border-bottom: 1px solid #eef2f8;
+    }
+    .thread:hover { background: #f8faff; }
+    .thread.active { background: #edf3ff; }
+    .thread .name { font-weight: 700; margin-bottom: 4px; }
+    .thread .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .thread .preview { color: #384052; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+    .header { margin-bottom: 12px; }
+    .header h2 { margin: 0 0 4px; }
+    .header .meta { color: var(--muted); font-size: 13px; }
+    .notice { margin-bottom: 10px; padding: 8px 10px; border-radius: 8px; font-size: 13px; }
+    .notice.ok { background: var(--ok); }
+    .notice.error { background: var(--err); }
+    .messages { display: flex; flex-direction: column; gap: 10px; max-height: 55vh; overflow: auto; margin-bottom: 12px; }
+    .msg { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fff; }
+    .msg.customer { background: #f7fbff; }
+    .msg .meta { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .msg .text { white-space: pre-wrap; }
+    .msg img { margin-top: 8px; max-width: 220px; border-radius: 8px; border: 1px solid var(--line); }
+    .inline-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+    .inline-actions form { display: inline-flex; gap: 6px; align-items: center; }
+    .inline-actions input[type="text"] { padding: 6px; border: 1px solid var(--line); border-radius: 6px; min-width: 210px; }
+    .inline-actions button { border: 0; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
+    .btn-edit { background: #edf3ff; color: #1f4fd8; }
+    .btn-del { background: #fff1f1; color: #b72323; }
+    .send-box form { display: grid; gap: 8px; }
+    .send-box textarea { min-height: 84px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
+    .send-box input[type="file"] { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff; }
+    .send-box button { border: 0; border-radius: 8px; background: var(--primary); color: #fff; padding: 10px 12px; font-weight: 700; }
+    .empty { color: var(--muted); padding: 14px; }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; height: auto; }
+      .left { max-height: 300px; border-right: 0; border-bottom: 1px solid var(--line); }
+    }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div><strong>Чаты покупателей</strong></div>
+    <div style="display:flex; gap:12px; align-items:center;">
+      <a href="/admin">Настройки бота</a>
+      <form method="post" action="/admin/logout">
+        <button type="submit" style="border:1px solid var(--line); background:#fff; border-radius:8px; padding:8px 10px; cursor:pointer;">Выйти</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="layout">
+    <aside class="left">
+      <div class="search">
+        <form method="get" action="/admin/chats">
+          <input name="q" value="{{ query }}" placeholder="Поиск: имя, @username, телефон, статус, T-номер" />
+          <button type="submit">Найти</button>
+        </form>
+      </div>
+      {% if threads %}
+        {% for thread in threads %}
+          <a class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %}" href="/admin/chats?conversation_id={{ thread.conversation_id }}&q={{ query }}">
+            <div class="name">
+              {% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}
+            </div>
+            <div class="meta">Статус: {{ thread.status }} | chat_id: {{ thread.chat_id }}</div>
+            <div class="preview">{{ thread.last_message_preview or "—" }}</div>
+          </a>
+        {% endfor %}
+      {% else %}
+        <div class="empty">Чаты не найдены.</div>
+      {% endif %}
+    </aside>
+
+    <main class="right">
+      {% if active_thread %}
+        <div class="card">
+          <div class="header">
+            <h2>
+              {% if active_thread.ticket_no %}[T-{{ active_thread.ticket_no }}] {% endif %}
+              {{ active_thread.customer_label }}
+            </h2>
+            <div class="meta">
+              chat_id: {{ active_thread.chat_id }} | статус: {{ active_thread.status }} |
+              phone_verified: {{ "да" if active_thread.phone_verified else "нет" }}
+            </div>
+          </div>
+
+          {% if message %}
+            <div class="notice ok">{{ message }}</div>
+          {% endif %}
+          {% if error %}
+            <div class="notice error">{{ error }}</div>
+          {% endif %}
+
+          <div class="messages">
+            {% if messages %}
+              {% for msg in messages %}
+                <div class="msg {{ msg.direction }}">
+                  <div class="meta">
+                    {{ msg.direction }} / {{ msg.source }}
+                    {% if msg.max_message_mid %} | mid: {{ msg.max_message_mid }}{% endif %}
+                  </div>
+                  <div class="text">{{ msg.text }}</div>
+                  {% if msg.image_url %}
+                    <img src="{{ msg.image_url }}" alt="image" />
+                  {% endif %}
+
+                  {% if msg.direction == "bot" %}
+                    <div class="inline-actions">
+                      <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/edit">
+                        <input type="text" name="text" value="{{ msg.text }}" />
+                        <button class="btn-edit" type="submit">Изменить</button>
+                      </form>
+                      <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/delete">
+                        <button class="btn-del" type="submit">Удалить</button>
+                      </form>
+                    </div>
+                  {% endif %}
+                </div>
+              {% endfor %}
+            {% else %}
+              <div class="empty">В этом чате пока нет сообщений.</div>
+            {% endif %}
+          </div>
+
+          <section class="send-box">
+            <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/send" enctype="multipart/form-data">
+              <textarea name="text" placeholder="Сообщение покупателю от имени бота"></textarea>
+              <input type="file" name="photo" accept=".png,.jpg,.jpeg,.gif,.webp" />
+              <button type="submit">Отправить в чат</button>
+            </form>
+          </section>
+        </div>
+      {% else %}
+        <div class="card">
+          <div class="empty">Выберите чат слева.</div>
+        </div>
+      {% endif %}
+    </main>
+  </div>
+</body>
+</html>

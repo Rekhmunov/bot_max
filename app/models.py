@@ -44,6 +44,10 @@ class Conversation(Base):
         back_populates="conversation",
         cascade="all, delete-orphan",
     )
+    chat_messages: Mapped[list["ChatMessage"]] = relationship(
+        back_populates="conversation",
+        cascade="all, delete-orphan",
+    )
 
 
 class MessageLog(Base):
@@ -56,6 +60,21 @@ class MessageLog(Base):
     message_type: Mapped[str] = mapped_column(String(50), default="text")
 
     conversation: Mapped[Conversation] = relationship(back_populates="messages")
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), index=True)
+    direction: Mapped[str] = mapped_column(String(50), default="customer")  # customer | bot
+    source: Mapped[str] = mapped_column(String(50), default="customer")  # customer | manager | bot_system
+    text: Mapped[str] = mapped_column(Text, default="")
+    image_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    max_message_mid: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    link_mid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    conversation: Mapped[Conversation] = relationship(back_populates="chat_messages")
 
 
 class MessageTemplate(Base):

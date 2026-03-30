@@ -58,6 +58,69 @@ class MaxClient:
                 "details": str(exc),
             }
 
+    async def _put(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self.token:
+            return {"mock": True, "endpoint": endpoint, "payload": payload}
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.put(
+                    f"{self.base_url}{endpoint}",
+                    json=payload,
+                    headers=self._headers(),
+                )
+                try:
+                    data: Any = response.json()
+                except ValueError:
+                    data = {"raw": response.text}
+                if response.is_error:
+                    return {
+                        "success": False,
+                        "status_code": response.status_code,
+                        "endpoint": endpoint,
+                        "response": data,
+                    }
+                if isinstance(data, dict):
+                    return data
+                return {"success": True, "data": data}
+        except httpx.HTTPError as exc:
+            return {
+                "success": False,
+                "endpoint": endpoint,
+                "error": "http_error",
+                "details": str(exc),
+            }
+
+    async def _delete(self, endpoint: str) -> dict[str, Any]:
+        if not self.token:
+            return {"mock": True, "endpoint": endpoint}
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.delete(
+                    f"{self.base_url}{endpoint}",
+                    headers=self._headers(),
+                )
+                try:
+                    data: Any = response.json()
+                except ValueError:
+                    data = {"raw": response.text}
+                if response.is_error:
+                    return {
+                        "success": False,
+                        "status_code": response.status_code,
+                        "endpoint": endpoint,
+                        "response": data,
+                    }
+                if isinstance(data, dict):
+                    return data
+                return {"success": True, "data": data}
+        except httpx.HTTPError as exc:
+            return {
+                "success": False,
+                "endpoint": endpoint,
+                "error": "http_error",
+                "details": str(exc),
+            }
+
     async def send_message(
         self,
         *,
@@ -88,6 +151,23 @@ class MaxClient:
         # This keeps quick replies functional even without implementing /uploads flow.
         text = f"{caption}\n{photo_url}" if caption else photo_url
         return await self.send_text(chat_id=chat_id, text=text)
+
+    async def edit_message(
+        self,
+        *,
+        message_id: str,
+        text: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if text is not None:
+            payload["text"] = text
+        if attachments is not None:
+            payload["attachments"] = attachments
+        return await self._put(f"/messages?message_id={message_id}", payload)
+
+    async def delete_message(self, *, message_id: str) -> dict[str, Any]:
+        return await self._delete(f"/messages?message_id={message_id}")
 
     async def add_member_to_chat(self, chat_id: str, account_id: str) -> dict[str, Any]:
         return await self._post(

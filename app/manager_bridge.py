@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.max_client import MaxClient
 from app.models import (
     BotSettings,
+    ChatMessage,
     Conversation,
     ConversationMeta,
     CustomerProfile,
@@ -52,6 +53,17 @@ DEFAULT_TEMPLATES: dict[str, str] = {
 class ForwardResult:
     ok: bool
     message: str
+
+
+@dataclass
+class ChatThreadItem:
+    conversation_id: int
+    chat_id: str
+    ticket_no: int | None
+    customer_label: str
+    status: str
+    phone_verified: bool
+    last_message_preview: str
 
 
 def ensure_default_templates(db: Session) -> None:
@@ -168,6 +180,32 @@ def _extract_sent_mid(send_result: dict) -> str | None:
     return str(mid) if mid is not None else None
 
 
+def _store_chat_message(
+    db: Session,
+    *,
+    conversation_id: int,
+    direction: str,
+    source: str,
+    text: str = "",
+    image_url: str | None = None,
+    max_message_mid: str | None = None,
+    link_mid: str | None = None,
+) -> ChatMessage:
+    item = ChatMessage(
+        conversation_id=conversation_id,
+        direction=direction,
+        source=source,
+        text=text,
+        image_url=image_url,
+        max_message_mid=max_message_mid,
+        link_mid=link_mid,
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
 def _extract_contact_from_manager_text(text: str) -> str | None:
     normalized = text.strip()
     if not normalized:
@@ -191,7 +229,22 @@ async def _send_contact_request_prompt(
         "Если кнопка контакта не отображается, отправьте номер вручную "
         "сообщением: /contact +79990000000"
     )
-    return await client.send_text(chat_id=chat_id, text=full_text)
+    attachments = [
+        {
+            "type": "inline_keyboard",
+            "payload": {
+                "buttons": [
+                    [
+                        {
+                            "type": "request_contact",
+                            "text": "Поделиться номером",
+                        }
+                    ]
+                ]
+            },
+        }
+    ]
+    return await client.send_message(chat_id=chat_id, text=full_text, attachments=attachments)
 
 
 async def handle_customer_event(
@@ -220,6 +273,15 @@ async def handle_customer_event(
         )
     )
     db.commit()
+    _store_chat_message(
+        db,
+        conversation_id=conversation.id,
+        direction="customer",
+        source="customer",
+        text=event.text or "",
+        max_message_mid=event.message_mid,
+        link_mid=event.link_mid,
+    )
 
     phone_just_verified = False
     # If phone is already available (privacy allows it), skip explicit phone-confirmation step.
@@ -348,6 +410,14 @@ async def forward_customer_message_to_manager(
             )
         )
         db.commit()
+    _store_chat_message(
+        db,
+        conversation_id=conversation.id,
+        direction="bot",
+        source="bot_system",
+        text=f"[FORWARD_TO_MANAGER] {manager_text}",
+        max_message_mid=manager_mid,
+    )
     return ForwardResult(ok=True, message="sent")
 
 
@@ -406,12 +476,20 @@ async def handle_manager_message(
             chat_id=customer_chat_id,
             text=get_template_text(db, TEMPLATE_AFTER_PHONE),
         )
+        _store_chat_message(
+            db,
+            conversation_id=target_conversation.id,
+            direction="bot",
+            source="manager",
+            text=get_template_text(db, TEMPLATE_AFTER_PHONE),
+        )
         return {"ok": True, "phone_captured_from_manager": True}
 
     if text_value.startswith("/"):
         sent = await _send_quick_reply_to_customer(
             db=db,
             client=client,
+            conversation_id=target_conversation.id,
             customer_chat_id=customer_chat_id,
             command_text=text_value,
         )
@@ -421,6 +499,16 @@ async def handle_manager_message(
         text = f"Менеджер: {text_value}"
         result = await client.send_text(chat_id=customer_chat_id, text=text)
         ok = bool(result.get("success", True) or result.get("message"))
+        mid = _extract_sent_mid(result)
+        _store_chat_message(
+            db,
+            conversation_id=target_conversation.id,
+            direction="bot",
+            source="manager",
+            text=text,
+            max_message_mid=mid,
+            link_mid=event.link_mid,
+        )
         return {"ok": True, "manager_text_sent": ok}
 
     return {"ok": True, "ignored": "empty_manager_message"}
@@ -429,6 +517,7 @@ async def handle_manager_message(
 async def _send_quick_reply_to_customer(
     db: Session,
     client: MaxClient,
+    conversation_id: int,
     customer_chat_id: str,
     command_text: str,
 ) -> bool:
@@ -448,6 +537,14 @@ async def _send_quick_reply_to_customer(
         send_result = await client.send_text(chat_id=customer_chat_id, text=f"Менеджер: {quick_reply.text}")
         if not send_result.get("success", True) and "message" not in send_result:
             return False
+        _store_chat_message(
+            db,
+            conversation_id=conversation_id,
+            direction="bot",
+            source="manager",
+            text=f"Менеджер: {quick_reply.text}",
+            max_message_mid=_extract_sent_mid(send_result),
+        )
 
     if quick_reply.image_path:
         image_url = f"{settings.public_base_url.rstrip('/')}{quick_reply.image_path}"
@@ -458,5 +555,173 @@ async def _send_quick_reply_to_customer(
         )
         if not image_result.get("success", True) and "message" not in image_result:
             return False
+        _store_chat_message(
+            db,
+            conversation_id=conversation_id,
+            direction="bot",
+            source="manager",
+            text="Менеджер отправил изображение",
+            image_url=image_url,
+            max_message_mid=_extract_sent_mid(image_result),
+        )
 
+    return True
+
+
+def load_chat_threads(db: Session, query: str = "") -> list[ChatThreadItem]:
+    conversations = db.query(Conversation).order_by(Conversation.id.desc()).all()
+    needle = query.strip().lower()
+    items: list[ChatThreadItem] = []
+    for conv in conversations:
+        meta = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conv.id).first()
+        profile = db.query(CustomerProfile).filter(
+            CustomerProfile.customer_account_id == conv.customer_account_id
+        ).first()
+        last_msg = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.conversation_id == conv.id)
+            .order_by(ChatMessage.id.desc())
+            .first()
+        )
+        name = (profile.first_name if profile and profile.first_name else "Покупатель").strip()
+        username = (profile.username if profile and profile.username else "").strip()
+        label = f"{name}{(' @' + username) if username else ''}"
+        preview = ""
+        if last_msg:
+            preview = (last_msg.text or "").strip()
+            if not preview and last_msg.image_url:
+                preview = "[изображение]"
+        status = meta.status if meta else "new"
+        phone_verified = bool(meta.phone_verified) if meta else False
+        ticket_no = meta.ticket_no if meta else None
+
+        searchable = " ".join(
+            [
+                conv.chat_id,
+                conv.customer_account_id,
+                label,
+                preview,
+                status,
+                str(ticket_no or ""),
+                profile.phone_number if profile and profile.phone_number else "",
+            ]
+        ).lower()
+        if needle and needle not in searchable:
+            continue
+
+        items.append(
+            ChatThreadItem(
+                conversation_id=conv.id,
+                chat_id=conv.chat_id,
+                ticket_no=ticket_no,
+                customer_label=label,
+                status=status,
+                phone_verified=phone_verified,
+                last_message_preview=preview,
+            )
+        )
+    return items
+
+
+def load_chat_messages(db: Session, conversation_id: int) -> list[ChatMessage]:
+    return (
+        db.query(ChatMessage)
+        .filter(ChatMessage.conversation_id == conversation_id)
+        .order_by(ChatMessage.id.asc())
+        .all()
+    )
+
+
+def get_conversation_by_id(db: Session, conversation_id: int) -> Conversation | None:
+    return db.query(Conversation).filter(Conversation.id == conversation_id).first()
+
+
+def mark_thread_read(db: Session, conversation_id: int) -> None:
+    meta = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).first()
+    if meta is None:
+        return
+    if meta.status != "read":
+        meta.status = "read"
+        db.add(meta)
+        db.commit()
+
+
+async def send_admin_chat_message(
+    db: Session,
+    *,
+    conversation_id: int,
+    text: str,
+    image_path: str | None,
+) -> bool:
+    conversation = get_conversation_by_id(db, conversation_id)
+    if conversation is None:
+        return False
+    client = MaxClient()
+    sent_any = False
+
+    if text:
+        result = await client.send_text(chat_id=conversation.chat_id, text=text)
+        ok = bool(result.get("success", True) or result.get("message"))
+        if ok:
+            _store_chat_message(
+                db,
+                conversation_id=conversation_id,
+                direction="bot",
+                source="bot_system",
+                text=text,
+                max_message_mid=_extract_sent_mid(result),
+            )
+            sent_any = True
+
+    if image_path:
+        image_url = f"{settings.public_base_url.rstrip('/')}{image_path}"
+        image_result = await client.send_photo(
+            chat_id=conversation.chat_id,
+            photo_url=image_url,
+            caption="Изображение от оператора",
+        )
+        ok = bool(image_result.get("success", True) or image_result.get("message"))
+        if ok:
+            _store_chat_message(
+                db,
+                conversation_id=conversation_id,
+                direction="bot",
+                source="bot_system",
+                text="Изображение от оператора",
+                image_url=image_url,
+                max_message_mid=_extract_sent_mid(image_result),
+            )
+            sent_any = True
+
+    return sent_any
+
+
+async def update_chat_message_text(
+    db: Session,
+    chat_message_id: int,
+    new_text: str,
+) -> ChatMessage | None:
+    msg = db.query(ChatMessage).filter(ChatMessage.id == chat_message_id).first()
+    if not msg:
+        return None
+    text_value = new_text.strip()
+    if msg.max_message_mid:
+        client = MaxClient()
+        await client.edit_message(message_id=msg.max_message_mid, text=text_value)
+    msg.text = text_value
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+    return msg
+
+
+async def remove_chat_message(db: Session, chat_message_id: int) -> bool:
+    msg = db.query(ChatMessage).filter(ChatMessage.id == chat_message_id).first()
+    if not msg:
+        return False
+    if msg.max_message_mid:
+        client = MaxClient()
+        await client.delete_message(message_id=msg.max_message_mid)
+    db.delete(msg)
+    db.commit()
     return True
