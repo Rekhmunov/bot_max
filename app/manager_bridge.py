@@ -157,7 +157,8 @@ def _render_ticket_line(meta: ConversationMeta, customer: CustomerProfile | None
     username = customer.username if customer and customer.username else (event.sender_username or "")
     username_part = f" @{username}" if username else ""
     phone_state = "phone:yes" if meta.phone_verified else "phone:no"
-    return f"[T-{meta.ticket_no}] {name}{username_part} ({phone_state})"
+    icon = "🆕" if meta.status == "new" else "📝"
+    return f"{icon} [T-{meta.ticket_no}] {name}{username_part} ({phone_state})"
 
 
 def _extract_sent_mid(send_result: dict) -> str | None:
@@ -220,14 +221,16 @@ async def handle_customer_event(
     )
     db.commit()
 
-    # Message before Start
-    if not meta.start_prompt_sent and not event.text.strip() and not event.contact_phone:
+    is_bot_started = event.update_type == "bot_started"
+
+    # Message before Start (custom behavior for message_created before start)
+    if not meta.start_prompt_sent and event.update_type == "message_created" and not event.contact_phone:
         prestart_text = get_template_text(db, TEMPLATE_PRESTART)
         if prestart_text:
             await client.send_text(chat_id=event.chat_id, text=prestart_text)
         return {"ok": True, "flow": "prestart"}
 
-    if not meta.start_prompt_sent:
+    if not meta.start_prompt_sent and (is_bot_started or event.update_type == "message_created"):
         meta.start_prompt_sent = True
         db.add(meta)
         db.commit()
@@ -360,17 +363,14 @@ async def handle_manager_message(
             )
 
     if target_conversation is None:
-        # Fallback: latest waiting conversation.
-        target_conversation = (
-            db.query(Conversation)
-            .join(ConversationMeta, ConversationMeta.conversation_id == Conversation.id)
-            .filter(ConversationMeta.phone_verified.is_(True), ConversationMeta.status != "closed")
-            .order_by(Conversation.id.desc())
-            .first()
+        await client.send_text(
+            chat_id=manager_chat_id,
+            text=(
+                "Нужно отвечать reply на карточку тикета.\n"
+                "Нажмите «Ответить» на сообщение вида 🆕 [T-xxxx] ..."
+            ),
         )
-
-    if target_conversation is None:
-        return {"ok": True, "ignored": "no_target_conversation"}
+        return {"ok": True, "ignored": "reply_required"}
 
     customer_chat_id = target_conversation.chat_id
     text_value = event.text.strip()

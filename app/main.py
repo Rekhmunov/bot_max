@@ -263,7 +263,7 @@ async def max_webhook(
         # Ignore non-message updates or malformed events without failing webhook delivery.
         return {"ok": True, "ignored": "unsupported_payload"}
 
-    if event.update_type and event.update_type != "message_created":
+    if event.update_type and event.update_type not in {"message_created", "bot_started"}:
         return {"ok": True, "ignored": event.update_type}
 
     settings_db = get_or_create_settings(db)

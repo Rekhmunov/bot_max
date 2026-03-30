@@ -56,7 +56,12 @@ def run() -> None:
 
         webhook_customer_start = client.post(
             "/webhook/max",
-            json={"chat_id": chat_id, "sender_id": "buyer_1", "text": "Привет"},
+            json={
+                "update_type": "bot_started",
+                "chat_id": chat_id,
+                "sender_id": "buyer_1",
+                "text": "",
+            },
         )
         assert webhook_customer_start.status_code == 200
         assert webhook_customer_start.json().get("flow") == "start_prompt"
@@ -89,6 +94,20 @@ def run() -> None:
         )
         assert webhook_customer_text.status_code == 200
         assert webhook_customer_text.json().get("flow") == "forwarded_to_manager"
+
+        webhook_manager_without_reply = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_created",
+                "message": {
+                    "sender": {"user_id": "90000"},
+                    "recipient": {"chat_id": "90000", "chat_type": "dialog"},
+                    "body": {"text": f"/{command}"},
+                },
+            },
+        )
+        assert webhook_manager_without_reply.status_code == 200
+        assert webhook_manager_without_reply.json().get("ignored") == "reply_required"
 
         webhook_manager = client.post(
             "/webhook/max",

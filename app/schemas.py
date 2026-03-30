@@ -45,6 +45,7 @@ class MaxWebhookEvent(BaseModel):
         Supports both simplified payload format and official Max Update payload.
         """
         message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
         sender = message.get("sender") if isinstance(message.get("sender"), dict) else {}
         recipient = message.get("recipient") if isinstance(message.get("recipient"), dict) else {}
         body = message.get("body") if isinstance(message.get("body"), dict) else {}
@@ -79,6 +80,7 @@ class MaxWebhookEvent(BaseModel):
             payload.get("sender_id"),
             message.get("sender_id"),
             message.get("from_user_id"),
+            user.get("user_id"),
             sender.get("user_id"),
             sender.get("id"),
         )
@@ -110,7 +112,12 @@ class MaxWebhookEvent(BaseModel):
             message_mid=str(message_mid) if message_mid is not None else None,
             link_mid=str(link_mid) if link_mid is not None else None,
             contact_phone=str(contact_phone) if contact_phone is not None else None,
-            sender_first_name=_pick_first(sender.get("first_name"), sender.get("name")),
-            sender_username=sender.get("username"),
+            sender_first_name=_pick_first(
+                sender.get("first_name"),
+                sender.get("name"),
+                user.get("first_name"),
+                user.get("name"),
+            ),
+            sender_username=_pick_first(sender.get("username"), user.get("username")),
             raw_payload=payload,
         )
