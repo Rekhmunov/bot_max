@@ -49,6 +49,27 @@
     .msg { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fff; }
     .msg.customer { background: #f7fbff; }
     .msg .meta { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .delivery {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: 8px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      vertical-align: middle;
+    }
+    .delivery.sent { background: #e9f9ef; color: #237447; }
+    .delivery.queued { background: #edf3ff; color: #1f4fd8; }
+    .delivery.failed { background: #fff1f1; color: #b72323; }
+    .delivery-error {
+      margin-top: 6px;
+      color: #b72323;
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     .msg .text { white-space: pre-wrap; }
     .msg img { margin-top: 8px; max-width: 220px; border-radius: 8px; border: 1px solid var(--line); }
     .inline-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
@@ -158,10 +179,19 @@
                   <div class="meta">
                     {{ msg.direction }} / {{ msg.source }}
                     {% if msg.max_message_mid %} | mid: {{ msg.max_message_mid }}{% endif %}
+                    {% if msg.direction == "bot" %}
+                      {% set state = msg.delivery_state or "sent" %}
+                      <span class="delivery {{ state }}">
+                        {% if state == "sent" %}доставлено{% elif state == "failed" %}ошибка{% else %}в очереди{% endif %}
+                      </span>
+                    {% endif %}
                   </div>
                   <div class="text">{{ msg.text }}</div>
                   {% if msg.image_url %}
                     <img src="{{ msg.image_url }}" alt="image" />
+                  {% endif %}
+                  {% if msg.direction == "bot" and msg.delivery_state == "failed" %}
+                    <div class="delivery-error">{{ msg.delivery_error }}</div>
                   {% endif %}
 
                   {% if msg.direction == "bot" %}
@@ -173,6 +203,11 @@
                       <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/delete">
                         <button class="btn-del" type="submit">Удалить</button>
                       </form>
+                      {% if msg.delivery_state == "failed" %}
+                        <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/retry">
+                          <button class="btn-edit" type="submit">Повторить отправку</button>
+                        </form>
+                      {% endif %}
                     </div>
                   {% endif %}
                 </div>

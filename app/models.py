@@ -1,4 +1,6 @@
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -73,8 +75,32 @@ class ChatMessage(Base):
     image_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     max_message_mid: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     link_mid: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    delivery_state: Mapped[str] = mapped_column(String(20), default="sent", index=True)  # sent | queued | failed
+    delivery_error: Mapped[str] = mapped_column(Text, default="")
+    delivery_retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    delivery_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     conversation: Mapped[Conversation] = relationship(back_populates="chat_messages")
+
+
+class OutboxMessage(Base):
+    __tablename__ = "outbox_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), index=True, nullable=True)
+    chat_message_id: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id"), index=True, nullable=True)
+    target_chat_id: Mapped[str] = mapped_column(String(255), index=True)
+    operation: Mapped[str] = mapped_column(String(50), default="send_text")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    state: Mapped[str] = mapped_column(String(20), default="queued", index=True)  # queued | sent | failed
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_retry_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    external_message_mid: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class MessageTemplate(Base):

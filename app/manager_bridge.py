@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
 from typing import Optional
 
@@ -16,6 +18,7 @@ from app.models import (
     ManagerDispatch,
     MessageLog,
     MessageTemplate,
+    OutboxMessage,
     QuickReply,
 )
 from app.schemas import MaxWebhookEvent
@@ -47,6 +50,8 @@ DEFAULT_TEMPLATES: dict[str, str] = {
         "Менеджер скоро ответит."
     ),
 }
+
+OUTBOX_RETRY_BACKOFF_SECONDS = (5, 20, 60, 300)
 
 
 @dataclass
@@ -180,6 +185,314 @@ def _extract_sent_mid(send_result: dict) -> str | None:
     return str(mid) if mid is not None else None
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _as_naive_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(UTC).replace(tzinfo=None)
+
+
+def _is_retriable_error(result: dict) -> bool:
+    if not isinstance(result, dict):
+        return False
+    status_code = result.get("status_code")
+    if isinstance(status_code, int) and (status_code == 429 or status_code >= 500):
+        return True
+    return result.get("error") == "http_error"
+
+
+def _next_backoff_delay(retry_count: int) -> int:
+    idx = min(max(retry_count - 1, 0), len(OUTBOX_RETRY_BACKOFF_SECONDS) - 1)
+    return OUTBOX_RETRY_BACKOFF_SECONDS[idx]
+
+
+def _schedule_outbox_retry(item: OutboxMessage, result: dict) -> None:
+    item.state = "failed"
+    item.retry_count += 1
+    item.last_attempt_at = _as_naive_utc(_utc_now())
+    item.last_error = json.dumps(result, ensure_ascii=False)[:2000]
+    item.next_retry_at = _as_naive_utc(_utc_now() + timedelta(seconds=_next_backoff_delay(item.retry_count)))
+
+
+def _mark_outbox_sent(item: OutboxMessage, result: dict) -> None:
+    item.state = "sent"
+    item.last_attempt_at = _as_naive_utc(_utc_now())
+    item.sent_at = _as_naive_utc(_utc_now())
+    item.last_error = ""
+    item.external_message_mid = _extract_sent_mid(result)
+    item.next_retry_at = _as_naive_utc(_utc_now())
+
+
+def _enqueue_outbox_message(
+    db: Session,
+    *,
+    conversation_id: int | None,
+    chat_message_id: int | None,
+    target_chat_id: str,
+    operation: str,
+    payload: dict,
+) -> OutboxMessage:
+    item = OutboxMessage(
+        conversation_id=conversation_id,
+        chat_message_id=chat_message_id,
+        target_chat_id=target_chat_id,
+        operation=operation,
+        payload_json=json.dumps(payload, ensure_ascii=False),
+        state="queued",
+        retry_count=0,
+        next_retry_at=_as_naive_utc(_utc_now()),
+        last_error="",
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return item
+
+
+def _update_chat_message_delivery(
+    db: Session,
+    *,
+    chat_message_id: int | None,
+    state: str,
+    error: str,
+    retry_count: int,
+    next_retry_at: datetime | None,
+    max_mid: str | None = None,
+) -> None:
+    if chat_message_id is None:
+        return
+    msg = db.query(ChatMessage).filter(ChatMessage.id == chat_message_id).first()
+    if msg is None:
+        return
+    msg.delivery_state = state
+    msg.delivery_error = error
+    msg.delivery_retry_count = retry_count
+    msg.delivery_next_retry_at = _as_naive_utc(next_retry_at) if next_retry_at else None
+    if max_mid:
+        msg.max_message_mid = max_mid
+    db.add(msg)
+    db.commit()
+
+
+async def _dispatch_outbox(
+    db: Session,
+    *,
+    client: MaxClient,
+    item: OutboxMessage,
+) -> tuple[bool, bool, dict]:
+    try:
+        payload = json.loads(item.payload_json or "{}")
+    except json.JSONDecodeError:
+        payload = {}
+
+    if item.operation == "send_text":
+        result = await client.send_text(chat_id=item.target_chat_id, text=str(payload.get("text") or ""))
+    elif item.operation == "send_photo":
+        result = await client.send_photo(
+            chat_id=item.target_chat_id,
+            photo_url=str(payload.get("photo_url") or ""),
+            caption=str(payload.get("caption")) if payload.get("caption") is not None else None,
+        )
+    elif item.operation == "send_message":
+        result = await client.send_message(
+            chat_id=item.target_chat_id,
+            text=str(payload.get("text")) if payload.get("text") is not None else None,
+            attachments=payload.get("attachments"),
+        )
+    else:
+        result = {"success": False, "error": "unsupported_operation", "operation": item.operation}
+
+    ok = bool(result.get("success", True) or result.get("message"))
+    retriable = _is_retriable_error(result)
+    if ok:
+        _mark_outbox_sent(item, result)
+        db.add(item)
+        db.commit()
+        _update_chat_message_delivery(
+            db,
+            chat_message_id=item.chat_message_id,
+            state="sent",
+            error="",
+            retry_count=item.retry_count,
+            next_retry_at=item.next_retry_at,
+            max_mid=item.external_message_mid,
+        )
+        return True, False, result
+
+    if retriable:
+        _schedule_outbox_retry(item, result)
+        db.add(item)
+        db.commit()
+        _update_chat_message_delivery(
+            db,
+            chat_message_id=item.chat_message_id,
+            state="failed",
+            error=item.last_error,
+            retry_count=item.retry_count,
+            next_retry_at=item.next_retry_at,
+        )
+        return False, True, result
+
+    item.state = "failed"
+    item.retry_count += 1
+    item.last_attempt_at = _as_naive_utc(_utc_now())
+    item.last_error = json.dumps(result, ensure_ascii=False)[:2000]
+    item.next_retry_at = _as_naive_utc(_utc_now() + timedelta(hours=24))
+    db.add(item)
+    db.commit()
+    _update_chat_message_delivery(
+        db,
+        chat_message_id=item.chat_message_id,
+        state="failed",
+        error=item.last_error,
+        retry_count=item.retry_count,
+        next_retry_at=item.next_retry_at,
+    )
+    return False, False, result
+
+
+async def process_outbox_queue(db: Session, *, limit: int = 20) -> int:
+    now = _as_naive_utc(_utc_now())
+    items = (
+        db.query(OutboxMessage)
+        .filter(
+            OutboxMessage.state.in_(["queued", "failed"]),
+            OutboxMessage.next_retry_at <= now,
+        )
+        .order_by(OutboxMessage.next_retry_at.asc(), OutboxMessage.id.asc())
+        .limit(limit)
+        .all()
+    )
+    if not items:
+        return 0
+    client = MaxClient()
+    processed = 0
+    for item in items:
+        await _dispatch_outbox(db, client=client, item=item)
+        processed += 1
+    return processed
+
+
+async def retry_failed_outbox_message(db: Session, *, chat_message_id: int) -> bool:
+    item = (
+        db.query(OutboxMessage)
+        .filter(
+            OutboxMessage.chat_message_id == chat_message_id,
+            OutboxMessage.state == "failed",
+        )
+        .order_by(OutboxMessage.id.desc())
+        .first()
+    )
+    if item is None:
+        return False
+    item.state = "queued"
+    item.next_retry_at = _as_naive_utc(_utc_now())
+    db.add(item)
+    db.commit()
+    ok, _, _ = await _dispatch_outbox(db, client=MaxClient(), item=item)
+    return ok
+
+
+async def enqueue_and_process_send_text(
+    db: Session,
+    *,
+    conversation_id: int,
+    target_chat_id: str,
+    text: str,
+    source: str,
+    link_mid: str | None = None,
+) -> bool:
+    msg = _store_chat_message(
+        db,
+        conversation_id=conversation_id,
+        direction="bot",
+        source=source,
+        text=text,
+        link_mid=link_mid,
+        delivery_state="queued",
+        delivery_error="",
+        delivery_retry_count=0,
+        delivery_next_retry_at=_as_naive_utc(_utc_now()),
+    )
+    item = _enqueue_outbox_message(
+        db,
+        conversation_id=conversation_id,
+        chat_message_id=msg.id,
+        target_chat_id=target_chat_id,
+        operation="send_text",
+        payload={"text": text},
+    )
+    ok, _, _ = await _dispatch_outbox(db, client=MaxClient(), item=item)
+    return ok
+
+
+async def enqueue_and_process_send_photo(
+    db: Session,
+    *,
+    conversation_id: int,
+    target_chat_id: str,
+    photo_url: str,
+    caption: str,
+    source: str,
+) -> bool:
+    msg = _store_chat_message(
+        db,
+        conversation_id=conversation_id,
+        direction="bot",
+        source=source,
+        text=caption,
+        image_url=photo_url,
+        delivery_state="queued",
+        delivery_error="",
+        delivery_retry_count=0,
+        delivery_next_retry_at=_as_naive_utc(_utc_now()),
+    )
+    item = _enqueue_outbox_message(
+        db,
+        conversation_id=conversation_id,
+        chat_message_id=msg.id,
+        target_chat_id=target_chat_id,
+        operation="send_photo",
+        payload={"photo_url": photo_url, "caption": caption},
+    )
+    ok, _, _ = await _dispatch_outbox(db, client=MaxClient(), item=item)
+    return ok
+
+
+async def queue_only_send_text(
+    db: Session,
+    *,
+    conversation_id: int,
+    target_chat_id: str,
+    text: str,
+    source: str,
+    link_mid: str | None = None,
+) -> None:
+    msg = _store_chat_message(
+        db,
+        conversation_id=conversation_id,
+        direction="bot",
+        source=source,
+        text=text,
+        link_mid=link_mid,
+        delivery_state="queued",
+        delivery_error="",
+        delivery_retry_count=0,
+        delivery_next_retry_at=_as_naive_utc(_utc_now()),
+    )
+    _enqueue_outbox_message(
+        db,
+        conversation_id=conversation_id,
+        chat_message_id=msg.id,
+        target_chat_id=target_chat_id,
+        operation="send_text",
+        payload={"text": text},
+    )
+
+
 def _store_chat_message(
     db: Session,
     *,
@@ -190,6 +503,10 @@ def _store_chat_message(
     image_url: str | None = None,
     max_message_mid: str | None = None,
     link_mid: str | None = None,
+    delivery_state: str = "sent",
+    delivery_error: str = "",
+    delivery_retry_count: int = 0,
+    delivery_next_retry_at: datetime | None = None,
 ) -> ChatMessage:
     item = ChatMessage(
         conversation_id=conversation_id,
@@ -199,6 +516,10 @@ def _store_chat_message(
         image_url=image_url,
         max_message_mid=max_message_mid,
         link_mid=link_mid,
+        delivery_state=delivery_state,
+        delivery_error=delivery_error,
+        delivery_retry_count=delivery_retry_count,
+        delivery_next_retry_at=delivery_next_retry_at,
     )
     db.add(item)
     db.commit()
@@ -220,6 +541,8 @@ def _extract_contact_from_manager_text(text: str) -> str | None:
 
 
 async def _send_contact_request_prompt(
+    db: Session,
+    conversation_id: int,
     client: MaxClient,
     chat_id: str,
     text: str,
@@ -244,7 +567,29 @@ async def _send_contact_request_prompt(
             },
         }
     ]
-    return await client.send_message(chat_id=chat_id, text=full_text, attachments=attachments)
+    msg = _store_chat_message(
+        db,
+        conversation_id=conversation_id,
+        direction="bot",
+        source="bot_system",
+        text=full_text,
+        delivery_state="queued",
+        delivery_error="",
+        delivery_retry_count=0,
+        delivery_next_retry_at=_as_naive_utc(_utc_now()),
+    )
+    item = _enqueue_outbox_message(
+        db,
+        conversation_id=conversation_id,
+        chat_message_id=msg.id,
+        target_chat_id=chat_id,
+        operation="send_message",
+        payload={"text": full_text, "attachments": attachments},
+    )
+    ok, _, result = await _dispatch_outbox(db, client=client, item=item)
+    if ok:
+        return result
+    return {"success": False, **result}
 
 
 async def handle_customer_event(
@@ -308,7 +653,14 @@ async def handle_customer_event(
     if not meta.start_prompt_sent and event.update_type == "message_created" and not event.contact_phone:
         prestart_text = get_template_text(db, TEMPLATE_PRESTART)
         if prestart_text:
-            await client.send_text(chat_id=event.chat_id, text=prestart_text)
+            await queue_only_send_text(
+                db,
+                conversation_id=conversation.id,
+                target_chat_id=event.chat_id,
+                text=prestart_text,
+                source="bot_system",
+            )
+            await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "prestart"}
 
     if not meta.start_prompt_sent and (is_bot_started or event.update_type == "message_created"):
@@ -316,14 +668,34 @@ async def handle_customer_event(
         db.add(meta)
         db.commit()
         if meta.phone_verified:
-            await client.send_text(chat_id=event.chat_id, text=get_template_text(db, TEMPLATE_AFTER_PHONE))
+            await queue_only_send_text(
+                db,
+                conversation_id=conversation.id,
+                target_chat_id=event.chat_id,
+                text=get_template_text(db, TEMPLATE_AFTER_PHONE),
+                source="bot_system",
+            )
+            await process_outbox_queue(db, limit=20)
             return {"ok": True, "flow": "start_prompt_skipped_phone"}
         start_text = get_template_text(db, TEMPLATE_START)
-        await _send_contact_request_prompt(client=client, chat_id=event.chat_id, text=start_text)
+        await _send_contact_request_prompt(
+            db=db,
+            conversation_id=conversation.id,
+            client=client,
+            chat_id=event.chat_id,
+            text=start_text,
+        )
         return {"ok": True, "flow": "start_prompt"}
 
     if phone_just_verified:
-        await client.send_text(chat_id=event.chat_id, text=get_template_text(db, TEMPLATE_AFTER_PHONE))
+        await queue_only_send_text(
+            db,
+            conversation_id=conversation.id,
+            target_chat_id=event.chat_id,
+            text=get_template_text(db, TEMPLATE_AFTER_PHONE),
+            source="bot_system",
+        )
+        await process_outbox_queue(db, limit=20)
         await forward_customer_message_to_manager(
             db=db,
             client=client,
@@ -347,17 +719,33 @@ async def handle_customer_event(
                 "Для подтверждения контакта отправьте в ответ:\n"
                 "/contact +79990001122"
             )
-            result = await client.send_text(chat_id=manager_chat_id, text=manager_text)
-            manager_mid = _extract_sent_mid(result)
-            if manager_mid:
-                db.add(
-                    ManagerDispatch(
-                        conversation_id=conversation.id,
-                        manager_message_mid=manager_mid,
-                        dispatch_type="customer_to_manager",
+            ok = await enqueue_and_process_send_text(
+                db,
+                conversation_id=conversation.id,
+                target_chat_id=manager_chat_id,
+                text=manager_text,
+                source="bot_system",
+            )
+            if ok:
+                sent_msg = (
+                    db.query(ChatMessage)
+                    .filter(
+                        ChatMessage.conversation_id == conversation.id,
+                        ChatMessage.direction == "bot",
+                        ChatMessage.source == "bot_system",
                     )
+                    .order_by(ChatMessage.id.desc())
+                    .first()
                 )
-                db.commit()
+                if sent_msg and sent_msg.max_message_mid:
+                    db.add(
+                        ManagerDispatch(
+                            conversation_id=conversation.id,
+                            manager_message_mid=sent_msg.max_message_mid,
+                            dispatch_type="customer_to_manager",
+                        )
+                    )
+                    db.commit()
         return {"ok": True, "flow": "waiting_contact_confirmation"}
 
     # Forward customer messages to manager only after phone verification.
@@ -372,6 +760,7 @@ async def handle_customer_event(
             event=event,
             extra_header=None,
         )
+        await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "forwarded_to_manager"}
 
     return {"ok": True, "flow": "ignored_before_phone"}
@@ -396,11 +785,28 @@ async def forward_customer_message_to_manager(
     header = f"{extra_header}\n" if extra_header else ""
     manager_text = f"{header}{ticket_line}\nКлиент: {text}"
 
-    result = await client.send_text(chat_id=manager_chat_id, text=manager_text)
-    if not result.get("success", True) and "message" not in result:
-        return ForwardResult(ok=False, message=str(result))
+    ok = await enqueue_and_process_send_text(
+        db,
+        conversation_id=conversation.id,
+        target_chat_id=manager_chat_id,
+        text=manager_text,
+        source="bot_system",
+    )
+    if not ok:
+        return ForwardResult(ok=False, message="queue_or_send_failed")
 
-    manager_mid = _extract_sent_mid(result)
+    sent_msg = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.conversation_id == conversation.id,
+            ChatMessage.direction == "bot",
+            ChatMessage.source == "bot_system",
+            ChatMessage.text == manager_text,
+        )
+        .order_by(ChatMessage.id.desc())
+        .first()
+    )
+    manager_mid = sent_msg.max_message_mid if sent_msg else None
     if manager_mid:
         db.add(
             ManagerDispatch(
@@ -410,14 +816,7 @@ async def forward_customer_message_to_manager(
             )
         )
         db.commit()
-    _store_chat_message(
-        db,
-        conversation_id=conversation.id,
-        direction="bot",
-        source="bot_system",
-        text=f"[FORWARD_TO_MANAGER] {manager_text}",
-        max_message_mid=manager_mid,
-    )
+    # Message was already stored in chat history by queue send.
     return ForwardResult(ok=True, message="sent")
 
 
@@ -440,6 +839,7 @@ async def handle_manager_message(
             )
 
     if target_conversation is None:
+        # Operational helper to manager chat can stay as direct send.
         await client.send_text(
             chat_id=manager_chat_id,
             text=(
@@ -472,18 +872,15 @@ async def handle_manager_message(
             username=None,
             phone_number=contact_from_text,
         )
-        await client.send_text(
-            chat_id=customer_chat_id,
-            text=get_template_text(db, TEMPLATE_AFTER_PHONE),
-        )
-        _store_chat_message(
+        sent_ok = await enqueue_and_process_send_text(
             db,
             conversation_id=target_conversation.id,
-            direction="bot",
-            source="manager",
+            target_chat_id=customer_chat_id,
             text=get_template_text(db, TEMPLATE_AFTER_PHONE),
+            source="manager",
+            link_mid=event.link_mid,
         )
-        return {"ok": True, "phone_captured_from_manager": True}
+        return {"ok": True, "phone_captured_from_manager": sent_ok}
 
     if text_value.startswith("/"):
         sent = await send_quick_reply_to_customer(
@@ -497,16 +894,12 @@ async def handle_manager_message(
 
     if text_value:
         text = f"Менеджер: {text_value}"
-        result = await client.send_text(chat_id=customer_chat_id, text=text)
-        ok = bool(result.get("success", True) or result.get("message"))
-        mid = _extract_sent_mid(result)
-        _store_chat_message(
+        ok = await enqueue_and_process_send_text(
             db,
             conversation_id=target_conversation.id,
-            direction="bot",
-            source="manager",
+            target_chat_id=customer_chat_id,
             text=text,
-            max_message_mid=mid,
+            source="manager",
             link_mid=event.link_mid,
         )
         return {"ok": True, "manager_text_sent": ok}
@@ -541,36 +934,28 @@ async def send_quick_reply_to_customer(
         rendered_text = (
             f"{sender_prefix}{quick_reply.text}" if sender_prefix is not None else quick_reply.text
         )
-        send_result = await client.send_text(chat_id=customer_chat_id, text=rendered_text)
-        if not send_result.get("success", True) and "message" not in send_result:
-            return False
-        _store_chat_message(
+        ok = await enqueue_and_process_send_text(
             db,
             conversation_id=conversation_id,
-            direction="bot",
-            source=source,
+            target_chat_id=customer_chat_id,
             text=rendered_text,
-            max_message_mid=_extract_sent_mid(send_result),
+            source=source,
         )
+        if not ok:
+            return False
 
     if quick_reply.image_path:
         image_url = f"{settings.public_base_url.rstrip('/')}{quick_reply.image_path}"
-        image_result = await client.send_photo(
-            chat_id=customer_chat_id,
-            photo_url=image_url,
-            caption=image_caption,
-        )
-        if not image_result.get("success", True) and "message" not in image_result:
-            return False
-        _store_chat_message(
+        ok = await enqueue_and_process_send_photo(
             db,
             conversation_id=conversation_id,
-            direction="bot",
+            target_chat_id=customer_chat_id,
+            photo_url=image_url,
+            caption=image_caption,
             source=source,
-            text=image_caption,
-            image_url=image_url,
-            max_message_mid=_extract_sent_mid(image_result),
         )
+        if not ok:
+            return False
 
     return True
 
@@ -694,41 +1079,30 @@ async def send_admin_chat_message(
     conversation = get_conversation_by_id(db, conversation_id)
     if conversation is None:
         return False
-    client = MaxClient()
     sent_any = False
 
     if text:
-        result = await client.send_text(chat_id=conversation.chat_id, text=text)
-        ok = bool(result.get("success", True) or result.get("message"))
+        ok = await enqueue_and_process_send_text(
+            db,
+            conversation_id=conversation_id,
+            target_chat_id=conversation.chat_id,
+            text=text,
+            source="bot_system",
+        )
         if ok:
-            _store_chat_message(
-                db,
-                conversation_id=conversation_id,
-                direction="bot",
-                source="bot_system",
-                text=text,
-                max_message_mid=_extract_sent_mid(result),
-            )
             sent_any = True
 
     if image_path:
         image_url = f"{settings.public_base_url.rstrip('/')}{image_path}"
-        image_result = await client.send_photo(
-            chat_id=conversation.chat_id,
+        ok = await enqueue_and_process_send_photo(
+            db,
+            conversation_id=conversation_id,
+            target_chat_id=conversation.chat_id,
             photo_url=image_url,
             caption="Изображение от оператора",
+            source="bot_system",
         )
-        ok = bool(image_result.get("success", True) or image_result.get("message"))
         if ok:
-            _store_chat_message(
-                db,
-                conversation_id=conversation_id,
-                direction="bot",
-                source="bot_system",
-                text="Изображение от оператора",
-                image_url=image_url,
-                max_message_mid=_extract_sent_mid(image_result),
-            )
             sent_any = True
 
     return sent_any

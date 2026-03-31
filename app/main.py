@@ -24,7 +24,9 @@ from app.manager_bridge import (
     mark_thread_read,
     handle_customer_event,
     handle_manager_message,
+    process_outbox_queue,
     remove_chat_message,
+    retry_failed_outbox_message,
     set_template_text,
     send_admin_chat_message,
     send_admin_quick_reply,
@@ -265,10 +267,16 @@ def admin_chats_page(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    import asyncio
+
+    # Opportunistically drain due queue items on every admin page load.
+    asyncio.run(process_outbox_queue(db, limit=30))
+
     sent_flag = request.query_params.get("sent")
     quick_flag = request.query_params.get("quick")
     edited_flag = request.query_params.get("edited")
     deleted_flag = request.query_params.get("deleted")
+    retried_flag = request.query_params.get("retried")
     op_message = None
     op_error = None
     if sent_flag == "1":
@@ -287,6 +295,10 @@ def admin_chats_page(
         op_message = "Сообщение удалено"
     if deleted_flag == "0":
         op_error = "Не удалось удалить сообщение"
+    if retried_flag == "1":
+        op_message = "Повторная отправка выполнена"
+    if retried_flag == "0":
+        op_error = "Повторная отправка не удалась"
 
     threads = load_chat_threads(db, query=q)
     active_thread = None
@@ -414,6 +426,24 @@ async def admin_chats_delete_message(
     suffix = "1" if removed else "0"
     return RedirectResponse(
         url=f"/admin/chats?conversation_id={conversation_id}&deleted={suffix}",
+        status_code=302,
+    )
+
+
+@app.post(
+    "/admin/chats/{conversation_id}/messages/{chat_message_id}/retry",
+    response_class=RedirectResponse,
+)
+async def admin_chats_retry_message(
+    conversation_id: int,
+    chat_message_id: int,
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    retried = await retry_failed_outbox_message(db=db, chat_message_id=chat_message_id)
+    suffix = "1" if retried else "0"
+    return RedirectResponse(
+        url=f"/admin/chats?conversation_id={conversation_id}&retried={suffix}",
         status_code=302,
     )
 

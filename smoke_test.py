@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from app.database import SessionLocal, init_db
 from app.main import app
 from app.manager_bridge import DEFAULT_TEMPLATES
-from app.models import Conversation
+from app.models import Conversation, OutboxMessage
 from uuid import uuid4
 
 
@@ -160,6 +160,34 @@ def run() -> None:
         )
         assert admin_quick_reply.status_code in (302, 303)
         assert "quick=1" in admin_quick_reply.headers.get("location", "")
+
+        send_attempt = client.post(
+            f"/admin/chats/{conversation_id}/send",
+            data={"text": "retry_me"},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert send_attempt.status_code in (302, 303)
+
+        failed_chat_message_id = None
+        with SessionLocal() as db:
+            outbox_row = (
+                db.query(OutboxMessage)
+                .filter(OutboxMessage.conversation_id == conversation_id)
+                .order_by(OutboxMessage.id.desc())
+                .first()
+            )
+            assert outbox_row is not None
+            failed_chat_message_id = outbox_row.chat_message_id
+
+        assert failed_chat_message_id is not None
+        retry_resp = client.post(
+            f"/admin/chats/{conversation_id}/messages/{failed_chat_message_id}/retry",
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert retry_resp.status_code in (302, 303)
+        assert "retried=" in retry_resp.headers.get("location", "")
 
         webhook_unknown = client.post(
             "/webhook/max",
