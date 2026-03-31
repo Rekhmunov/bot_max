@@ -200,6 +200,15 @@ def run() -> None:
         assert "slash-menu" in admin_chats_page.text
         assert command in admin_chats_page.text
 
+        profile_page = client.get(
+            f"/admin/chats/{conversation_id}/profile",
+            cookies=cookies,
+        )
+        assert profile_page.status_code == 200
+        assert "Профиль покупателя" in profile_page.text
+        assert "Вернуться в чат" in profile_page.text
+        assert f"T-{conversation_id + 1000}"[:2] == "T-"
+
         admin_quick_reply = client.post(
             f"/admin/chats/{conversation_id}/quick-reply",
             data={"command": f"/{command}"},
@@ -242,6 +251,7 @@ def run() -> None:
         assert "position: sticky" in mobile_chat_page.text
         assert 'id="chat-screen"' in mobile_chat_page.text
         assert "chat-screen hidden-mobile" not in mobile_chat_page.text
+        assert f"/admin/chats/{conversation_id}/profile?from=chat&q=" in mobile_chat_page.text
 
         metrics_page = client.get("/admin/chats", cookies=cookies)
         assert metrics_page.status_code == 200

@@ -37,7 +37,17 @@ from app.manager_bridge import (
     update_chat_message_text,
 )
 from app.max_client import MaxClient
-from app.models import QuickReply, WebhookEvent
+from app.models import (
+    ChatMessage,
+    Conversation,
+    ConversationMeta,
+    CustomerProfile,
+    ManagerDispatch,
+    MessageLog,
+    OutboxMessage,
+    QuickReply,
+    WebhookEvent,
+)
 from app.schemas import MaxWebhookEvent
 from app.services import get_or_create_settings
 from fastapi.templating import Jinja2Templates
@@ -372,6 +382,106 @@ async def admin_chats_page(
                 "Пользователь и чат удалены" if request.query_params.get("removed") == "1"
                 else ("Не удалось удалить пользователя" if request.query_params.get("removed") == "0" else None)
             ),
+        },
+    )
+
+
+@app.get("/admin/chats/{conversation_id}/profile", response_class=HTMLResponse)
+def admin_chat_customer_profile(
+    request: Request,
+    conversation_id: int,
+    q: str = "",
+    view: str = "",
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Чат не найден")
+
+    meta = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).first()
+    profile = (
+        db.query(CustomerProfile)
+        .filter(CustomerProfile.customer_account_id == conversation.customer_account_id)
+        .first()
+    )
+
+    sender_ids = [
+        str(row[0])
+        for row in (
+            db.query(MessageLog.sender_account_id)
+            .filter(MessageLog.conversation_id == conversation_id)
+            .distinct()
+            .limit(20)
+            .all()
+        )
+        if row and row[0]
+    ]
+    message_mids = [
+        {
+            "direction": row.direction,
+            "source": row.source,
+            "max_mid": row.max_message_mid,
+            "link_mid": row.link_mid,
+        }
+        for row in (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.conversation_id == conversation_id,
+                (ChatMessage.max_message_mid.is_not(None)) | (ChatMessage.link_mid.is_not(None)),
+            )
+            .order_by(ChatMessage.id.desc())
+            .limit(20)
+            .all()
+        )
+    ]
+    manager_dispatch_mids = [
+        str(row.manager_message_mid)
+        for row in (
+            db.query(ManagerDispatch)
+            .filter(ManagerDispatch.conversation_id == conversation_id)
+            .order_by(ManagerDispatch.id.desc())
+            .limit(20)
+            .all()
+        )
+        if row.manager_message_mid
+    ]
+    outbox_targets = [
+        {
+            "operation": row.operation,
+            "target_chat_id": row.target_chat_id,
+            "target_user_id": row.target_user_id,
+            "state": row.state,
+            "external_message_mid": row.external_message_mid,
+        }
+        for row in (
+            db.query(OutboxMessage)
+            .filter(OutboxMessage.conversation_id == conversation_id)
+            .order_by(OutboxMessage.id.desc())
+            .limit(20)
+            .all()
+        )
+    ]
+
+    back_to_chat_url = f"/admin/chats?conversation_id={conversation_id}&q={q}"
+    if view.strip().lower() == "chat":
+        back_to_chat_url += "&view=chat"
+    back_to_list_url = f"/admin/chats?q={q}"
+
+    return templates.TemplateResponse(
+        request,
+        "admin_customer_profile.html",
+        {
+            "request": request,
+            "conversation": conversation,
+            "meta": meta,
+            "profile": profile,
+            "sender_ids": sender_ids,
+            "message_mids": message_mids,
+            "manager_dispatch_mids": manager_dispatch_mids,
+            "outbox_targets": outbox_targets,
+            "back_to_chat_url": back_to_chat_url,
+            "back_to_list_url": back_to_list_url,
         },
     )
 

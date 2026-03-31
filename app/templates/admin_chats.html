@@ -400,6 +400,18 @@
       color: var(--muted);
       text-align: center;
     }
+    .profile-link {
+      color: inherit;
+      text-decoration: none;
+      display: inline-block;
+      border-radius: 8px;
+      padding: 2px 4px;
+      margin-left: -4px;
+    }
+    .profile-link:hover {
+      background: #f2f6ff;
+      color: #1a4fb3;
+    }
 
     .mobile-only { display: none; }
     .desktop-only { display: inline-flex; }
@@ -490,8 +502,10 @@
           <a class="back-btn mobile-only" href="/admin/chats?q={{ query }}" aria-label="Назад к чатам">‹</a>
           <div class="chat-title-wrap">
             <h2 class="chat-title">
-              {% if active_thread.ticket_no %}[T-{{ active_thread.ticket_no }}] {% endif %}
-              {{ active_thread.customer_label }}
+              <a class="profile-link" href="/admin/chats/{{ active_thread.conversation_id }}/profile?from=chat&q={{ query }}">
+                {% if active_thread.ticket_no %}[T-{{ active_thread.ticket_no }}] {% endif %}
+                {{ active_thread.customer_label }}
+              </a>
             </h2>
             <div class="chat-sub">
               chat_id: {{ active_thread.chat_id }} | phone_verified: {{ "да" if active_thread.phone_verified else "нет" }}
