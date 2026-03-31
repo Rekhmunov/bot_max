@@ -27,6 +27,7 @@ from app.models import (
     QuickReply,
 )
 from app.schemas import MaxWebhookEvent
+from app.services import DEFAULT_WORKSPACE_ID
 
 TEMPLATE_PRESTART = "prestart_message"
 TEMPLATE_START = "start_message"
@@ -101,45 +102,86 @@ class DeliveryStats:
         return round(self.retry_sum / self.total_sent_attempts, 2)
 
 
-def ensure_default_templates(db: Session) -> None:
+def ensure_default_templates(db: Session, *, workspace_id: int = DEFAULT_WORKSPACE_ID) -> None:
     existing = {
         item.template_key: item
         for item in db.query(MessageTemplate)
-        .filter(MessageTemplate.template_key.in_(list(DEFAULT_TEMPLATES.keys())))
+        .filter(
+            MessageTemplate.workspace_id == workspace_id,
+            MessageTemplate.template_key.in_(list(DEFAULT_TEMPLATES.keys())),
+        )
         .all()
     }
     changed = False
     for key, text in DEFAULT_TEMPLATES.items():
         if key in existing:
             continue
-        db.add(MessageTemplate(template_key=key, template_text=text))
+        db.add(MessageTemplate(workspace_id=workspace_id, template_key=key, template_text=text))
         changed = True
     if changed:
         db.commit()
 
 
-def get_template_text(db: Session, key: str) -> str:
-    row = db.query(MessageTemplate).filter(MessageTemplate.template_key == key).first()
+def get_template_text(db: Session, key: str, *, workspace_id: int = DEFAULT_WORKSPACE_ID) -> str:
+    row = (
+        db.query(MessageTemplate)
+        .filter(
+            MessageTemplate.workspace_id == workspace_id,
+            MessageTemplate.template_key == key,
+        )
+        .first()
+    )
     if row and row.template_text.strip():
         return row.template_text
     return DEFAULT_TEMPLATES.get(key, "")
 
 
-def set_template_text(db: Session, key: str, value: str) -> None:
-    row = db.query(MessageTemplate).filter(MessageTemplate.template_key == key).first()
+def set_template_text(
+    db: Session,
+    key: str,
+    value: str,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+) -> None:
+    row = (
+        db.query(MessageTemplate)
+        .filter(
+            MessageTemplate.workspace_id == workspace_id,
+            MessageTemplate.template_key == key,
+        )
+        .first()
+    )
     if row is None:
-        row = MessageTemplate(template_key=key, template_text=value.strip())
+        row = MessageTemplate(
+            workspace_id=workspace_id,
+            template_key=key,
+            template_text=value.strip(),
+        )
     else:
         row.template_text = value.strip()
     db.add(row)
     db.commit()
 
 
-def _get_or_create_conversation(db: Session, chat_id: str, customer_id: str) -> Conversation:
-    conversation = db.query(Conversation).filter(Conversation.chat_id == chat_id).first()
+def _get_or_create_conversation(
+    db: Session,
+    chat_id: str,
+    customer_id: str,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+) -> Conversation:
+    conversation = (
+        db.query(Conversation)
+        .filter(
+            Conversation.workspace_id == workspace_id,
+            Conversation.chat_id == chat_id,
+        )
+        .first()
+    )
     if conversation:
         return conversation
     conversation = Conversation(
+        workspace_id=workspace_id,
         chat_id=chat_id,
         customer_account_id=customer_id,
         manager_added=False,
@@ -151,13 +193,30 @@ def _get_or_create_conversation(db: Session, chat_id: str, customer_id: str) -> 
     return conversation
 
 
-def _get_or_create_meta(db: Session, conversation_id: int) -> ConversationMeta:
-    meta = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).first()
+def _get_or_create_meta(
+    db: Session,
+    conversation_id: int,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+) -> ConversationMeta:
+    meta = (
+        db.query(ConversationMeta)
+        .filter(
+            ConversationMeta.workspace_id == workspace_id,
+            ConversationMeta.conversation_id == conversation_id,
+        )
+        .first()
+    )
     if meta:
         return meta
-    max_ticket = db.query(func.max(ConversationMeta.ticket_no)).scalar()
+    max_ticket = (
+        db.query(func.max(ConversationMeta.ticket_no))
+        .filter(ConversationMeta.workspace_id == workspace_id)
+        .scalar()
+    )
     next_ticket = (max_ticket or 1000) + 1
     meta = ConversationMeta(
+        workspace_id=workspace_id,
         conversation_id=conversation_id,
         ticket_no=next_ticket,
         status="new",
@@ -177,10 +236,20 @@ def _upsert_customer_profile(
     first_name: Optional[str],
     username: Optional[str],
     phone_number: Optional[str] = None,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
 ) -> CustomerProfile:
-    profile = db.query(CustomerProfile).filter(CustomerProfile.customer_account_id == customer_id).first()
+    profile = (
+        db.query(CustomerProfile)
+        .filter(
+            CustomerProfile.workspace_id == workspace_id,
+            CustomerProfile.customer_account_id == customer_id,
+        )
+        .first()
+    )
     if profile is None:
         profile = CustomerProfile(
+            workspace_id=workspace_id,
             customer_account_id=customer_id,
             first_name=first_name,
             username=username,
@@ -305,8 +374,19 @@ def _enqueue_outbox_message(
     target_user_id: str | None,
     operation: str,
     payload: dict,
+    workspace_id: int | None = None,
 ) -> OutboxMessage:
+    resolved_workspace_id = workspace_id
+    if resolved_workspace_id is None and conversation_id is not None:
+        resolved_workspace_id = (
+            db.query(Conversation.workspace_id)
+            .filter(Conversation.id == conversation_id)
+            .scalar()
+        )
+    if resolved_workspace_id is None:
+        resolved_workspace_id = DEFAULT_WORKSPACE_ID
     item = OutboxMessage(
+        workspace_id=resolved_workspace_id,
         conversation_id=conversation_id,
         chat_message_id=chat_message_id,
         target_chat_id=target_chat_id,
@@ -477,18 +557,20 @@ async def _dispatch_outbox(
     return False, False, result
 
 
-async def process_outbox_queue(db: Session, *, limit: int = 20) -> int:
+async def process_outbox_queue(
+    db: Session,
+    *,
+    limit: int = 20,
+    workspace_id: int | None = None,
+) -> int:
     now = _as_naive_utc(_utc_now())
-    items = (
-        db.query(OutboxMessage)
-        .filter(
-            OutboxMessage.state.in_(["queued", "failed"]),
-            OutboxMessage.next_retry_at <= now,
-        )
-        .order_by(OutboxMessage.next_retry_at.asc(), OutboxMessage.id.asc())
-        .limit(limit)
-        .all()
+    query = db.query(OutboxMessage).filter(
+        OutboxMessage.state.in_(["queued", "failed"]),
+        OutboxMessage.next_retry_at <= now,
     )
+    if workspace_id is not None:
+        query = query.filter(OutboxMessage.workspace_id == workspace_id)
+    items = query.order_by(OutboxMessage.next_retry_at.asc(), OutboxMessage.id.asc()).limit(limit).all()
     if not items:
         return 0
     client = MaxClient()
@@ -499,16 +581,19 @@ async def process_outbox_queue(db: Session, *, limit: int = 20) -> int:
     return processed
 
 
-async def retry_failed_outbox_message(db: Session, *, chat_message_id: int) -> bool:
-    item = (
-        db.query(OutboxMessage)
-        .filter(
-            OutboxMessage.chat_message_id == chat_message_id,
-            OutboxMessage.state == "failed",
-        )
-        .order_by(OutboxMessage.id.desc())
-        .first()
+async def retry_failed_outbox_message(
+    db: Session,
+    *,
+    chat_message_id: int,
+    workspace_id: int | None = None,
+) -> bool:
+    query = db.query(OutboxMessage).filter(
+        OutboxMessage.chat_message_id == chat_message_id,
+        OutboxMessage.state == "failed",
     )
+    if workspace_id is not None:
+        query = query.filter(OutboxMessage.workspace_id == workspace_id)
+    item = query.order_by(OutboxMessage.id.desc()).first()
     if item is None:
         return False
     item.state = "queued"
@@ -636,8 +721,19 @@ def _store_chat_message(
     delivery_error: str = "",
     delivery_retry_count: int = 0,
     delivery_next_retry_at: datetime | None = None,
+    workspace_id: int | None = None,
 ) -> ChatMessage:
+    resolved_workspace_id = workspace_id
+    if resolved_workspace_id is None:
+        resolved_workspace_id = (
+            db.query(Conversation.workspace_id)
+            .filter(Conversation.id == conversation_id)
+            .scalar()
+        )
+    if resolved_workspace_id is None:
+        resolved_workspace_id = DEFAULT_WORKSPACE_ID
     item = ChatMessage(
+        workspace_id=resolved_workspace_id,
         conversation_id=conversation_id,
         direction=direction,
         source=source,
@@ -1189,8 +1285,14 @@ async def handle_customer_event(
     settings: BotSettings,
     event: MaxWebhookEvent,
 ) -> dict:
-    conversation = _get_or_create_conversation(db, chat_id=event.chat_id, customer_id=event.sender_id)
-    meta = _get_or_create_meta(db, conversation_id=conversation.id)
+    workspace_id = settings.workspace_id or DEFAULT_WORKSPACE_ID
+    conversation = _get_or_create_conversation(
+        db,
+        chat_id=event.chat_id,
+        customer_id=event.sender_id,
+        workspace_id=workspace_id,
+    )
+    meta = _get_or_create_meta(db, conversation_id=conversation.id, workspace_id=workspace_id)
     customer = _upsert_customer_profile(
         db=db,
         customer_id=event.sender_id,
@@ -1198,10 +1300,12 @@ async def handle_customer_event(
         first_name=event.sender_first_name,
         username=event.sender_username,
         phone_number=event.contact_phone,
+        workspace_id=workspace_id,
     )
 
     db.add(
         MessageLog(
+            workspace_id=workspace_id,
             conversation_id=conversation.id,
             sender_account_id=event.sender_id,
             message_text=event.text or "",
@@ -1217,6 +1321,7 @@ async def handle_customer_event(
         text=event.text or "",
         max_message_mid=event.message_mid,
         link_mid=event.link_mid,
+        workspace_id=workspace_id,
     )
     _mark_conversation_unread_from_customer(db, meta=meta)
 
@@ -1237,6 +1342,7 @@ async def handle_customer_event(
             first_name=event.sender_first_name,
             username=event.sender_username,
             phone_number=event.contact_phone,
+            workspace_id=workspace_id,
         )
 
     update_type = (event.update_type or "").strip().lower()
@@ -1245,7 +1351,7 @@ async def handle_customer_event(
 
     # Message before Start (custom behavior for message_created before start)
     if not meta.start_prompt_sent and is_message_event and not is_bot_started and not event.contact_phone:
-        prestart_text = get_template_text(db, TEMPLATE_PRESTART)
+        prestart_text = get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id)
         if prestart_text:
             await queue_only_send_text(
                 db,
@@ -1268,12 +1374,12 @@ async def handle_customer_event(
                 conversation_id=conversation.id,
                 target_chat_id=event.chat_id,
                 target_user_id=event.sender_id,
-                text=get_template_text(db, TEMPLATE_AFTER_PHONE),
+                text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
                 source="bot_system",
             )
             await process_outbox_queue(db, limit=20)
             return {"ok": True, "flow": "start_prompt_skipped_phone"}
-        start_text = get_template_text(db, TEMPLATE_START)
+        start_text = get_template_text(db, TEMPLATE_START, workspace_id=workspace_id)
         await _send_contact_request_prompt(
             db=db,
             conversation_id=conversation.id,
@@ -1290,7 +1396,7 @@ async def handle_customer_event(
             conversation_id=conversation.id,
             target_chat_id=event.chat_id,
             target_user_id=event.sender_id,
-            text=get_template_text(db, TEMPLATE_AFTER_PHONE),
+            text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
             source="bot_system",
         )
         await process_outbox_queue(db, limit=20)
@@ -1377,7 +1483,10 @@ async def handle_manager_message(
         return {"ok": True, "help_sent": True}
 
     if text_value.lower() in {"/mini", "/app", "/miniapp"}:
-        mini_token = create_manager_mini_token(manager_user_id)
+        mini_token = create_manager_mini_token(
+            manager_user_id,
+            workspace_id=settings.workspace_id or DEFAULT_WORKSPACE_ID,
+        )
         mini_url = (
             f"{app_settings.public_base_url.rstrip('/')}/mini/manager?token={quote_plus(mini_token)}"
         )
@@ -1403,6 +1512,7 @@ async def send_quick_reply_to_customer(
     sender_prefix: str | None = None,
     source: str = "manager",
     image_caption: str = "Менеджер отправил изображение",
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
 ) -> bool:
     command = command_text.strip().lstrip("/").strip().lower()
     if not command:
@@ -1410,7 +1520,11 @@ async def send_quick_reply_to_customer(
 
     quick_reply = (
         db.query(QuickReply)
-        .filter(QuickReply.command == command, QuickReply.is_active.is_(True))
+        .filter(
+            QuickReply.workspace_id == workspace_id,
+            QuickReply.command == command,
+            QuickReply.is_active.is_(True),
+        )
         .first()
     )
     if not quick_reply:
@@ -1448,10 +1562,17 @@ async def send_quick_reply_to_customer(
     return True
 
 
-def list_active_quick_replies(db: Session) -> list[QuickReply]:
+def list_active_quick_replies(
+    db: Session,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+) -> list[QuickReply]:
     return (
         db.query(QuickReply)
-        .filter(QuickReply.is_active.is_(True))
+        .filter(
+            QuickReply.workspace_id == workspace_id,
+            QuickReply.is_active.is_(True),
+        )
         .order_by(QuickReply.command.asc())
         .all()
     )
@@ -1462,8 +1583,9 @@ async def send_admin_quick_reply(
     *,
     conversation_id: int,
     command_text: str,
+    workspace_id: int | None = None,
 ) -> bool:
-    conversation = get_conversation_by_id(db, conversation_id)
+    conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
     if conversation is None:
         return False
     client = MaxClient()
@@ -1477,21 +1599,47 @@ async def send_admin_quick_reply(
         sender_prefix=None,
         source="bot_system",
         image_caption="Изображение от оператора",
+        workspace_id=conversation.workspace_id,
     )
 
 
-def load_chat_threads(db: Session, query: str = "") -> list[ChatThreadItem]:
-    conversations = db.query(Conversation).order_by(Conversation.id.desc()).all()
+def load_chat_threads(
+    db: Session,
+    query: str = "",
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+) -> list[ChatThreadItem]:
+    conversations = (
+        db.query(Conversation)
+        .filter(Conversation.workspace_id == workspace_id)
+        .order_by(Conversation.id.desc())
+        .all()
+    )
     needle = query.strip().lower()
     items: list[ChatThreadItem] = []
     for conv in conversations:
-        meta = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conv.id).first()
-        profile = db.query(CustomerProfile).filter(
-            CustomerProfile.customer_account_id == conv.customer_account_id
-        ).first()
+        meta = (
+            db.query(ConversationMeta)
+            .filter(
+                ConversationMeta.workspace_id == workspace_id,
+                ConversationMeta.conversation_id == conv.id,
+            )
+            .first()
+        )
+        profile = (
+            db.query(CustomerProfile)
+            .filter(
+                CustomerProfile.workspace_id == workspace_id,
+                CustomerProfile.customer_account_id == conv.customer_account_id,
+            )
+            .first()
+        )
         last_msg = (
             db.query(ChatMessage)
-            .filter(ChatMessage.conversation_id == conv.id)
+            .filter(
+                ChatMessage.workspace_id == workspace_id,
+                ChatMessage.conversation_id == conv.id,
+            )
             .order_by(ChatMessage.id.desc())
             .first()
         )
@@ -1511,6 +1659,7 @@ def load_chat_threads(db: Session, query: str = "") -> list[ChatThreadItem]:
         has_delivery_errors = bool(
             db.query(ChatMessage)
             .filter(
+                ChatMessage.workspace_id == workspace_id,
                 ChatMessage.conversation_id == conv.id,
                 ChatMessage.direction == "bot",
                 ChatMessage.delivery_state == "failed",
@@ -1545,7 +1694,15 @@ def load_chat_threads(db: Session, query: str = "") -> list[ChatThreadItem]:
                 is_unread=is_unread,
                 last_activity_id=last_activity_id,
                 folder_id=conv.folder_id,
-                folder_name=(db.query(ChatFolder.name).filter(ChatFolder.id == conv.folder_id).scalar() or "")
+                folder_name=(
+                    db.query(ChatFolder.name)
+                    .filter(
+                        ChatFolder.workspace_id == workspace_id,
+                        ChatFolder.id == conv.folder_id,
+                    )
+                    .scalar()
+                    or ""
+                )
                 if conv.folder_id
                 else "",
             )
@@ -1555,33 +1712,71 @@ def load_chat_threads(db: Session, query: str = "") -> list[ChatThreadItem]:
     return items
 
 
-def delete_conversation(db: Session, conversation_id: int) -> bool:
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+def delete_conversation(
+    db: Session,
+    conversation_id: int,
+    *,
+    workspace_id: int | None = None,
+) -> bool:
+    query = db.query(Conversation).filter(Conversation.id == conversation_id)
+    if workspace_id is not None:
+        query = query.filter(Conversation.workspace_id == workspace_id)
+    conversation = query.first()
     if conversation is None:
         return False
-    db.query(OutboxMessage).filter(OutboxMessage.conversation_id == conversation_id).delete()
-    db.query(ManagerDispatch).filter(ManagerDispatch.conversation_id == conversation_id).delete()
-    db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).delete()
-    db.query(ChatMessage).filter(ChatMessage.conversation_id == conversation_id).delete()
-    db.query(MessageLog).filter(MessageLog.conversation_id == conversation_id).delete()
+    ws_id = conversation.workspace_id
+    db.query(OutboxMessage).filter(
+        OutboxMessage.workspace_id == ws_id,
+        OutboxMessage.conversation_id == conversation_id,
+    ).delete()
+    db.query(ManagerDispatch).filter(
+        ManagerDispatch.workspace_id == ws_id,
+        ManagerDispatch.conversation_id == conversation_id,
+    ).delete()
+    db.query(ConversationMeta).filter(
+        ConversationMeta.workspace_id == ws_id,
+        ConversationMeta.conversation_id == conversation_id,
+    ).delete()
+    db.query(ChatMessage).filter(
+        ChatMessage.workspace_id == ws_id,
+        ChatMessage.conversation_id == conversation_id,
+    ).delete()
+    db.query(MessageLog).filter(
+        MessageLog.workspace_id == ws_id,
+        MessageLog.conversation_id == conversation_id,
+    ).delete()
     db.delete(conversation)
     db.commit()
     return True
 
 
-def get_delivery_metrics(db: Session) -> DeliveryStats:
-    total = db.query(OutboxMessage).count()
-    success_count = db.query(OutboxMessage).filter(OutboxMessage.state == "sent").count()
-    failed_count = db.query(OutboxMessage).filter(OutboxMessage.state == "failed").count()
+def get_delivery_metrics(db: Session, *, workspace_id: int = DEFAULT_WORKSPACE_ID) -> DeliveryStats:
+    total = db.query(OutboxMessage).filter(OutboxMessage.workspace_id == workspace_id).count()
+    success_count = (
+        db.query(OutboxMessage)
+        .filter(OutboxMessage.workspace_id == workspace_id, OutboxMessage.state == "sent")
+        .count()
+    )
+    failed_count = (
+        db.query(OutboxMessage)
+        .filter(OutboxMessage.workspace_id == workspace_id, OutboxMessage.state == "failed")
+        .count()
+    )
     permanent_failures = (
         db.query(OutboxMessage)
         .filter(
+            OutboxMessage.workspace_id == workspace_id,
             OutboxMessage.state == "failed",
             OutboxMessage.is_permanent_failure.is_(True),
         )
         .count()
     )
-    retry_sum = int(db.query(func.sum(OutboxMessage.retry_count)).scalar() or 0)
+    retry_sum = int(
+        db.query(func.sum(OutboxMessage.retry_count))
+        .filter(OutboxMessage.workspace_id == workspace_id)
+        .scalar()
+        or 0
+    )
     return DeliveryStats(
         total_sent_attempts=total,
         success_count=success_count,
@@ -1591,22 +1786,58 @@ def get_delivery_metrics(db: Session) -> DeliveryStats:
     )
 
 
-def get_chat_metrics(db: Session) -> dict[str, int]:
+def get_chat_metrics(db: Session, *, workspace_id: int = DEFAULT_WORKSPACE_ID) -> dict[str, int]:
     return {
-        "new_count": db.query(ConversationMeta).filter(ConversationMeta.status == "new").count(),
-        "in_progress_count": db.query(ConversationMeta).filter(ConversationMeta.status == "in_progress").count(),
-        "done_count": db.query(ConversationMeta).filter(ConversationMeta.status == "done").count(),
+        "new_count": (
+            db.query(ConversationMeta)
+            .filter(
+                ConversationMeta.workspace_id == workspace_id,
+                ConversationMeta.status == "new",
+            )
+            .count()
+        ),
+        "in_progress_count": (
+            db.query(ConversationMeta)
+            .filter(
+                ConversationMeta.workspace_id == workspace_id,
+                ConversationMeta.status == "in_progress",
+            )
+            .count()
+        ),
+        "done_count": (
+            db.query(ConversationMeta)
+            .filter(
+                ConversationMeta.workspace_id == workspace_id,
+                ConversationMeta.status == "done",
+            )
+            .count()
+        ),
     }
 
 
-def get_conversation_meta(db: Session, conversation_id: int) -> ConversationMeta | None:
-    return db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).first()
+def get_conversation_meta(
+    db: Session,
+    conversation_id: int,
+    *,
+    workspace_id: int | None = None,
+) -> ConversationMeta | None:
+    query = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id)
+    if workspace_id is not None:
+        query = query.filter(ConversationMeta.workspace_id == workspace_id)
+    return query.first()
 
 
-def list_conversation_quick_commands(db: Session, conversation_id: int, limit: int = 8) -> list[str]:
+def list_conversation_quick_commands(
+    db: Session,
+    conversation_id: int,
+    limit: int = 8,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+) -> list[str]:
     recent_commands = (
         db.query(ChatMessage.text)
         .filter(
+            ChatMessage.workspace_id == workspace_id,
             ChatMessage.conversation_id == conversation_id,
             ChatMessage.direction == "bot",
             ChatMessage.source.in_(["manager", "bot_system"]),
@@ -1629,22 +1860,47 @@ def list_conversation_quick_commands(db: Session, conversation_id: int, limit: i
             break
     if seen:
         return seen
-    return [f"/{item.command}" for item in list_active_quick_replies(db)[:limit]]
+    return [f"/{item.command}" for item in list_active_quick_replies(db, workspace_id=workspace_id)[:limit]]
 
 
-def list_chat_folders(db: Session) -> list[ChatFolder]:
-    return db.query(ChatFolder).order_by(ChatFolder.sort_order.asc(), ChatFolder.name.asc()).all()
+def list_chat_folders(db: Session, *, workspace_id: int = DEFAULT_WORKSPACE_ID) -> list[ChatFolder]:
+    return (
+        db.query(ChatFolder)
+        .filter(ChatFolder.workspace_id == workspace_id)
+        .order_by(ChatFolder.sort_order.asc(), ChatFolder.name.asc())
+        .all()
+    )
 
 
-def create_chat_folder(db: Session, folder_name: str) -> ChatFolder:
+def create_chat_folder(
+    db: Session,
+    folder_name: str,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+) -> ChatFolder:
     normalized = folder_name.strip()
     if not normalized:
         raise ValueError("folder_name is empty")
-    exists = db.query(ChatFolder).filter(func.lower(ChatFolder.name) == normalized.lower()).first()
+    exists = (
+        db.query(ChatFolder)
+        .filter(
+            ChatFolder.workspace_id == workspace_id,
+            func.lower(ChatFolder.name) == normalized.lower(),
+        )
+        .first()
+    )
     if exists:
         return exists
-    max_sort = db.query(func.max(ChatFolder.sort_order)).scalar()
-    folder = ChatFolder(name=normalized, sort_order=(int(max_sort or 0) + 1))
+    max_sort = (
+        db.query(func.max(ChatFolder.sort_order))
+        .filter(ChatFolder.workspace_id == workspace_id)
+        .scalar()
+    )
+    folder = ChatFolder(
+        workspace_id=workspace_id,
+        name=normalized,
+        sort_order=(int(max_sort or 0) + 1),
+    )
     db.add(folder)
     db.commit()
     db.refresh(folder)
@@ -1656,12 +1912,24 @@ def assign_conversation_to_folder(
     *,
     conversation_id: int,
     folder_id: int | None,
+    workspace_id: int | None = None,
 ) -> bool:
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    conversation_query = db.query(Conversation).filter(Conversation.id == conversation_id)
+    if workspace_id is not None:
+        conversation_query = conversation_query.filter(Conversation.workspace_id == workspace_id)
+    conversation = conversation_query.first()
     if conversation is None:
         return False
+    ws_id = conversation.workspace_id
     if folder_id is not None:
-        folder = db.query(ChatFolder).filter(ChatFolder.id == folder_id).first()
+        folder = (
+            db.query(ChatFolder)
+            .filter(
+                ChatFolder.workspace_id == ws_id,
+                ChatFolder.id == folder_id,
+            )
+            .first()
+        )
         if folder is None:
             return False
     conversation.folder_id = folder_id
@@ -1670,8 +1938,16 @@ def assign_conversation_to_folder(
     return True
 
 
-def mark_thread_unread(db: Session, conversation_id: int) -> bool:
-    meta = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).first()
+def mark_thread_unread(
+    db: Session,
+    conversation_id: int,
+    *,
+    workspace_id: int | None = None,
+) -> bool:
+    query = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id)
+    if workspace_id is not None:
+        query = query.filter(ConversationMeta.workspace_id == workspace_id)
+    meta = query.first()
     if meta is None:
         return False
     if meta.status == "new" and meta.is_unread:
@@ -1683,21 +1959,44 @@ def mark_thread_unread(db: Session, conversation_id: int) -> bool:
     return True
 
 
-def load_chat_messages(db: Session, conversation_id: int) -> list[ChatMessage]:
+def load_chat_messages(
+    db: Session,
+    conversation_id: int,
+    *,
+    workspace_id: int | None = None,
+) -> list[ChatMessage]:
+    query = db.query(ChatMessage).filter(ChatMessage.conversation_id == conversation_id)
+    if workspace_id is not None:
+        query = query.filter(ChatMessage.workspace_id == workspace_id)
     return (
-        db.query(ChatMessage)
-        .filter(ChatMessage.conversation_id == conversation_id)
+        query
         .order_by(ChatMessage.id.asc())
         .all()
     )
 
 
-def get_conversation_by_id(db: Session, conversation_id: int) -> Conversation | None:
-    return db.query(Conversation).filter(Conversation.id == conversation_id).first()
+def get_conversation_by_id(
+    db: Session,
+    conversation_id: int,
+    *,
+    workspace_id: int | None = None,
+) -> Conversation | None:
+    query = db.query(Conversation).filter(Conversation.id == conversation_id)
+    if workspace_id is not None:
+        query = query.filter(Conversation.workspace_id == workspace_id)
+    return query.first()
 
 
-def mark_thread_read(db: Session, conversation_id: int) -> None:
-    meta = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).first()
+def mark_thread_read(
+    db: Session,
+    conversation_id: int,
+    *,
+    workspace_id: int | None = None,
+) -> None:
+    query = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id)
+    if workspace_id is not None:
+        query = query.filter(ConversationMeta.workspace_id == workspace_id)
+    meta = query.first()
     if meta is None:
         return
     if meta.status != "read" or meta.is_unread:
@@ -1713,8 +2012,9 @@ async def send_admin_chat_message(
     conversation_id: int,
     text: str,
     image_path: str | None,
+    workspace_id: int | None = None,
 ) -> bool:
-    conversation = get_conversation_by_id(db, conversation_id)
+    conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
     if conversation is None:
         return False
     sent_any = False
