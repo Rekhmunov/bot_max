@@ -321,6 +321,7 @@ def run() -> None:
         assert profile_page.status_code == 200
         assert "Профиль покупателя" in profile_page.text
         assert "Вернуться в чат" in profile_page.text
+        assert "К списку чатов" not in profile_page.text
         assert "Основные данные" in profile_page.text
         assert "Данные из переписки / Max" in profile_page.text
         assert "Тикет" in profile_page.text
@@ -357,6 +358,7 @@ def run() -> None:
         assert "bubble-debug" in admin_chats_page_after_send.text
         assert "id=\"edit-message-id\"" in admin_chats_page_after_send.text
         assert "Режим редактирования сообщения" in admin_chats_page_after_send.text
+        assert "клиент | mid:" not in admin_chats_page_after_send.text
 
         mobile_list_page = client.get("/admin/chats", cookies=cookies)
         assert mobile_list_page.status_code == 200
