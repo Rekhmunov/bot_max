@@ -31,7 +31,10 @@ MANAGER_HELP_TEXT = (
     "Новый клиент пишет в боте.\n"
     "Отвечайте в reply на сообщение с тикетом [T-XXXX], чтобы бот отправил ответ клиенту.\n"
     "Быстрые ответы: /command (например, /price).\n"
-    "Если клиент не может отправить контакт: /contact +79990001122 (в reply на нужный тикет)."
+    "Если клиент не может отправить контакт: /contact +79990001122 (в reply на нужный тикет).\n"
+    "Быстрый поиск в чате: /tickets\n"
+    "Ответ без reply: /reply T-1001 ваш текст\n"
+    "Быстрый ответ без reply: /reply T-1001 /price"
 )
 
 
@@ -664,6 +667,134 @@ def _extract_contact_from_manager_text(text: str) -> str | None:
     return parts[1].strip() or None
 
 
+def _parse_ticket_identifier(raw_value: str) -> int | None:
+    value = raw_value.strip().strip("[]").upper()
+    if value.startswith("T-"):
+        value = value[2:]
+    elif value.startswith("T"):
+        value = value[1:]
+    if not value.isdigit():
+        return None
+    return int(value)
+
+
+def _build_manager_ticket_inbox_text(db: Session, *, limit: int = 12) -> str:
+    threads = load_chat_threads(db)
+    if not threads:
+        return "Активных тикетов пока нет."
+
+    rows: list[str] = ["Тикеты (сначала новые):"]
+    shown = 0
+    for thread in threads:
+        if thread.ticket_no is None:
+            continue
+        unread_mark = "●" if thread.is_unread else "○"
+        preview = (thread.last_message_preview or "—").replace("\n", " ").strip()
+        if len(preview) > 48:
+            preview = preview[:47] + "…"
+        rows.append(
+            f"{unread_mark} T-{thread.ticket_no} {thread.customer_label} [{thread.status}] — {preview}"
+        )
+        shown += 1
+        if shown >= limit:
+            break
+
+    rows.append("")
+    rows.append("Ответ: /reply T-1001 ваш текст")
+    rows.append("Шаблон: /reply T-1001 /price")
+    return "\n".join(rows)
+
+
+def _resolve_conversation_by_ticket(db: Session, ticket_no: int) -> Conversation | None:
+    meta = db.query(ConversationMeta).filter(ConversationMeta.ticket_no == ticket_no).first()
+    if meta is None:
+        return None
+    return db.query(Conversation).filter(Conversation.id == meta.conversation_id).first()
+
+
+def _parse_manager_ticket_reply(text_value: str) -> tuple[int, str] | None:
+    normalized = text_value.strip()
+    if not normalized:
+        return None
+    lowered = normalized.lower()
+    if not (lowered.startswith("/reply ") or lowered.startswith("/r ")):
+        return None
+
+    parts = normalized.split(maxsplit=2)
+    if len(parts) < 3:
+        return None
+    ticket_no = _parse_ticket_identifier(parts[1])
+    if ticket_no is None:
+        return None
+    payload = parts[2].strip()
+    if not payload:
+        return None
+    return ticket_no, payload
+
+
+async def _send_manager_payload_to_conversation(
+    db: Session,
+    *,
+    client: MaxClient,
+    conversation: Conversation,
+    manager_event: MaxWebhookEvent,
+    payload_text: str,
+) -> bool:
+    customer_chat_id = conversation.chat_id
+    customer_user_id = conversation.customer_account_id
+
+    contact_from_text = _extract_contact_from_manager_text(payload_text)
+    if contact_from_text:
+        meta = (
+            db.query(ConversationMeta)
+            .filter(ConversationMeta.conversation_id == conversation.id)
+            .first()
+        )
+        if meta:
+            meta.phone_verified = True
+            meta.phone_number = contact_from_text
+            meta.status = "waiting_manager"
+            db.add(meta)
+            db.commit()
+        _upsert_customer_profile(
+            db=db,
+            customer_id=conversation.customer_account_id,
+            chat_id=conversation.chat_id,
+            first_name=None,
+            username=None,
+            phone_number=contact_from_text,
+        )
+        return await enqueue_and_process_send_text(
+            db,
+            conversation_id=conversation.id,
+            target_chat_id=customer_chat_id,
+            target_user_id=customer_user_id,
+            text=get_template_text(db, TEMPLATE_AFTER_PHONE),
+            source="manager",
+            link_mid=manager_event.link_mid,
+        )
+
+    if payload_text.startswith("/"):
+        return await send_quick_reply_to_customer(
+            db=db,
+            client=client,
+            conversation_id=conversation.id,
+            customer_chat_id=customer_chat_id,
+            customer_user_id=customer_user_id,
+            command_text=payload_text,
+        )
+
+    return await enqueue_and_process_send_text(
+        db,
+        conversation_id=conversation.id,
+        target_chat_id=customer_chat_id,
+        target_user_id=customer_user_id,
+        text=f"Менеджер: {payload_text}",
+        source="manager",
+        link_mid=manager_event.link_mid,
+    )
+
+
 async def _send_contact_request_prompt(
     db: Session,
     conversation_id: int,
@@ -964,7 +1095,37 @@ async def handle_manager_message(
     if str(event.sender_id).strip() != str(manager_user_id).strip():
         return {"ok": True, "ignored": "not_manager_sender"}
 
+    text_value = event.text.strip()
+
+    if text_value.lower() in {"/help", "/h"}:
+        await client.send_text_to_user(user_id=manager_user_id, text=MANAGER_HELP_TEXT)
+        return {"ok": True, "help_sent": True}
+
+    if text_value.lower() in {"/tickets", "/list", "/inbox"}:
+        inbox_text = _build_manager_ticket_inbox_text(db)
+        await client.send_text_to_user(user_id=manager_user_id, text=inbox_text)
+        return {"ok": True, "tickets_sent": True}
+
     target_conversation = None
+    parsed_ticket_reply = _parse_manager_ticket_reply(text_value)
+    if parsed_ticket_reply:
+        ticket_no, payload_text = parsed_ticket_reply
+        target_conversation = _resolve_conversation_by_ticket(db, ticket_no)
+        if target_conversation is None:
+            await client.send_text_to_user(
+                user_id=manager_user_id,
+                text=f"Тикет T-{ticket_no} не найден. Проверьте номер через /tickets",
+            )
+            return {"ok": True, "ignored": "ticket_not_found"}
+        sent_ok = await _send_manager_payload_to_conversation(
+            db,
+            client=client,
+            conversation=target_conversation,
+            manager_event=event,
+            payload_text=payload_text,
+        )
+        return {"ok": True, "ticket_reply_sent": sent_ok, "ticket_no": ticket_no}
+
     if event.link_mid:
         dispatch = db.query(ManagerDispatch).filter(ManagerDispatch.manager_message_mid == event.link_mid).first()
         if dispatch:
@@ -978,71 +1139,20 @@ async def handle_manager_message(
             user_id=manager_user_id,
             text=(
                 "Нужно отвечать reply на карточку тикета.\n"
-                "Нажмите «Ответить» на сообщение вида 🆕 [T-xxxx] ..."
+                "Или используйте формат: /reply T-1001 ваш текст\n"
+                "Список активных тикетов: /tickets"
             ),
         )
         return {"ok": True, "ignored": "reply_required"}
 
-    customer_chat_id = target_conversation.chat_id
-    customer_user_id = target_conversation.customer_account_id
-    text_value = event.text.strip()
-    contact_from_text = _extract_contact_from_manager_text(text_value)
-    if contact_from_text:
-        meta = (
-            db.query(ConversationMeta)
-            .filter(ConversationMeta.conversation_id == target_conversation.id)
-            .first()
-        )
-        if meta:
-            meta.phone_verified = True
-            meta.phone_number = contact_from_text
-            meta.status = "waiting_manager"
-            db.add(meta)
-            db.commit()
-        _upsert_customer_profile(
-            db=db,
-            customer_id=target_conversation.customer_account_id,
-            chat_id=target_conversation.chat_id,
-            first_name=None,
-            username=None,
-            phone_number=contact_from_text,
-        )
-        sent_ok = await enqueue_and_process_send_text(
-            db,
-            conversation_id=target_conversation.id,
-            target_chat_id=customer_chat_id,
-            target_user_id=customer_user_id,
-            text=get_template_text(db, TEMPLATE_AFTER_PHONE),
-            source="manager",
-            link_mid=event.link_mid,
-        )
-        return {"ok": True, "phone_captured_from_manager": sent_ok}
-
-    if text_value.startswith("/"):
-        sent = await send_quick_reply_to_customer(
-            db=db,
-            client=client,
-            conversation_id=target_conversation.id,
-            customer_chat_id=customer_chat_id,
-            customer_user_id=customer_user_id,
-            command_text=text_value,
-        )
-        return {"ok": True, "manager_command_sent": sent}
-
-    if text_value:
-        text = f"Менеджер: {text_value}"
-        ok = await enqueue_and_process_send_text(
-            db,
-            conversation_id=target_conversation.id,
-            target_chat_id=customer_chat_id,
-            target_user_id=customer_user_id,
-            text=text,
-            source="manager",
-            link_mid=event.link_mid,
-        )
-        return {"ok": True, "manager_text_sent": ok}
-
-    return {"ok": True, "ignored": "empty_manager_message"}
+    sent_ok = await _send_manager_payload_to_conversation(
+        db,
+        client=client,
+        conversation=target_conversation,
+        manager_event=event,
+        payload_text=text_value,
+    )
+    return {"ok": True, "manager_payload_sent": sent_ok}
 
 
 async def send_quick_reply_to_customer(

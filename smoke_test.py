@@ -128,19 +128,33 @@ def run() -> None:
             or callback_payload.get("ignored") == "duplicate_event"
         ), callback_payload
 
-        webhook_manager_without_reply = client.post(
+        webhook_manager_tickets = client.post(
             "/webhook/max",
             json={
                 "update_type": "message_created",
                 "message": {
                     "sender": {"user_id": "90000"},
                     "recipient": {"chat_id": "mgr-chat-1", "chat_type": "dialog"},
-                    "body": {"text": f"/{command}"},
+                    "body": {"text": "/tickets"},
                 },
             },
         )
-        assert webhook_manager_without_reply.status_code == 200
-        assert webhook_manager_without_reply.json().get("ignored") == "reply_required"
+        assert webhook_manager_tickets.status_code == 200
+        assert webhook_manager_tickets.json().get("tickets_sent") is True
+
+        webhook_manager_ticket_reply = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_created",
+                "message": {
+                    "sender": {"user_id": "90000"},
+                    "recipient": {"chat_id": "mgr-chat-1", "chat_type": "dialog"},
+                    "body": {"text": "/reply T-1001 /" + command},
+                },
+            },
+        )
+        assert webhook_manager_ticket_reply.status_code == 200
+        assert webhook_manager_ticket_reply.json().get("ticket_reply_sent") is True
 
         webhook_manager = client.post(
             "/webhook/max",
