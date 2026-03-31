@@ -225,6 +225,7 @@ def run() -> None:
         assert mobile_chat_page.status_code == 200
         assert "back-btn mobile-only" in mobile_chat_page.text
         assert "attach-wrap" in mobile_chat_page.text
+        assert "position: sticky" in mobile_chat_page.text
         assert 'id="chat-screen"' in mobile_chat_page.text
         assert "chat-screen hidden-mobile" not in mobile_chat_page.text
 

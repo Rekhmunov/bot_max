@@ -191,6 +191,9 @@
       grid-template-columns: auto 1fr auto;
       align-items: center;
       gap: 8px;
+      position: sticky;
+      top: 0;
+      z-index: 6;
     }
     .back-btn {
       border: 0;
@@ -327,6 +330,9 @@
       padding: 10px;
       display: grid;
       gap: 8px;
+      position: sticky;
+      bottom: 0;
+      z-index: 6;
     }
     .compose-row {
       display: grid;
@@ -413,6 +419,12 @@
       }
       .chat-screen {
         border-right: 0;
+      }
+      .chat-header {
+        padding-top: max(10px, env(safe-area-inset-top));
+      }
+      .compose {
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
       }
       .bubble {
         max-width: 92%;
