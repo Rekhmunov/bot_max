@@ -39,6 +39,7 @@ class MaxWebhookEvent(BaseModel):
     sender_username: str | None = Field(default=None)
     update_id: str | None = Field(default=None)
     raw_payload: dict[str, Any] = Field(default_factory=dict)
+    callback_payload: str | None = Field(default=None)
 
     def event_uid_value(self) -> str | None:
         if self.update_id:
@@ -132,6 +133,18 @@ class MaxWebhookEvent(BaseModel):
             link_message.get("mid"),
             link_message.get("message_id"),
         )
+        callback_payload = _pick_first(
+            message.get("callback_data"),
+            message.get("callbackData"),
+            body.get("callback_data"),
+            body.get("callbackData"),
+            body.get("data"),
+            body.get("payload"),
+            payload.get("callback_data"),
+            payload.get("callbackData"),
+            payload.get("data"),
+            payload.get("payload"),
+        )
 
         if chat_id is None or sender_id is None:
             return None
@@ -161,4 +174,5 @@ class MaxWebhookEvent(BaseModel):
             sender_username=_pick_first(sender.get("username"), user.get("username")),
             update_id=str(event_uid) if event_uid is not None else None,
             raw_payload=payload,
+            callback_payload=str(callback_payload) if callback_payload is not None else None,
         )

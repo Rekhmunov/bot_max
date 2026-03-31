@@ -913,9 +913,9 @@
                 data-message-direction="{{ msg.direction }}"
               >
                 <div class="bubble-head">
-                  {% if msg.direction != "bot" %}
+                  {% if msg.direction == "customer" %}
                     <span class="bubble-identity">
-                      {{ msg.direction }} / {{ msg.source }}{% if msg.max_message_mid %} | mid: {{ msg.max_message_mid }}{% endif %}
+                      клиент{% if msg.max_message_mid %} | mid: {{ msg.max_message_mid }}{% endif %}
                     </span>
                   {% endif %}
                   {% if msg.direction == "bot" %}

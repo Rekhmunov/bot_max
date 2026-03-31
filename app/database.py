@@ -61,6 +61,14 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE conversation_meta ADD COLUMN unread_errors_count INTEGER DEFAULT 0")
                 )
+            if "manager_owner_id" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN manager_owner_id VARCHAR(255) DEFAULT ''")
+                )
+            if "assigned_manager_id" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN assigned_manager_id VARCHAR(255)")
+                )
 
         if "conversations" in table_names:
             conversation_columns = {col["name"] for col in inspector.get_columns("conversations")}

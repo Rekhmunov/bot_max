@@ -143,6 +143,88 @@ def run() -> None:
         assert webhook_manager_tickets.status_code == 200
         assert webhook_manager_tickets.json().get("tickets_sent") is True
 
+        webhook_manager_panel = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_created",
+                "message": {
+                    "sender": {"user_id": "90000"},
+                    "recipient": {"chat_id": "mgr-chat-1", "chat_type": "dialog"},
+                    "body": {"text": "/panel"},
+                },
+            },
+        )
+        assert webhook_manager_panel.status_code == 200
+        assert webhook_manager_panel.json().get("panel_sent") is True
+
+        webhook_manager_new = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_created",
+                "message": {
+                    "sender": {"user_id": "90000"},
+                    "recipient": {"chat_id": "mgr-chat-1", "chat_type": "dialog"},
+                    "body": {"text": "/new"},
+                },
+            },
+        )
+        assert webhook_manager_new.status_code == 200
+        assert webhook_manager_new.json().get("ok") is True
+
+        webhook_manager_take = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_created",
+                "message": {
+                    "sender": {"user_id": "90000"},
+                    "recipient": {"chat_id": "mgr-chat-1", "chat_type": "dialog"},
+                    "body": {"text": "/take T-1001"},
+                },
+            },
+        )
+        assert webhook_manager_take.status_code == 200
+        assert webhook_manager_take.json().get("action") == "take"
+
+        webhook_manager_mine = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_created",
+                "message": {
+                    "sender": {"user_id": "90000"},
+                    "recipient": {"chat_id": "mgr-chat-1", "chat_type": "dialog"},
+                    "body": {"text": "/mine"},
+                },
+            },
+        )
+        assert webhook_manager_mine.status_code == 200
+        assert webhook_manager_mine.json().get("ok") is True
+
+        webhook_manager_done = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_created",
+                "message": {
+                    "sender": {"user_id": "90000"},
+                    "recipient": {"chat_id": "mgr-chat-1", "chat_type": "dialog"},
+                    "body": {"text": "/done T-1001"},
+                },
+            },
+        )
+        assert webhook_manager_done.status_code == 200
+        assert webhook_manager_done.json().get("action") == "done"
+
+        webhook_manager_callback = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_callback",
+                "chat_id": "mgr-chat-1",
+                "sender_id": "90000",
+                "callback": {"payload": "mgr:new"},
+            },
+        )
+        assert webhook_manager_callback.status_code == 200
+        assert webhook_manager_callback.json().get("ok") is True
+
         webhook_manager_ticket_reply = client.post(
             "/webhook/max",
             json={
@@ -208,6 +290,9 @@ def run() -> None:
         assert profile_page.status_code == 200
         assert "Профиль покупателя" in profile_page.text
         assert "Вернуться в чат" in profile_page.text
+        assert "Основные данные" in profile_page.text
+        assert "Данные из переписки / Max" in profile_page.text
+        assert "Тикет" in profile_page.text
         assert f"T-{conversation_id + 1000}"[:2] == "T-"
 
         admin_quick_reply = client.post(

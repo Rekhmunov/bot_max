@@ -35,7 +35,8 @@ MANAGER_HELP_TEXT = (
     "Если клиент не может отправить контакт: /contact +79990001122 (в reply на нужный тикет).\n"
     "Быстрый поиск в чате: /tickets\n"
     "Ответ без reply: /reply T-1001 ваш текст\n"
-    "Быстрый ответ без reply: /reply T-1001 /price"
+    "Быстрый ответ без reply: /reply T-1001 /price\n"
+    "Диспетчер: /panel, /new, /mine, /next, /take T-1001, /done T-1001"
 )
 
 
@@ -798,6 +799,317 @@ async def _send_manager_payload_to_conversation(
     )
 
 
+def _make_panel_keyboard_for_ticket(ticket_no: int, status: str) -> list[dict]:
+    upper_status = (status or "").strip().lower()
+    if upper_status == "new":
+        row = [
+            {"type": "callback", "text": "Взять", "payload": f"mgr:take:{ticket_no}"},
+            {"type": "callback", "text": "Готово", "payload": f"mgr:done:{ticket_no}"},
+        ]
+    elif upper_status == "in_progress":
+        row = [
+            {"type": "callback", "text": "Мой", "payload": f"mgr:mine:{ticket_no}"},
+            {"type": "callback", "text": "Готово", "payload": f"mgr:done:{ticket_no}"},
+        ]
+    else:
+        row = [{"type": "callback", "text": "Открыть", "payload": f"mgr:show:{ticket_no}"}]
+    return [{"type": "inline_keyboard", "payload": {"buttons": [row]}}]
+
+
+async def _send_manager_text_with_attachments(
+    db: Session,
+    *,
+    conversation_id: int | None,
+    target_user_id: str,
+    text: str,
+    attachments: list[dict] | None,
+    source: str = "bot_system",
+) -> bool:
+    chat_message_id: int | None = None
+    if conversation_id is not None:
+        msg = _store_chat_message(
+            db,
+            conversation_id=conversation_id,
+            direction="bot",
+            source=source,
+            text=text,
+            delivery_state="queued",
+            delivery_error="",
+            delivery_retry_count=0,
+            delivery_next_retry_at=_as_naive_utc(_utc_now()),
+        )
+        chat_message_id = msg.id
+    item = _enqueue_outbox_message(
+        db,
+        conversation_id=conversation_id,
+        chat_message_id=chat_message_id,
+        target_chat_id="",
+        target_user_id=target_user_id,
+        operation="send_message",
+        payload={"text": text, "attachments": attachments or []},
+    )
+    ok, _, _ = await _dispatch_outbox(db, client=MaxClient(), item=item)
+    return ok
+
+
+def _load_meta_for_ticket(db: Session, ticket_no: int) -> tuple[ConversationMeta | None, Conversation | None]:
+    meta = db.query(ConversationMeta).filter(ConversationMeta.ticket_no == ticket_no).first()
+    if meta is None:
+        return None, None
+    conversation = db.query(Conversation).filter(Conversation.id == meta.conversation_id).first()
+    return meta, conversation
+
+
+def _ticket_brief_for_manager(
+    db: Session,
+    *,
+    conversation: Conversation,
+    meta: ConversationMeta,
+) -> str:
+    profile = (
+        db.query(CustomerProfile)
+        .filter(CustomerProfile.customer_account_id == conversation.customer_account_id)
+        .first()
+    )
+    customer_name = (profile.first_name if profile and profile.first_name else "Покупатель").strip()
+    username = (profile.username if profile and profile.username else "").strip()
+    username_part = f" @{username}" if username else ""
+    last_msg = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.conversation_id == conversation.id)
+        .order_by(ChatMessage.id.desc())
+        .first()
+    )
+    preview = (last_msg.text or "").replace("\n", " ").strip() if last_msg else "—"
+    if len(preview) > 80:
+        preview = preview[:79] + "…"
+    owner = (meta.manager_owner_id or "").strip() or "—"
+    return (
+        f"[T-{meta.ticket_no}] {customer_name}{username_part}\n"
+        f"Статус: {meta.status}\n"
+        f"Ответственный: {owner}\n"
+        f"Клиент: {preview}\n"
+        f"Ответ: /reply T-{meta.ticket_no} ваш текст"
+    )
+
+
+def _filter_threads_for_manager(
+    db: Session,
+    *,
+    manager_id: str,
+    mode: str,
+) -> list[tuple[ChatThreadItem, ConversationMeta]]:
+    threads = load_chat_threads(db)
+    rows: list[tuple[ChatThreadItem, ConversationMeta]] = []
+    for thread in threads:
+        if thread.ticket_no is None:
+            continue
+        meta = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == thread.conversation_id).first()
+        if meta is None:
+            continue
+        if mode == "new" and meta.status != "new":
+            continue
+        if mode == "mine" and (meta.manager_owner_id or "").strip() != manager_id:
+            continue
+        rows.append((thread, meta))
+    return rows
+
+
+def _build_panel_summary_text(db: Session, *, manager_id: str) -> str:
+    total_new = db.query(ConversationMeta).filter(ConversationMeta.status == "new").count()
+    total_in_progress = db.query(ConversationMeta).filter(ConversationMeta.status == "in_progress").count()
+    mine_in_progress = (
+        db.query(ConversationMeta)
+        .filter(
+            ConversationMeta.status == "in_progress",
+            ConversationMeta.manager_owner_id == manager_id,
+        )
+        .count()
+    )
+    total_done = db.query(ConversationMeta).filter(ConversationMeta.status == "done").count()
+    return (
+        "Диспетчер тикетов\n"
+        f"Новые: {total_new}\n"
+        f"В работе: {total_in_progress}\n"
+        f"Мои в работе: {mine_in_progress}\n"
+        f"Завершенные: {total_done}\n\n"
+        "Команды: /new, /mine, /next, /take T-1001, /done T-1001"
+    )
+
+
+async def _send_dispatch_panel(
+    db: Session,
+    *,
+    manager_id: str,
+) -> bool:
+    text = _build_panel_summary_text(db, manager_id=manager_id)
+    keyboard = [
+        {
+            "type": "inline_keyboard",
+            "payload": {
+                "buttons": [
+                    [
+                        {"type": "callback", "text": "Новые", "payload": "mgr:new"},
+                        {"type": "callback", "text": "Мои", "payload": "mgr:mine"},
+                        {"type": "callback", "text": "След.", "payload": "mgr:next"},
+                    ]
+                ]
+            },
+        }
+    ]
+    return await _send_manager_text_with_attachments(
+        db,
+        conversation_id=None,
+        target_user_id=manager_id,
+        text=text,
+        attachments=keyboard,
+    )
+
+
+async def _send_first_ticket_from_mode(
+    db: Session,
+    *,
+    manager_id: str,
+    mode: str,
+) -> dict:
+    rows = _filter_threads_for_manager(db, manager_id=manager_id, mode=mode)
+    if not rows:
+        msg = "Подходящих тикетов нет." if mode != "new" else "Новых тикетов нет."
+        await MaxClient().send_text_to_user(user_id=manager_id, text=msg)
+        return {"ok": True, "empty": True, "mode": mode}
+
+    thread, meta = rows[0]
+    conversation = db.query(Conversation).filter(Conversation.id == thread.conversation_id).first()
+    if conversation is None:
+        await MaxClient().send_text_to_user(user_id=manager_id, text="Тикет не найден.")
+        return {"ok": True, "error": "conversation_not_found"}
+    text = _ticket_brief_for_manager(db, conversation=conversation, meta=meta)
+    attachments = _make_panel_keyboard_for_ticket(meta.ticket_no, meta.status)
+    ok = await _send_manager_text_with_attachments(
+        db,
+        conversation_id=conversation.id,
+        target_user_id=manager_id,
+        text=text,
+        attachments=attachments,
+    )
+    return {"ok": True, "ticket_sent": ok, "ticket_no": meta.ticket_no, "mode": mode}
+
+
+async def _apply_ticket_action(
+    db: Session,
+    *,
+    manager_id: str,
+    action: str,
+    ticket_no: int,
+) -> dict:
+    meta, conversation = _load_meta_for_ticket(db, ticket_no)
+    if meta is None or conversation is None:
+        await MaxClient().send_text_to_user(
+            user_id=manager_id,
+            text=f"Тикет T-{ticket_no} не найден.",
+        )
+        return {"ok": True, "ignored": "ticket_not_found", "ticket_no": ticket_no}
+
+    result_text = ""
+    normalized_action = action.strip().lower()
+    if normalized_action == "take":
+        meta.status = "in_progress"
+        meta.manager_owner_id = manager_id
+        result_text = f"Тикет T-{ticket_no} взят в работу."
+    elif normalized_action == "done":
+        meta.status = "done"
+        meta.manager_owner_id = manager_id
+        result_text = f"Тикет T-{ticket_no} отмечен как завершенный."
+    elif normalized_action == "mine":
+        owner = (meta.manager_owner_id or "").strip() or "—"
+        result_text = f"T-{ticket_no}: статус={meta.status}, ответственный={owner}"
+    elif normalized_action == "show":
+        result_text = _ticket_brief_for_manager(db, conversation=conversation, meta=meta)
+    else:
+        return {"ok": True, "ignored": "unknown_action", "action": action}
+
+    db.add(meta)
+    db.commit()
+
+    attachments = _make_panel_keyboard_for_ticket(meta.ticket_no, meta.status)
+    if normalized_action in {"show", "mine"}:
+        await _send_manager_text_with_attachments(
+            db,
+            conversation_id=conversation.id,
+            target_user_id=manager_id,
+            text=result_text,
+            attachments=attachments,
+        )
+        return {"ok": True, "ticket_no": ticket_no, "action": normalized_action}
+
+    await _send_manager_text_with_attachments(
+        db,
+        conversation_id=conversation.id,
+        target_user_id=manager_id,
+        text=result_text,
+        attachments=attachments,
+    )
+    return {"ok": True, "ticket_no": ticket_no, "action": normalized_action}
+
+
+def _parse_manager_ticket_action(text_value: str) -> tuple[str, int] | None:
+    normalized = text_value.strip()
+    if not normalized:
+        return None
+    parts = normalized.split(maxsplit=1)
+    command = parts[0].strip().lower()
+    if command not in {"/take", "/done"}:
+        return None
+    if len(parts) < 2:
+        return None
+    ticket_no = _parse_ticket_identifier(parts[1])
+    if ticket_no is None:
+        return None
+    return command.lstrip("/"), ticket_no
+
+
+def _parse_manager_callback_action(
+    raw_payload: dict,
+) -> tuple[str, int | None] | None:
+    if not isinstance(raw_payload, dict):
+        return None
+    callback = raw_payload.get("callback")
+    if not isinstance(callback, dict):
+        callback = raw_payload.get("message_callback")
+    if not isinstance(callback, dict):
+        return None
+
+    payload_value = (
+        callback.get("payload")
+        or callback.get("data")
+        or callback.get("callback_data")
+        or callback.get("command")
+    )
+    if payload_value is None:
+        payload_root = raw_payload.get("payload")
+        if isinstance(payload_root, dict):
+            payload_value = payload_root.get("payload")
+        elif isinstance(payload_root, str):
+            payload_value = payload_root
+    if not isinstance(payload_value, str):
+        return None
+    normalized = payload_value.strip().lower()
+    if not normalized.startswith("mgr:"):
+        return None
+    parts = normalized.split(":")
+    if len(parts) == 2 and parts[1] in {"new", "mine", "next", "panel"}:
+        return parts[1], None
+    if len(parts) == 3 and parts[1] in {"take", "done", "show"}:
+        ticket_raw = parts[2].strip()
+        ticket_no = _parse_ticket_identifier(ticket_raw)
+        if ticket_no is None and ticket_raw.isdigit():
+            ticket_no = int(ticket_raw)
+        if ticket_no is None:
+            return None
+        return parts[1], ticket_no
+    return None
+
+
 async def _send_contact_request_prompt(
     db: Session,
     conversation_id: int,
@@ -1099,10 +1411,49 @@ async def handle_manager_message(
         return {"ok": True, "ignored": "not_manager_sender"}
 
     text_value = event.text.strip()
+    callback_action = _parse_manager_callback_action(event.raw_payload)
+    if callback_action:
+        action, maybe_ticket = callback_action
+        if action in {"panel"}:
+            ok = await _send_dispatch_panel(db, manager_id=manager_user_id)
+            return {"ok": True, "panel_sent": ok, "via": "callback"}
+        if action in {"new", "mine", "next"}:
+            mode = "new" if action in {"new", "next"} else "mine"
+            return await _send_first_ticket_from_mode(db, manager_id=manager_user_id, mode=mode)
+        if action in {"take", "done", "mine", "show"} and maybe_ticket is not None:
+            return await _apply_ticket_action(
+                db,
+                manager_id=manager_user_id,
+                action=action,
+                ticket_no=maybe_ticket,
+            )
 
     if text_value.lower() in {"/help", "/h"}:
         await client.send_text_to_user(user_id=manager_user_id, text=MANAGER_HELP_TEXT)
         return {"ok": True, "help_sent": True}
+
+    if text_value.lower() in {"/panel", "/p"}:
+        ok = await _send_dispatch_panel(db, manager_id=manager_user_id)
+        return {"ok": True, "panel_sent": ok}
+
+    if text_value.lower() == "/new":
+        return await _send_first_ticket_from_mode(db, manager_id=manager_user_id, mode="new")
+
+    if text_value.lower() in {"/mine", "/my"}:
+        return await _send_first_ticket_from_mode(db, manager_id=manager_user_id, mode="mine")
+
+    if text_value.lower() in {"/next", "/n"}:
+        return await _send_first_ticket_from_mode(db, manager_id=manager_user_id, mode="new")
+
+    parsed_ticket_action = _parse_manager_ticket_action(text_value)
+    if parsed_ticket_action:
+        action, ticket_no = parsed_ticket_action
+        return await _apply_ticket_action(
+            db,
+            manager_id=manager_user_id,
+            action=action,
+            ticket_no=ticket_no,
+        )
 
     if text_value.lower() in {"/tickets", "/list", "/inbox"}:
         inbox_text = _build_manager_ticket_inbox_text(db)

@@ -95,32 +95,40 @@
 <body>
   <div class="page">
     <div class="topbar">
-      <a class="back-link" href="/admin/chats?conversation_id={{ conversation_id }}&q={{ query }}&view=chat">← Вернуться в чат</a>
+      <a class="back-link" href="{{ back_to_chat_url }}">← Вернуться в чат</a>
       <h1 class="title">Профиль покупателя</h1>
-      <a class="back-link" href="/admin/chats?q={{ query }}">К списку чатов</a>
+      <a class="back-link" href="{{ back_to_list_url }}">К списку чатов</a>
     </div>
 
     <section class="card">
       <h2 class="section-title">Основные данные</h2>
       <div class="grid">
+        {% if basic_rows %}
         {% for row in basic_rows %}
           <div class="item">
             <div class="label">{{ row.label }}</div>
             <div class="value">{{ row.value }}</div>
           </div>
         {% endfor %}
+        {% else %}
+          <div class="item"><div class="value">Данные отсутствуют</div></div>
+        {% endif %}
       </div>
     </section>
 
     <section class="card">
       <h2 class="section-title">Данные из переписки / Max</h2>
       <div class="grid">
+        {% if technical_rows %}
         {% for row in technical_rows %}
           <div class="item">
             <div class="label">{{ row.label }}</div>
             <div class="value">{{ row.value }}</div>
           </div>
         {% endfor %}
+        {% else %}
+          <div class="item"><div class="value">Технические данные отсутствуют</div></div>
+        {% endif %}
       </div>
     </section>
   </div>

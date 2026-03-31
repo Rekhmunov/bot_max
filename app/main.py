@@ -557,10 +557,75 @@ def admin_chat_customer_profile(
         )
     ]
 
-    back_to_chat_url = f"/admin/chats?conversation_id={conversation_id}&q={q}"
+    safe_q = q.strip()
+    safe_view = view.strip().lower()
+    back_to_chat_url = f"/admin/chats?conversation_id={conversation_id}&q={safe_q}"
     if view.strip().lower() == "chat":
         back_to_chat_url += "&view=chat"
-    back_to_list_url = f"/admin/chats?q={q}"
+    back_to_list_url = f"/admin/chats?q={safe_q}"
+
+    basic_rows = [
+        {"label": "Тикет", "value": f"T-{meta.ticket_no}" if meta else "—"},
+        {
+            "label": "Имя",
+            "value": (profile.first_name if profile and profile.first_name else "Покупатель"),
+        },
+        {
+            "label": "Username",
+            "value": (f"@{profile.username}" if profile and profile.username else "—"),
+        },
+        {
+            "label": "Телефон",
+            "value": (
+                (meta.phone_number if meta and meta.phone_number else "")
+                or (profile.phone_number if profile and profile.phone_number else "")
+                or "—"
+            ),
+        },
+        {"label": "Статус", "value": (meta.status if meta else "—")},
+        {"label": "Телефон подтвержден", "value": ("да" if meta and meta.phone_verified else "нет")},
+    ]
+    technical_rows = [
+        {"label": "conversation_id", "value": str(conversation.id)},
+        {"label": "chat_id", "value": conversation.chat_id or "—"},
+        {"label": "customer_account_id", "value": conversation.customer_account_id or "—"},
+        {
+            "label": "source_chat_id",
+            "value": (profile.source_chat_id if profile and profile.source_chat_id else "—"),
+        },
+        {"label": "manager_owner_id", "value": (meta.manager_owner_id if meta and meta.manager_owner_id else "—")},
+        {"label": "sender_ids (последние)", "value": "\n".join(sender_ids) if sender_ids else "—"},
+        {
+            "label": "message mids (последние)",
+            "value": (
+                "\n".join(
+                    [
+                        f"{item['direction']}/{item['source']} max:{item['max_mid'] or '-'} link:{item['link_mid'] or '-'}"
+                        for item in message_mids
+                    ]
+                )
+                if message_mids
+                else "—"
+            ),
+        },
+        {
+            "label": "manager dispatch mids",
+            "value": "\n".join(manager_dispatch_mids) if manager_dispatch_mids else "—",
+        },
+        {
+            "label": "outbox targets",
+            "value": (
+                "\n".join(
+                    [
+                        f"{item['operation']} chat:{item['target_chat_id'] or '-'} user:{item['target_user_id'] or '-'} [{item['state']}] mid:{item['external_message_mid'] or '-'}"
+                        for item in outbox_targets
+                    ]
+                )
+                if outbox_targets
+                else "—"
+            ),
+        },
+    ]
 
     return templates.TemplateResponse(
         request,
@@ -570,10 +635,11 @@ def admin_chat_customer_profile(
             "conversation": conversation,
             "meta": meta,
             "profile": profile,
-            "sender_ids": sender_ids,
-            "message_mids": message_mids,
-            "manager_dispatch_mids": manager_dispatch_mids,
-            "outbox_targets": outbox_targets,
+            "basic_rows": basic_rows,
+            "technical_rows": technical_rows,
+            "conversation_id": conversation_id,
+            "query": safe_q,
+            "view": safe_view,
             "back_to_chat_url": back_to_chat_url,
             "back_to_list_url": back_to_list_url,
         },
