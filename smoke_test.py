@@ -32,18 +32,31 @@ def run() -> None:
         admin_page = client.get("/admin", cookies=cookies)
         assert admin_page.status_code == 200
 
+        start_template = (
+            "Здравствуйте! **Сейчас позову менеджера**.\n"
+            "Чтобы подтвердить, что общаемся не с мошенником, "
+            "нажмите кнопку \"Поделиться номером\".\n"
+            "Подробности: [Справка](https://example.com/help)"
+        )
+        after_phone_template = (
+            "**Спасибо!** Номер подтвержден.\n"
+            "Пожалуйста, опишите, какой именно товар хотите с кэшбэком."
+        )
         save_settings = client.post(
             "/admin/settings",
             data={
                 "prestart_message": DEFAULT_TEMPLATES["prestart_message"],
-                "start_message": DEFAULT_TEMPLATES["start_message"],
-                "after_phone_message": DEFAULT_TEMPLATES["after_phone_message"],
+                "start_message": start_template,
+                "after_phone_message": after_phone_template,
                 "manager_account_id": "90000",
                 "admin_account_id": "admin_1",
             },
             cookies=cookies,
         )
         assert save_settings.status_code == 200
+        assert "format-row" in save_settings.text
+        assert "data-format-target=\"start_message\"" in save_settings.text
+        assert "data-format-target=\"after_phone_message\"" in save_settings.text
 
         create_reply = client.post(
             "/admin/quick-replies",
@@ -67,6 +80,10 @@ def run() -> None:
         )
         assert webhook_customer_start.status_code == 200
         assert webhook_customer_start.json().get("flow") == "start_prompt"
+        chats_after_start = client.get("/admin/chats", cookies=cookies)
+        assert chats_after_start.status_code == 200
+        assert "Если кнопка контакта не отображается" not in chats_after_start.text
+        assert start_template.split("\n")[0] in chats_after_start.text
 
         chat_id_skip = f"chat_{uuid4().hex[:8]}"
         webhook_customer_start_with_phone = client.post(

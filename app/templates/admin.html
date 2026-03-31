@@ -135,6 +135,22 @@
       padding: 6px 10px;
       cursor: pointer;
     }
+    .format-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 6px 0 6px;
+    }
+    .format-btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 6px 9px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #35425f;
+      cursor: pointer;
+    }
     code { background: #eef1f8; padding: 2px 6px; border-radius: 6px; }
   </style>
 </head>
@@ -165,9 +181,17 @@
           <textarea id="prestart_message" name="prestart_message" required>{{ template_prestart }}</textarea>
 
           <label for="start_message">Сообщение после Start (просим номер)</label>
+          <div class="format-row">
+            <button type="button" class="format-btn" data-format-target="start_message" data-format-kind="bold">Жирный</button>
+            <button type="button" class="format-btn" data-format-target="start_message" data-format-kind="link">Ссылка</button>
+          </div>
           <textarea id="start_message" name="start_message" required>{{ template_start }}</textarea>
 
           <label for="after_phone_message">Сообщение после подтверждения номера</label>
+          <div class="format-row">
+            <button type="button" class="format-btn" data-format-target="after_phone_message" data-format-kind="bold">Жирный</button>
+            <button type="button" class="format-btn" data-format-target="after_phone_message" data-format-kind="link">Ссылка</button>
+          </div>
           <textarea id="after_phone_message" name="after_phone_message" required>{{ template_after_phone }}</textarea>
 
           <label for="manager_account_id">ID чата менеджер-бот в Max</label>
@@ -264,5 +288,45 @@
       {% endif %}
     </section>
   </div>
+  <script>
+    (() => {
+      const buttons = Array.from(document.querySelectorAll("[data-format-target][data-format-kind]"));
+      if (!buttons.length) return;
+
+      const wrapSelection = (textarea, before, after) => {
+        const start = textarea.selectionStart ?? textarea.value.length;
+        const end = textarea.selectionEnd ?? textarea.value.length;
+        const selected = textarea.value.slice(start, end);
+        const insertText = `${before}${selected}${after}`;
+        textarea.setRangeText(insertText, start, end, "end");
+        textarea.focus();
+      };
+
+      buttons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const targetId = btn.getAttribute("data-format-target");
+          const kind = btn.getAttribute("data-format-kind");
+          if (!targetId || !kind) return;
+          const textarea = document.getElementById(targetId);
+          if (!(textarea instanceof HTMLTextAreaElement)) return;
+
+          if (kind === "bold") {
+            wrapSelection(textarea, "**", "**");
+            return;
+          }
+          if (kind === "link") {
+            const url = window.prompt("Введите URL", "https://");
+            if (!url) return;
+            const start = textarea.selectionStart ?? textarea.value.length;
+            const end = textarea.selectionEnd ?? textarea.value.length;
+            const selected = textarea.value.slice(start, end) || "текст ссылки";
+            const insertText = `[${selected}](${url.trim()})`;
+            textarea.setRangeText(insertText, start, end, "end");
+            textarea.focus();
+          }
+        });
+      });
+    })();
+  </script>
 </body>
 </html>

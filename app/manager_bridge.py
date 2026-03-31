@@ -1130,11 +1130,7 @@ async def _send_contact_request_prompt(
     user_id: str | None,
     text: str,
 ) -> dict:
-    full_text = (
-        f"{text}\n\n"
-        "Если кнопка контакта не отображается, отправьте номер вручную "
-        "сообщением: /contact +79990000000"
-    )
+    full_text = text
     attachments = [
         {
             "type": "inline_keyboard",
