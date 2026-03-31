@@ -806,7 +806,7 @@ async def _send_manager_payload_to_conversation(
         conversation_id=conversation.id,
         target_chat_id=customer_chat_id,
         target_user_id=customer_user_id,
-        text=f"Менеджер: {payload_text}",
+        text=payload_text,
         source="manager",
         link_mid=manager_event.link_mid,
     )
@@ -1529,7 +1529,7 @@ async def send_quick_reply_to_customer(
     command_text: str,
     customer_user_id: str | None = None,
     *,
-    sender_prefix: str | None = "Менеджер: ",
+    sender_prefix: str | None = None,
     source: str = "manager",
     image_caption: str = "Менеджер отправил изображение",
 ) -> bool:
