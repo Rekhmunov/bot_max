@@ -1708,6 +1708,14 @@ def get_delivery_metrics(db: Session) -> DeliveryStats:
     )
 
 
+def get_chat_metrics(db: Session) -> dict[str, int]:
+    return {
+        "new_count": db.query(ConversationMeta).filter(ConversationMeta.status == "new").count(),
+        "in_progress_count": db.query(ConversationMeta).filter(ConversationMeta.status == "in_progress").count(),
+        "done_count": db.query(ConversationMeta).filter(ConversationMeta.status == "done").count(),
+    }
+
+
 def get_conversation_meta(db: Session, conversation_id: int) -> ConversationMeta | None:
     return db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).first()
 
@@ -1786,6 +1794,7 @@ def mark_thread_unread(db: Session, conversation_id: int) -> bool:
     if meta.status == "new":
         return True
     meta.status = "new"
+    meta.is_new = True
     db.add(meta)
     db.commit()
     return True
@@ -1810,6 +1819,7 @@ def mark_thread_read(db: Session, conversation_id: int) -> None:
         return
     if meta.status != "read":
         meta.status = "read"
+        meta.is_new = False
         db.add(meta)
         db.commit()
 

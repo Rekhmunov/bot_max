@@ -214,6 +214,17 @@
     </section>
 
     <section class="card" style="margin-top:16px;">
+      <h2>Статистика доставки сообщений</h2>
+      <div class="hint">Успешная доставка: <b>{{ delivery_metrics.success_rate }}%</b></div>
+      <div class="hint">Попыток отправки: <b>{{ delivery_metrics.total_sent_attempts }}</b></div>
+      <div class="hint">Среднее число повторов: <b>{{ delivery_metrics.avg_retry_count }}</b></div>
+      <div class="hint">Неустранимых ошибок: <b>{{ delivery_metrics.permanent_failures }}</b></div>
+      <div class="hint">Активных чатов: <b>{{ chat_metrics.total_threads }}</b></div>
+      <div class="hint">Новых (непрочитанных) чатов: <b>{{ chat_metrics.unread_threads }}</b></div>
+      <div class="hint">Чатов с ошибками доставки: <b>{{ chat_metrics.error_threads }}</b></div>
+    </section>
+
+    <section class="card" style="margin-top:16px;">
       <h2>Список быстрых ответов</h2>
       {% if quick_replies %}
         <table>

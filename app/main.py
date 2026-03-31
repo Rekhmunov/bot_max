@@ -23,6 +23,7 @@ from app.manager_bridge import (
     create_chat_folder,
     delete_conversation,
     ensure_default_templates,
+    get_chat_metrics,
     get_delivery_metrics,
     get_template_text,
     list_active_quick_replies,
@@ -149,6 +150,8 @@ def admin_page(
 ) -> HTMLResponse:
     bot_settings = get_or_create_settings(db)
     replies = db.query(QuickReply).order_by(QuickReply.command.asc()).all()
+    chat_metrics = get_chat_metrics(db)
+    delivery_metrics = get_delivery_metrics(db)
     return templates.TemplateResponse(
         request,
         "admin.html",
@@ -161,6 +164,8 @@ def admin_page(
             "quick_replies": replies,
             "webhook_path": webhook_path,
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+            "chat_metrics": chat_metrics,
+            "delivery_metrics": delivery_metrics,
             "message": None,
             "error": None,
         },
@@ -191,6 +196,8 @@ def update_settings(
     db.commit()
 
     replies = db.query(QuickReply).order_by(QuickReply.command.asc()).all()
+    chat_metrics = get_chat_metrics(db)
+    delivery_metrics = get_delivery_metrics(db)
     return templates.TemplateResponse(
         request,
         "admin.html",
@@ -203,6 +210,8 @@ def update_settings(
             "quick_replies": replies,
             "webhook_path": webhook_path,
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+            "chat_metrics": chat_metrics,
+            "delivery_metrics": delivery_metrics,
             "message": "Настройки сохранены",
             "error": None,
         },
@@ -230,6 +239,8 @@ async def create_quick_reply(
     if db.query(QuickReply).filter(QuickReply.command == normalized).first():
         bot_settings = get_or_create_settings(db)
         replies = db.query(QuickReply).order_by(QuickReply.command.asc()).all()
+        chat_metrics = get_chat_metrics(db)
+        delivery_metrics = get_delivery_metrics(db)
         return templates.TemplateResponse(
             request,
             "admin.html",
@@ -242,6 +253,8 @@ async def create_quick_reply(
                 "quick_replies": replies,
                 "webhook_path": webhook_path,
                 "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+                "chat_metrics": chat_metrics,
+                "delivery_metrics": delivery_metrics,
                 "message": None,
                 "error": f"Команда /{normalized} уже существует",
             },
@@ -271,6 +284,8 @@ async def create_quick_reply(
 
     bot_settings = get_or_create_settings(db)
     replies = db.query(QuickReply).order_by(QuickReply.command.asc()).all()
+    chat_metrics = get_chat_metrics(db)
+    delivery_metrics = get_delivery_metrics(db)
     return templates.TemplateResponse(
         request,
         "admin.html",
@@ -283,6 +298,8 @@ async def create_quick_reply(
             "quick_replies": replies,
             "webhook_path": webhook_path,
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+            "chat_metrics": chat_metrics,
+            "delivery_metrics": delivery_metrics,
             "message": f"Быстрый ответ /{normalized} добавлен",
             "error": None,
         },
@@ -394,7 +411,7 @@ async def admin_chats_page(
             "quick_replies": list_active_quick_replies(db),
             "removed": request.query_params.get("removed"),
             "mobile_chat_view": mobile_chat_view,
-            "delivery_metrics": get_delivery_metrics(db),
+            "chat_metrics": get_chat_metrics(db),
             "admin_quick_options": [
                 {"command": item.command, "title": item.title}
                 for item in list_active_quick_replies(db)

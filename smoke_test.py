@@ -384,7 +384,12 @@ def run() -> None:
 
         metrics_page = client.get("/admin/chats", cookies=cookies)
         assert metrics_page.status_code == 200
-        assert "Success rate" in metrics_page.text
+        assert "Success rate" not in metrics_page.text
+
+        admin_settings_page = client.get("/admin", cookies=cookies)
+        assert admin_settings_page.status_code == 200
+        assert "Статистика доставки сообщений" in admin_settings_page.text
+        assert "Успешная доставка" in admin_settings_page.text
 
         delete_user = client.post(
             f"/admin/chats/{conversation_id}/delete-user",

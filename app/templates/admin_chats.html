@@ -30,7 +30,7 @@
     }
     .app {
       display: grid;
-      grid-template-columns: 360px 1fr;
+      grid-template-columns: 460px 1fr;
       height: 100vh;
     }
     .chat-list {
@@ -50,8 +50,8 @@
     .list-title-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
-      gap: 10px;
+      justify-content: flex-start;
+      gap: 8px;
     }
     .list-title {
       margin: 0;
@@ -62,6 +62,13 @@
       display: flex;
       gap: 8px;
       align-items: center;
+      margin-top: auto;
+      padding: 10px 8px 10px;
+      border-top: 1px solid var(--line);
+      background: #fff;
+      position: sticky;
+      bottom: 0;
+      z-index: 2;
     }
     .top-link {
       text-decoration: none;
@@ -104,26 +111,19 @@
       padding: 0 14px;
       cursor: pointer;
     }
-    .metrics {
-      padding: 8px 14px;
-      border-bottom: 1px solid var(--line);
-      color: var(--muted);
-      font-size: 12px;
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
+    .metrics { display: none; }
     .threads {
       overflow: auto;
       padding: 8px;
       display: grid;
       gap: 6px;
       align-content: start;
+      min-width: 0;
     }
     .chat-list-body {
       min-height: 0;
       display: grid;
-      grid-template-columns: 92px 1fr;
+      grid-template-columns: 132px minmax(0, 1fr);
       overflow: hidden;
     }
     .folder-rail {
@@ -149,12 +149,13 @@
       border-radius: 10px;
       background: #fff;
       padding: 8px 6px;
-      text-align: center;
+      text-align: left;
       font-size: 12px;
       font-weight: 700;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      line-height: 1.25;
     }
     .folder-rail-item:hover {
       border-color: var(--line);
@@ -241,6 +242,10 @@
       border-color: #cfe0ff;
       background: #f2f7ff;
     }
+    .thread.unread {
+      border-color: #d4e5ff;
+      background: #f4f9ff;
+    }
     .thread-head {
       display: flex;
       align-items: center;
@@ -263,6 +268,13 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+    }
+    .thread-folder-row {
+      min-height: 16px;
+      margin-bottom: 4px;
+    }
+    .thread.unread .thread-name {
+      color: #185fdb;
     }
     .thread-preview {
       font-size: 14px;
@@ -327,6 +339,7 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      padding-right: 130px;
     }
     .danger-btn {
       border: 0;
@@ -518,7 +531,7 @@
     }
     .folder-chip {
       display: inline-block;
-      margin-left: 6px;
+      margin-left: 0;
       padding: 2px 8px;
       border-radius: 999px;
       font-size: 11px;
@@ -734,6 +747,12 @@
       cursor: pointer;
     }
 
+    .folder-main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: 1fr auto;
+      overflow: hidden;
+    }
     .mobile-only { display: none; }
     .desktop-only { display: inline-flex; }
 
@@ -750,6 +769,12 @@
       .chat-screen.hidden-mobile {
         display: none;
       }
+      .list-head {
+        padding-bottom: 8px;
+      }
+      .list-title-row {
+        justify-content: space-between;
+      }
       .chat-list-body {
         grid-template-columns: 1fr;
       }
@@ -758,6 +783,9 @@
       }
       .mobile-folder-bar {
         display: flex;
+      }
+      .top-actions {
+        display: none;
       }
       .chat-screen {
         border-right: 0;
@@ -783,25 +811,12 @@
       <div class="list-head">
         <div class="list-title-row">
           <h1 class="list-title">Чаты</h1>
-          <div class="top-actions">
-            <a class="top-link" href="/admin">Настройки</a>
-            <form method="post" action="/admin/logout">
-              <button class="top-btn" type="submit">Выйти</button>
-            </form>
-          </div>
         </div>
         <form class="search-form" method="get" action="/admin/chats">
           <input name="q" value="{{ query }}" placeholder="Поиск по имени, телефону, T-номеру..." />
           <button type="submit">Найти</button>
         </form>
       </div>
-      <div class="metrics">
-          <span>Success rate: {{ delivery_metrics.success_rate }}%</span>
-          <span>Attempts: {{ delivery_metrics.total_sent_attempts }}</span>
-          <span>Avg retry: {{ delivery_metrics.avg_retry_count }}</span>
-          <span>Permanent fail: {{ delivery_metrics.permanent_failures }}</span>
-      </div>
-
       <div class="mobile-folder-bar">
         <div class="mobile-folder-scroll">
           <a class="mobile-folder-item {% if folder_filter is none %}active{% endif %}" href="/admin/chats?q={{ query }}">Все</a>
@@ -835,28 +850,34 @@
             {% endfor %}
           </div>
           <button type="button" class="folder-rail-add" data-open-folder-create aria-label="Создать папку">+</button>
+          <div class="top-actions">
+            <a class="top-link" href="/admin">Настройки</a>
+            <form method="post" action="/admin/logout">
+              <button class="top-btn" type="submit">Выйти</button>
+            </form>
+          </div>
         </nav>
 
         <div class="threads">
           {% if threads %}
             {% for thread in threads %}
               <a
-                class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %}"
+                class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %} {% if thread.is_unread %}unread{% endif %}"
                 href="/admin/chats?conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat"
                 data-thread-id="{{ thread.conversation_id }}"
                 data-thread-unread="{{ '1' if thread.is_unread else '0' }}"
               >
                 <div class="thread-head">
-                  <div class="thread-name">
-                    {% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}
-                    {% if thread.folder_name %}
-                      <span class="folder-chip">{{ thread.folder_name }}</span>
-                    {% endif %}
-                  </div>
+                  <div class="thread-name">{% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}</div>
                   {% if thread.has_delivery_errors %}
                     <span class="dot-error" title="Есть ошибки доставки"></span>
                   {% elif thread.is_new %}
                     <span class="dot-new" title="Новый чат"></span>
+                  {% endif %}
+                </div>
+                <div class="thread-folder-row">
+                  {% if thread.folder_name %}
+                    <span class="folder-chip">{{ thread.folder_name }}</span>
                   {% endif %}
                 </div>
                 <div class="thread-meta">chat: {{ thread.chat_id }} | статус: {{ thread.status }}</div>
@@ -885,7 +906,7 @@
               chat_id: {{ active_thread.chat_id }} | phone_verified: {{ "да" if active_thread.phone_verified else "нет" }}
             </div>
           </div>
-          <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/delete-user">
+          <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/delete-user" style="justify-self:end;">
             <button type="submit" class="danger-btn">Удалить пользователя</button>
           </form>
         </div>

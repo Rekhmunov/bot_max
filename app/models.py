@@ -122,6 +122,7 @@ class ConversationMeta(Base):
     ticket_no: Mapped[int] = mapped_column(Integer, unique=True, index=True)
     status: Mapped[str] = mapped_column(String(50), default="new")
     manager_owner_id: Mapped[str] = mapped_column(String(255), default="", index=True)
+    is_unread: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     phone_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     start_prompt_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     phone_number: Mapped[str | None] = mapped_column(String(64), nullable=True)

@@ -65,6 +65,10 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE conversation_meta ADD COLUMN manager_owner_id VARCHAR(255) DEFAULT ''")
                 )
+            if "is_unread" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN is_unread INTEGER DEFAULT 1")
+                )
             if "assigned_manager_id" not in meta_columns:
                 conn.execute(
                     text("ALTER TABLE conversation_meta ADD COLUMN assigned_manager_id VARCHAR(255)")
