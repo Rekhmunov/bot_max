@@ -1,7 +1,9 @@
+from urllib.parse import quote_plus
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from app.auth import create_manager_mini_token
 from app.database import SessionLocal, init_db
 from app.main import app
 from app.manager_bridge import DEFAULT_TEMPLATES
@@ -174,6 +176,20 @@ def run() -> None:
         assert webhook_manager_panel.status_code == 200
         assert webhook_manager_panel.json().get("panel_sent") is True
 
+        webhook_manager_mini = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_created",
+                "message": {
+                    "sender": {"user_id": "90000"},
+                    "recipient": {"chat_id": "mgr-chat-1", "chat_type": "dialog"},
+                    "body": {"text": "/mini"},
+                },
+            },
+        )
+        assert webhook_manager_mini.status_code == 200
+        assert webhook_manager_mini.json().get("mini_sent") is True
+
         webhook_manager_new = client.post(
             "/webhook/max",
             json={
@@ -305,6 +321,30 @@ def run() -> None:
             conversation = db.query(Conversation).filter(Conversation.chat_id == chat_id).first()
             assert conversation is not None
             conversation_id = conversation.id
+
+        manager_mini_token = create_manager_mini_token("90000")
+        manager_mini_page = client.get(f"/mini/manager?token={quote_plus(manager_mini_token)}")
+        assert manager_mini_page.status_code == 200
+        assert "Max Manager Mini App" in manager_mini_page.text
+        assert "mobile-folder-bar" in manager_mini_page.text
+
+        manager_mini_page_bad_token = client.get("/mini/manager?token=broken")
+        assert manager_mini_page_bad_token.status_code == 403
+
+        manager_mini_chat_page = client.get(
+            f"/mini/manager?token={quote_plus(manager_mini_token)}&conversation_id={conversation_id}&view=chat",
+        )
+        assert manager_mini_chat_page.status_code == 200
+        assert "back-btn mobile-only" in manager_mini_chat_page.text
+        assert 'id="chat-screen"' in manager_mini_chat_page.text
+
+        manager_mini_send = client.post(
+            f"/mini/manager/chats/{conversation_id}/send?token={quote_plus(manager_mini_token)}",
+            data={"text": "mini_app_message", "view": "chat"},
+            follow_redirects=False,
+        )
+        assert manager_mini_send.status_code in (302, 303)
+        assert "sent=1" in manager_mini_send.headers.get("location", "")
 
         admin_chats_page = client.get(
             f"/admin/chats?conversation_id={conversation_id}",

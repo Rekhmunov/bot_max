@@ -11,7 +11,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.auth import create_manager_mini_token
-from app.config import settings
+from app.config import settings as app_settings
 from app.max_client import MaxClient
 from app.models import (
     BotSettings,
@@ -1445,7 +1445,9 @@ async def handle_manager_message(
 
     if text_value.lower() in {"/mini", "/app", "/miniapp"}:
         mini_token = create_manager_mini_token(manager_user_id)
-        mini_url = f"{settings.public_base_url.rstrip('/')}/mini/manager?token={quote_plus(mini_token)}"
+        mini_url = (
+            f"{app_settings.public_base_url.rstrip('/')}/mini/manager?token={quote_plus(mini_token)}"
+        )
         await client.send_text_to_user(
             user_id=manager_user_id,
             text=(
@@ -1572,7 +1574,7 @@ async def send_quick_reply_to_customer(
             return False
 
     if quick_reply.image_path:
-        image_url = f"{settings.public_base_url.rstrip('/')}{quick_reply.image_path}"
+        image_url = f"{app_settings.public_base_url.rstrip('/')}{quick_reply.image_path}"
         ok = await enqueue_and_process_send_photo(
             db,
             conversation_id=conversation_id,
@@ -1872,7 +1874,7 @@ async def send_admin_chat_message(
             sent_any = True
 
     if image_path:
-        image_url = f"{settings.public_base_url.rstrip('/')}{image_path}"
+        image_url = f"{app_settings.public_base_url.rstrip('/')}{image_path}"
         ok = await enqueue_and_process_send_photo(
             db,
             conversation_id=conversation_id,
