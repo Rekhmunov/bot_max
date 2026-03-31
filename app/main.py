@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from pathlib import Path
 from uuid import uuid4
 
@@ -48,15 +49,43 @@ webhook_path = settings.webhook_path if settings.webhook_path.startswith("/") el
 
 Path("app/static/uploads").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
+_outbox_worker_task: asyncio.Task | None = None
+
+
+async def _outbox_worker_loop() -> None:
+    from app.database import SessionLocal
+
+    while True:
+        try:
+            with SessionLocal() as db:
+                await process_outbox_queue(db, limit=settings.outbox_worker_batch_size)
+        except Exception:
+            # Keep worker alive even if one cycle fails.
+            pass
+        await asyncio.sleep(max(settings.outbox_poll_interval_seconds, 1))
 
 
 @app.on_event("startup")
-def startup() -> None:
+async def startup() -> None:
+    global _outbox_worker_task
     init_db()
     from app.database import SessionLocal
 
     with SessionLocal() as db:
         ensure_default_templates(db)
+    if settings.outbox_worker_enabled:
+        _outbox_worker_task = asyncio.create_task(_outbox_worker_loop())
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    global _outbox_worker_task
+    if _outbox_worker_task is None:
+        return
+    _outbox_worker_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await _outbox_worker_task
+    _outbox_worker_task = None
 
 
 @app.get("/", response_class=RedirectResponse)
@@ -528,7 +557,14 @@ async def max_webhook(
         db.add(WebhookEvent(event_uid=event_uid, update_type=event.update_type))
         db.commit()
 
-    if event.update_type and event.update_type not in {"message_created", "bot_started"}:
+    accepted_update_types = {
+        "message_created",
+        "message_callback",
+        "new_message",
+        "bot_started",
+        "bot_start",
+    }
+    if event.update_type and event.update_type not in accepted_update_types:
         return {"ok": True, "ignored": event.update_type}
 
     settings_db = get_or_create_settings(db)

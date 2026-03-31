@@ -26,6 +26,9 @@ class AppSettings(BaseSettings):
     # Deployment options (for production server, e.g. REG.RU)
     host: str = "0.0.0.0"
     port: int = 8000
+    outbox_worker_enabled: bool = True
+    outbox_poll_interval_seconds: int = 5
+    outbox_worker_batch_size: int = 30
 
 
 settings = AppSettings()

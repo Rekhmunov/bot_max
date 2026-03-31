@@ -110,6 +110,24 @@ def run() -> None:
         assert webhook_customer_text.status_code == 200
         assert webhook_customer_text.json().get("flow") == "forwarded_to_manager"
 
+        webhook_customer_callback_style = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_callback",
+                "message": {
+                    "sender": {"user_id": "buyer_1", "first_name": "Иван"},
+                    "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                    "body": {"text": "callback flow text"},
+                },
+            },
+        )
+        assert webhook_customer_callback_style.status_code == 200
+        callback_payload = webhook_customer_callback_style.json()
+        assert (
+            callback_payload.get("flow") in {"forwarded_to_manager", "prestart"}
+            or callback_payload.get("ignored") == "duplicate_event"
+        ), callback_payload
+
         webhook_manager_without_reply = client.post(
             "/webhook/max",
             json={
