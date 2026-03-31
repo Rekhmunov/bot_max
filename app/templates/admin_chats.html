@@ -412,6 +412,132 @@
       background: #f2f6ff;
       color: #1a4fb3;
     }
+    .folders-toolbar {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+    .folder-create-inline {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+    }
+    .folder-create-inline input {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+    .folder-create-inline button {
+      border: 0;
+      border-radius: 10px;
+      background: #edf4ff;
+      color: #1a4fb3;
+      font-weight: 700;
+      padding: 8px 10px;
+      cursor: pointer;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .folder-chip {
+      display: inline-block;
+      margin-left: 6px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #1a4fb3;
+      background: #edf4ff;
+      border: 1px solid #d7e6ff;
+    }
+    .context-menu {
+      position: fixed;
+      z-index: 1000;
+      min-width: 220px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      display: none;
+      padding: 6px;
+    }
+    .context-menu button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      padding: 9px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      color: #1f2a45;
+    }
+    .context-menu button:hover {
+      background: #f2f6ff;
+    }
+    .folder-pop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 24, 44, 0.35);
+      display: none;
+      z-index: 1001;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .folder-pop-card {
+      width: min(480px, 100%);
+      background: #fff;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+    .folder-pop-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .folder-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .folder-btn {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      padding: 8px 10px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .folder-btn:hover {
+      background: #f6f9ff;
+      border-color: #d7e6ff;
+    }
+    .folder-create {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+    }
+    .folder-create input {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 14px;
+    }
+    .folder-create button,
+    .folder-close {
+      border: 0;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      padding: 9px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
 
     .mobile-only { display: none; }
     .desktop-only { display: inline-flex; }
@@ -472,13 +598,29 @@
           <span>Permanent fail: {{ delivery_metrics.permanent_failures }}</span>
       </div>
 
+      <div class="folders-toolbar">
+        <form class="folder-create-inline" method="post" action="/admin/chats/folders">
+          <input type="hidden" name="q" value="{{ query }}" />
+          <input type="text" name="name" placeholder="Новая папка" />
+          <button type="submit">Создать папку</button>
+        </form>
+      </div>
+
       <div class="threads">
         {% if threads %}
           {% for thread in threads %}
-            <a class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %}" href="/admin/chats?conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat">
+            <a
+              class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %}"
+              href="/admin/chats?conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat"
+              data-thread-id="{{ thread.conversation_id }}"
+              data-thread-unread="{{ '1' if thread.is_unread else '0' }}"
+            >
               <div class="thread-head">
                 <div class="thread-name">
                   {% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}
+                  {% if thread.folder_name %}
+                    <span class="folder-chip">{{ thread.folder_name }}</span>
+                  {% endif %}
                 </div>
                 {% if thread.has_delivery_errors %}
                   <span class="dot-error" title="Есть ошибки доставки"></span>
@@ -662,6 +804,154 @@
 
       input.addEventListener("blur", () => {
         setTimeout(hideMenu, 120);
+      });
+    })();
+
+    (() => {
+      const threads = Array.from(document.querySelectorAll(".thread[data-thread-id]"));
+      if (!threads.length) return;
+
+      const folders = {{ chat_folders | tojson }};
+      let selectedThreadId = null;
+      let longPressTimer = null;
+
+      const ctx = document.createElement("div");
+      ctx.className = "context-menu";
+      document.body.appendChild(ctx);
+
+      const pop = document.createElement("div");
+      pop.className = "folder-pop";
+      pop.innerHTML = `
+        <div class="folder-pop-card">
+          <h3 class="folder-pop-title">Поместить в папку</h3>
+          <div class="folder-actions" id="folder-actions"></div>
+          <form class="folder-create" id="folder-create-form">
+            <input id="new-folder-name" name="name" placeholder="Новая папка" />
+            <button type="submit">Создать</button>
+          </form>
+          <button class="folder-close" type="button" id="folder-close-btn">Закрыть</button>
+        </div>
+      `;
+      document.body.appendChild(pop);
+
+      const hideCtx = () => {
+        ctx.style.display = "none";
+        ctx.innerHTML = "";
+      };
+      const hidePop = () => {
+        pop.style.display = "none";
+      };
+      const openCtx = (x, y, threadId, unread) => {
+        selectedThreadId = threadId;
+        ctx.innerHTML = "";
+
+        if (!unread) {
+          const unreadBtn = document.createElement("button");
+          unreadBtn.type = "button";
+          unreadBtn.textContent = "Отметить непрочитанным";
+          unreadBtn.addEventListener("click", async () => {
+            hideCtx();
+            await fetch(`/admin/chats/${threadId}/mark-unread`, { method: "POST" });
+            window.location.reload();
+          });
+          ctx.appendChild(unreadBtn);
+        }
+
+        const folderBtn = document.createElement("button");
+        folderBtn.type = "button";
+        folderBtn.textContent = "Поместить в папку";
+        folderBtn.addEventListener("click", () => {
+          hideCtx();
+          renderFolderButtons();
+          pop.style.display = "flex";
+        });
+        ctx.appendChild(folderBtn);
+
+        ctx.style.left = `${Math.max(8, x)}px`;
+        ctx.style.top = `${Math.max(8, y)}px`;
+        ctx.style.display = "block";
+      };
+
+      const renderFolderButtons = () => {
+        const actions = pop.querySelector("#folder-actions");
+        actions.innerHTML = "";
+        const noFolder = document.createElement("button");
+        noFolder.type = "button";
+        noFolder.className = "folder-btn";
+        noFolder.textContent = "Без папки";
+        noFolder.addEventListener("click", async () => {
+          if (!selectedThreadId) return;
+          await fetch(`/admin/chats/${selectedThreadId}/set-folder`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: "folder_id=",
+          });
+          window.location.reload();
+        });
+        actions.appendChild(noFolder);
+
+        folders.forEach((folder) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "folder-btn";
+          btn.textContent = folder.name;
+          btn.addEventListener("click", async () => {
+            if (!selectedThreadId) return;
+            await fetch(`/admin/chats/${selectedThreadId}/set-folder`, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: `folder_id=${encodeURIComponent(String(folder.id))}`,
+            });
+            window.location.reload();
+          });
+          actions.appendChild(btn);
+        });
+      };
+
+      document.addEventListener("click", (e) => {
+        if (!ctx.contains(e.target)) hideCtx();
+      });
+      window.addEventListener("resize", hideCtx);
+      pop.querySelector("#folder-close-btn").addEventListener("click", hidePop);
+      pop.addEventListener("click", (e) => {
+        if (e.target === pop) hidePop();
+      });
+
+      pop.querySelector("#folder-create-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (!selectedThreadId) return;
+        const input = pop.querySelector("#new-folder-name");
+        const name = (input.value || "").trim();
+        if (!name) return;
+        await fetch(`/admin/chat-folders/create`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `name=${encodeURIComponent(name)}&conversation_id=${encodeURIComponent(String(selectedThreadId))}`,
+        });
+        window.location.reload();
+      });
+
+      threads.forEach((threadEl) => {
+        const threadId = threadEl.dataset.threadId;
+        const unread = threadEl.dataset.threadUnread === "1";
+
+        threadEl.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          openCtx(e.clientX, e.clientY, threadId, unread);
+        });
+
+        threadEl.addEventListener("touchstart", (e) => {
+          const touch = e.touches[0];
+          longPressTimer = setTimeout(() => {
+            openCtx(touch.clientX, touch.clientY, threadId, unread);
+          }, 550);
+        }, { passive: true });
+        threadEl.addEventListener("touchend", () => {
+          if (longPressTimer) clearTimeout(longPressTimer);
+        });
+        threadEl.addEventListener("touchmove", () => {
+          if (longPressTimer) clearTimeout(longPressTimer);
+        });
       });
     })();
   </script>

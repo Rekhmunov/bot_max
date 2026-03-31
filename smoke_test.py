@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from app.database import SessionLocal, init_db
 from app.main import app
 from app.manager_bridge import DEFAULT_TEMPLATES
-from app.models import Conversation, WebhookEvent
+from app.models import ChatFolder, Conversation, WebhookEvent
 from uuid import uuid4
 
 
@@ -251,6 +251,42 @@ def run() -> None:
         assert "position: sticky" in mobile_chat_page.text
         assert 'id="chat-screen"' in mobile_chat_page.text
         assert "chat-screen hidden-mobile" not in mobile_chat_page.text
+
+        create_folder = client.post(
+            "/admin/chats/folders",
+            data={"name": "В работе", "q": ""},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert create_folder.status_code in (302, 303)
+
+        with SessionLocal() as db:
+            folder = db.query(ChatFolder).filter(ChatFolder.name == "В работе").first()
+            assert folder is not None
+            folder_id = folder.id
+
+        mark_unread = client.post(
+            f"/admin/chats/{conversation_id}/mark-unread",
+            data={"q": "", "view": "chat"},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert mark_unread.status_code in (302, 303)
+        assert "unread=1" in mark_unread.headers.get("location", "")
+
+        move_to_folder = client.post(
+            f"/admin/chats/{conversation_id}/move-folder",
+            data={"folder_id": str(folder_id), "q": "", "view": "chat"},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert move_to_folder.status_code in (302, 303)
+        assert "foldered=1" in move_to_folder.headers.get("location", "")
+
+        folder_page = client.get("/admin/chats", cookies=cookies)
+        assert folder_page.status_code == 200
+        assert "В работе" in folder_page.text
+        assert "folder-chip" in folder_page.text
         assert f"/admin/chats/{conversation_id}/profile?from=chat&q=" in mobile_chat_page.text
 
         metrics_page = client.get("/admin/chats", cookies=cookies)

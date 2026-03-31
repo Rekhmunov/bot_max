@@ -18,13 +18,17 @@ from app.manager_bridge import (
     TEMPLATE_AFTER_PHONE,
     TEMPLATE_PRESTART,
     TEMPLATE_START,
+    assign_conversation_to_folder,
+    create_chat_folder,
     delete_conversation,
     ensure_default_templates,
     get_delivery_metrics,
     get_template_text,
     list_active_quick_replies,
+    list_chat_folders,
     load_chat_messages,
     load_chat_threads,
+    mark_thread_unread,
     mark_thread_read,
     handle_customer_event,
     handle_manager_message,
@@ -39,6 +43,7 @@ from app.manager_bridge import (
 from app.max_client import MaxClient
 from app.models import (
     ChatMessage,
+    ChatFolder,
     Conversation,
     ConversationMeta,
     CustomerProfile,
@@ -308,6 +313,7 @@ async def admin_chats_page(
     q: str = "",
     quick_query: str = "",
     view: str = "",
+    folder_id: int | None = None,
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -341,8 +347,21 @@ async def admin_chats_page(
         op_message = "Повторная отправка выполнена"
     if retried_flag == "0":
         op_error = "Повторная отправка не удалась"
+    if request.query_params.get("unread") == "1":
+        op_message = "Чат отмечен непрочитанным"
+    if request.query_params.get("unread") == "0":
+        op_error = "Не удалось отметить чат непрочитанным"
+    if request.query_params.get("foldered") == "1":
+        op_message = "Чат перемещен в папку"
+    if request.query_params.get("foldered") == "0":
+        op_error = "Не удалось переместить чат в папку"
 
     threads = load_chat_threads(db, query=q)
+    if folder_id is not None:
+        if folder_id > 0:
+            threads = [item for item in threads if item.folder_id == folder_id]
+        else:
+            threads = [item for item in threads if item.folder_id is None]
     has_explicit_conversation = conversation_id is not None
     active_thread = None
     if conversation_id is not None:
@@ -367,6 +386,7 @@ async def admin_chats_page(
             "active_thread": active_thread,
             "messages": messages,
             "query": q,
+            "folder_filter": folder_id,
             "quick_query": quick_query.strip(),
             "message": op_message,
             "error": op_error,
@@ -378,11 +398,84 @@ async def admin_chats_page(
                 {"command": item.command, "title": item.title}
                 for item in list_active_quick_replies(db)
             ],
+            "chat_folders": [
+                {"id": folder.id, "name": folder.name}
+                for folder in list_chat_folders(db)
+            ],
             "removed_message": (
                 "Пользователь и чат удалены" if request.query_params.get("removed") == "1"
                 else ("Не удалось удалить пользователя" if request.query_params.get("removed") == "0" else None)
             ),
         },
+    )
+
+
+@app.post("/admin/chats/folders", response_class=RedirectResponse)
+def admin_chat_create_folder(
+    name: str = Form(""),
+    conversation_id: int | None = Form(default=None),
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    folder_name = name.strip()
+    if folder_name:
+        created = create_chat_folder(db, folder_name=folder_name)
+        if conversation_id is not None:
+            assign_conversation_to_folder(
+                db,
+                conversation_id=conversation_id,
+                folder_id=created.id,
+            )
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    conv_qs = f"&conversation_id={conversation_id}" if conversation_id is not None else ""
+    view_qs = f"&view={view}" if view else ""
+    return RedirectResponse(
+        url=f"/admin/chats?q={q}{folder_qs}{conv_qs}{view_qs}",
+        status_code=302,
+    )
+
+
+@app.post("/admin/chats/{conversation_id}/mark-unread", response_class=RedirectResponse)
+def admin_chat_mark_unread(
+    conversation_id: int,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    ok = mark_thread_unread(db, conversation_id=conversation_id)
+    suffix = "1" if ok else "0"
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    return RedirectResponse(
+        url=f"/admin/chats?conversation_id={conversation_id}&q={q}&view={view}&unread={suffix}{folder_qs}",
+        status_code=302,
+    )
+
+
+@app.post("/admin/chats/{conversation_id}/move-folder", response_class=RedirectResponse)
+def admin_chat_move_folder(
+    conversation_id: int,
+    folder_id: int = Form(0),
+    q: str = Form(""),
+    view: str = Form(""),
+    current_folder_id: int | None = Form(default=None),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    ok = assign_conversation_to_folder(
+        db,
+        conversation_id=conversation_id,
+        folder_id=(folder_id if folder_id > 0 else None),
+    )
+    suffix = "1" if ok else "0"
+    folder_qs = f"&folder_id={current_folder_id}" if current_folder_id is not None else ""
+    return RedirectResponse(
+        url=f"/admin/chats?conversation_id={conversation_id}&q={q}&view={view}&foldered={suffix}{folder_qs}",
+        status_code=302,
     )
 
 

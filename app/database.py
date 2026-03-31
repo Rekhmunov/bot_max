@@ -62,6 +62,11 @@ def _ensure_lightweight_migrations() -> None:
                     text("ALTER TABLE conversation_meta ADD COLUMN unread_errors_count INTEGER DEFAULT 0")
                 )
 
+        if "conversations" in table_names:
+            conversation_columns = {col["name"] for col in inspector.get_columns("conversations")}
+            if "folder_id" not in conversation_columns:
+                conn.execute(text("ALTER TABLE conversations ADD COLUMN folder_id INTEGER"))
+
         if "outbox_messages" in table_names:
             outbox_columns = {col["name"] for col in inspector.get_columns("outbox_messages")}
             if "is_permanent_failure" not in outbox_columns:
@@ -72,6 +77,11 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE outbox_messages ADD COLUMN target_user_id VARCHAR(255) DEFAULT ''")
                 )
+
+        if "chat_folders" in table_names:
+            folder_columns = {col["name"] for col in inspector.get_columns("chat_folders")}
+            if "sort_order" not in folder_columns:
+                conn.execute(text("ALTER TABLE chat_folders ADD COLUMN sort_order INTEGER DEFAULT 0"))
 
         if "webhook_events" in table_names:
             webhook_columns = {col["name"] for col in inspector.get_columns("webhook_events")}

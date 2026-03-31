@@ -41,6 +41,7 @@ class Conversation(Base):
     customer_account_id: Mapped[str] = mapped_column(String(255))
     manager_added: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    folder_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
 
     messages: Mapped[list["MessageLog"]] = relationship(
         back_populates="conversation",
@@ -135,6 +136,14 @@ class CustomerProfile(Base):
     username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     phone_number: Mapped[str] = mapped_column(String(64), default="")
     source_chat_id: Mapped[str] = mapped_column(String(255), default="")
+
+
+class ChatFolder(Base):
+    __tablename__ = "chat_folders"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
 
 
 class ManagerDispatch(Base):

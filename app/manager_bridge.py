@@ -13,6 +13,7 @@ from app.max_client import MaxClient
 from app.models import (
     BotSettings,
     ChatMessage,
+    ChatFolder,
     Conversation,
     ConversationMeta,
     CustomerProfile,
@@ -76,6 +77,8 @@ class ChatThreadItem:
     has_delivery_errors: bool
     is_unread: bool
     last_activity_id: int
+    folder_id: int | None
+    folder_name: str
 
 
 @dataclass
@@ -1307,6 +1310,10 @@ def load_chat_threads(db: Session, query: str = "") -> list[ChatThreadItem]:
                 has_delivery_errors=has_delivery_errors,
                 is_unread=is_unread,
                 last_activity_id=last_activity_id,
+                folder_id=conv.folder_id,
+                folder_name=(db.query(ChatFolder.name).filter(ChatFolder.id == conv.folder_id).scalar() or "")
+                if conv.folder_id
+                else "",
             )
         )
     # New/unread chats first, then by latest activity.
@@ -1381,6 +1388,56 @@ def list_conversation_quick_commands(db: Session, conversation_id: int, limit: i
     if seen:
         return seen
     return [f"/{item.command}" for item in list_active_quick_replies(db)[:limit]]
+
+
+def list_chat_folders(db: Session) -> list[ChatFolder]:
+    return db.query(ChatFolder).order_by(ChatFolder.sort_order.asc(), ChatFolder.name.asc()).all()
+
+
+def create_chat_folder(db: Session, folder_name: str) -> ChatFolder:
+    normalized = folder_name.strip()
+    if not normalized:
+        raise ValueError("folder_name is empty")
+    exists = db.query(ChatFolder).filter(func.lower(ChatFolder.name) == normalized.lower()).first()
+    if exists:
+        return exists
+    max_sort = db.query(func.max(ChatFolder.sort_order)).scalar()
+    folder = ChatFolder(name=normalized, sort_order=(int(max_sort or 0) + 1))
+    db.add(folder)
+    db.commit()
+    db.refresh(folder)
+    return folder
+
+
+def assign_conversation_to_folder(
+    db: Session,
+    *,
+    conversation_id: int,
+    folder_id: int | None,
+) -> bool:
+    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if conversation is None:
+        return False
+    if folder_id is not None:
+        folder = db.query(ChatFolder).filter(ChatFolder.id == folder_id).first()
+        if folder is None:
+            return False
+    conversation.folder_id = folder_id
+    db.add(conversation)
+    db.commit()
+    return True
+
+
+def mark_thread_unread(db: Session, conversation_id: int) -> bool:
+    meta = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).first()
+    if meta is None:
+        return False
+    if meta.status == "new":
+        return True
+    meta.status = "new"
+    db.add(meta)
+    db.commit()
+    return True
 
 
 def load_chat_messages(db: Session, conversation_id: int) -> list[ChatMessage]:
