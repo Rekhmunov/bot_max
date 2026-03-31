@@ -7,6 +7,7 @@ from app.auth import create_manager_mini_token
 from app.database import SessionLocal, init_db
 from app.main import app
 from app.manager_bridge import DEFAULT_TEMPLATES
+from app.services import get_or_create_settings
 from app.models import ChatFolder, Conversation, WebhookEvent
 
 
@@ -128,7 +129,7 @@ def run() -> None:
             json={"chat_id": chat_id, "sender_id": "buyer_1", "text": "Хочу купить iPhone"},
         )
         assert webhook_customer_text.status_code == 200
-        assert webhook_customer_text.json().get("flow") == "forwarded_to_manager"
+        assert webhook_customer_text.json().get("flow") == "queued_for_mini_app"
 
         webhook_customer_callback_style = client.post(
             "/webhook/max",
@@ -144,7 +145,7 @@ def run() -> None:
         assert webhook_customer_callback_style.status_code == 200
         callback_payload = webhook_customer_callback_style.json()
         assert (
-            callback_payload.get("flow") in {"forwarded_to_manager", "prestart"}
+            callback_payload.get("flow") in {"queued_for_mini_app", "prestart"}
             or callback_payload.get("ignored") == "duplicate_event"
         ), callback_payload
 
@@ -160,7 +161,7 @@ def run() -> None:
             },
         )
         assert webhook_manager_tickets.status_code == 200
-        assert webhook_manager_tickets.json().get("tickets_sent") is True
+        assert webhook_manager_tickets.json().get("ignored") == "manager_chat_disabled"
 
         webhook_manager_panel = client.post(
             "/webhook/max",
@@ -174,7 +175,7 @@ def run() -> None:
             },
         )
         assert webhook_manager_panel.status_code == 200
-        assert webhook_manager_panel.json().get("panel_sent") is True
+        assert webhook_manager_panel.json().get("ignored") == "manager_chat_disabled"
 
         webhook_manager_mini = client.post(
             "/webhook/max",
@@ -202,7 +203,7 @@ def run() -> None:
             },
         )
         assert webhook_manager_new.status_code == 200
-        assert webhook_manager_new.json().get("ok") is True
+        assert webhook_manager_new.json().get("ignored") == "manager_chat_disabled"
 
         webhook_manager_take = client.post(
             "/webhook/max",
@@ -216,7 +217,7 @@ def run() -> None:
             },
         )
         assert webhook_manager_take.status_code == 200
-        assert webhook_manager_take.json().get("action") == "take"
+        assert webhook_manager_take.json().get("ignored") == "manager_chat_disabled"
 
         webhook_manager_mine = client.post(
             "/webhook/max",
@@ -230,7 +231,7 @@ def run() -> None:
             },
         )
         assert webhook_manager_mine.status_code == 200
-        assert webhook_manager_mine.json().get("ok") is True
+        assert webhook_manager_mine.json().get("ignored") == "manager_chat_disabled"
 
         webhook_manager_done = client.post(
             "/webhook/max",
@@ -244,7 +245,7 @@ def run() -> None:
             },
         )
         assert webhook_manager_done.status_code == 200
-        assert webhook_manager_done.json().get("action") == "done"
+        assert webhook_manager_done.json().get("ignored") == "manager_chat_disabled"
 
         webhook_manager_callback = client.post(
             "/webhook/max",
@@ -256,7 +257,7 @@ def run() -> None:
             },
         )
         assert webhook_manager_callback.status_code == 200
-        assert webhook_manager_callback.json().get("ok") is True
+        assert webhook_manager_callback.json().get("ignored") == "manager_chat_disabled"
 
         webhook_manager_ticket_reply = client.post(
             "/webhook/max",
@@ -270,7 +271,7 @@ def run() -> None:
             },
         )
         assert webhook_manager_ticket_reply.status_code == 200
-        assert webhook_manager_ticket_reply.json().get("ticket_reply_sent") is True
+        assert webhook_manager_ticket_reply.json().get("ignored") == "manager_chat_disabled"
 
         webhook_manager_ticket_reply_with_mention = client.post(
             "/webhook/max",
@@ -284,7 +285,7 @@ def run() -> None:
             },
         )
         assert webhook_manager_ticket_reply_with_mention.status_code == 200
-        assert webhook_manager_ticket_reply_with_mention.json().get("ticket_reply_sent") is True
+        assert webhook_manager_ticket_reply_with_mention.json().get("ignored") == "manager_chat_disabled"
 
         webhook_manager = client.post(
             "/webhook/max",
@@ -299,7 +300,7 @@ def run() -> None:
             },
         )
         assert webhook_manager.status_code == 200
-        assert "ok" in webhook_manager.json()
+        assert webhook_manager.json().get("ignored") == "manager_chat_disabled"
 
         # Webhook dedup by update_id
         duplicate_payload = {
@@ -327,6 +328,7 @@ def run() -> None:
         assert manager_mini_page.status_code == 200
         assert "Max Manager Mini App" in manager_mini_page.text
         assert "mobile-folder-bar" in manager_mini_page.text
+        assert "/mini/manager/chats/" in manager_mini_page.text
 
         manager_mini_page_bad_token = client.get("/mini/manager?token=broken")
         assert manager_mini_page_bad_token.status_code == 403
@@ -337,6 +339,8 @@ def run() -> None:
         assert manager_mini_chat_page.status_code == 200
         assert "back-btn mobile-only" in manager_mini_chat_page.text
         assert 'id="chat-screen"' in manager_mini_chat_page.text
+        assert 'id="edit-message-id"' not in manager_mini_chat_page.text
+        assert "Режим редактирования сообщения" not in manager_mini_chat_page.text
 
         manager_mini_send = client.post(
             f"/mini/manager/chats/{conversation_id}/send?token={quote_plus(manager_mini_token)}",
@@ -345,6 +349,15 @@ def run() -> None:
         )
         assert manager_mini_send.status_code in (302, 303)
         assert "sent=1" in manager_mini_send.headers.get("location", "")
+
+        with SessionLocal() as db:
+            settings_row = get_or_create_settings(db)
+            manager_msgs = (
+                db.query(WebhookEvent)
+                .filter(WebhookEvent.update_type == "message_created")
+                .all()
+            )
+            assert settings_row.manager_account_id == "90000"
 
         admin_chats_page = client.get(
             f"/admin/chats?conversation_id={conversation_id}",

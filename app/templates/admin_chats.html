@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Max Admin Chats</title>
+  <title>{{ ui.page_title if ui is defined and ui.page_title else "Max Admin Chats" }}</title>
   <style>
     :root {
       --bg: #f6f8fc;
@@ -823,25 +823,50 @@
   </style>
 </head>
 <body>
+  {% set page_path = ui.page_path if ui is defined and ui.page_path else "/admin/chats" %}
+  {% set page_query_prefix = ui.page_query_prefix if ui is defined and ui.page_query_prefix else "/admin/chats?" %}
+  {% set access_token = ui.access_token if ui is defined and ui.access_token else "" %}
+  {% set create_folder_action = ui.create_folder_action if ui is defined and ui.create_folder_action else "/admin/chats/folders" %}
+  {% set show_admin_nav = ui.show_admin_nav if ui is defined and ui.show_admin_nav is not none else true %}
+  {% set settings_href = ui.settings_href if ui is defined and ui.settings_href else "/admin" %}
+  {% set logout_action = ui.logout_action if ui is defined and ui.logout_action else "/admin/logout" %}
+  {% set show_profile_links = ui.show_profile_links if ui is defined and ui.show_profile_links is not none else true %}
+  {% set show_delete_user = ui.show_delete_user if ui is defined and ui.show_delete_user is not none else true %}
+  {% set allow_message_edit_actions = ui.allow_message_edit_actions if ui is defined and ui.allow_message_edit_actions is not none else true %}
+  {% set send_action_prefix = ui.send_action_prefix if ui is defined and ui.send_action_prefix else "/admin/chats/" %}
+  {% set send_action_suffix = ui.send_action_suffix if ui is defined and ui.send_action_suffix else "" %}
+  {% set delete_user_action_prefix = ui.delete_user_action_prefix if ui is defined and ui.delete_user_action_prefix else "/admin/chats/" %}
+  {% set profile_href_prefix = ui.profile_href_prefix if ui is defined and ui.profile_href_prefix else "/admin/chats/" %}
+  {% set mark_unread_prefix = ui.mark_unread_prefix if ui is defined and ui.mark_unread_prefix else "/admin/chats/" %}
+  {% set move_folder_prefix = ui.move_folder_prefix if ui is defined and ui.move_folder_prefix else "/admin/chats/" %}
+  {% set create_folder_endpoint = ui.create_folder_endpoint if ui is defined and ui.create_folder_endpoint else "/admin/chats/folders" %}
+  {% set delete_message_prefix = ui.delete_message_prefix if ui is defined and ui.delete_message_prefix else "/admin/chats/" %}
+  {% set endpoint_query_suffix = ui.endpoint_query_suffix if ui is defined and ui.endpoint_query_suffix else "" %}
   <div class="app">
     <aside class="chat-list {% if active_thread and mobile_chat_view %}hidden-mobile{% endif %}" id="chat-list-screen">
       <div class="list-head">
         <div class="list-title-row">
           <h1 class="list-title">Чаты</h1>
         </div>
-        <form class="search-form" method="get" action="/admin/chats">
+        <form class="search-form" method="get" action="{{ page_path }}">
+          {% if access_token %}
+            <input type="hidden" name="token" value="{{ access_token }}" />
+          {% endif %}
+          {% if folder_filter is not none %}
+            <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
+          {% endif %}
           <input name="q" value="{{ query }}" placeholder="Поиск по имени, телефону, T-номеру..." />
           <button type="submit">Найти</button>
         </form>
       </div>
       <div class="mobile-folder-bar">
         <div class="mobile-folder-scroll">
-          <a class="mobile-folder-item {% if folder_filter is none %}active{% endif %}" href="/admin/chats?q={{ query }}">Все</a>
-          <a class="mobile-folder-item {% if folder_filter == 0 %}active{% endif %}" href="/admin/chats?q={{ query }}&folder_id=0">Без папки</a>
+          <a class="mobile-folder-item {% if folder_filter is none %}active{% endif %}" href="{{ page_query_prefix }}q={{ query }}">Все</a>
+          <a class="mobile-folder-item {% if folder_filter == 0 %}active{% endif %}" href="{{ page_query_prefix }}q={{ query }}&folder_id=0">Без папки</a>
           {% for folder in chat_folders %}
             <a
               class="mobile-folder-item {% if folder_filter == folder.id %}active{% endif %}"
-              href="/admin/chats?q={{ query }}&folder_id={{ folder.id }}"
+              href="{{ page_query_prefix }}q={{ query }}&folder_id={{ folder.id }}"
               title="{{ folder.name }}"
             >
               {{ folder.name }}
@@ -854,12 +879,12 @@
       <div class="chat-list-body">
         <nav class="folder-rail" aria-label="Папки">
           <div class="folder-rail-scroll">
-            <a class="folder-rail-item {% if folder_filter is none %}active{% endif %}" href="/admin/chats?q={{ query }}">Все</a>
-            <a class="folder-rail-item {% if folder_filter == 0 %}active{% endif %}" href="/admin/chats?q={{ query }}&folder_id=0">Без папки</a>
+            <a class="folder-rail-item {% if folder_filter is none %}active{% endif %}" href="{{ page_query_prefix }}q={{ query }}">Все</a>
+            <a class="folder-rail-item {% if folder_filter == 0 %}active{% endif %}" href="{{ page_query_prefix }}q={{ query }}&folder_id=0">Без папки</a>
             {% for folder in chat_folders %}
               <a
                 class="folder-rail-item {% if folder_filter == folder.id %}active{% endif %}"
-                href="/admin/chats?q={{ query }}&folder_id={{ folder.id }}"
+                href="{{ page_query_prefix }}q={{ query }}&folder_id={{ folder.id }}"
                 title="{{ folder.name }}"
               >
                 {{ folder.name }}
@@ -867,12 +892,14 @@
             {% endfor %}
           </div>
           <button type="button" class="folder-rail-add" data-open-folder-create aria-label="Создать папку">+</button>
-          <div class="top-actions">
-            <a class="top-link" href="/admin">Настройки</a>
-            <form method="post" action="/admin/logout">
-              <button class="top-btn" type="submit">Выйти</button>
-            </form>
-          </div>
+          {% if show_admin_nav %}
+            <div class="top-actions">
+              <a class="top-link" href="{{ settings_href }}">Настройки</a>
+              <form method="post" action="{{ logout_action }}">
+                <button class="top-btn" type="submit">Выйти</button>
+              </form>
+            </div>
+          {% endif %}
         </nav>
 
         <div class="threads">
@@ -880,7 +907,7 @@
             {% for thread in threads %}
               <a
                 class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %} {% if thread.is_unread %}unread{% endif %}"
-                href="/admin/chats?conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat"
+                href="{{ page_query_prefix }}conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}"
                 data-thread-id="{{ thread.conversation_id }}"
                 data-thread-unread="{{ '1' if thread.is_unread else '0' }}"
               >
@@ -911,21 +938,28 @@
     <main class="chat-screen {% if not active_thread or not mobile_chat_view %}hidden-mobile{% endif %}" id="chat-screen">
       {% if active_thread %}
         <div class="chat-header">
-          <a class="back-btn mobile-only" href="/admin/chats?q={{ query }}" aria-label="Назад к чатам">‹</a>
+          <a class="back-btn mobile-only" href="{{ page_query_prefix }}q={{ query }}{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}" aria-label="Назад к чатам">‹</a>
           <div class="chat-title-wrap">
             <h2 class="chat-title">
-              <a class="profile-link" href="/admin/chats/{{ active_thread.conversation_id }}/profile?from=chat&q={{ query }}">
+              {% if show_profile_links %}
+                <a class="profile-link" href="{{ profile_href_prefix }}{{ active_thread.conversation_id }}/profile?from=chat&q={{ query }}">
+                  {% if active_thread.ticket_no %}[T-{{ active_thread.ticket_no }}] {% endif %}
+                  {{ active_thread.customer_label }}
+                </a>
+              {% else %}
                 {% if active_thread.ticket_no %}[T-{{ active_thread.ticket_no }}] {% endif %}
                 {{ active_thread.customer_label }}
-              </a>
+              {% endif %}
             </h2>
             <div class="chat-sub">
               chat_id: {{ active_thread.chat_id }} | phone_verified: {{ "да" if active_thread.phone_verified else "нет" }}
             </div>
           </div>
-          <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/delete-user" style="justify-self:end;">
-            <button type="submit" class="danger-btn">Удалить пользователя</button>
-          </form>
+          {% if show_delete_user %}
+            <form method="post" action="{{ delete_user_action_prefix }}{{ active_thread.conversation_id }}/delete-user" style="justify-self:end;">
+              <button type="submit" class="danger-btn">Удалить пользователя</button>
+            </form>
+          {% endif %}
         </div>
 
         <div class="messages-wrap">
@@ -981,10 +1015,15 @@
         </div>
 
         <section class="compose">
-          <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/send" enctype="multipart/form-data">
-            <input type="hidden" id="edit-message-id" name="edit_message_id" value="" />
+          <form method="post" action="{{ send_action_prefix }}{{ active_thread.conversation_id }}/send{{ send_action_suffix }}" enctype="multipart/form-data">
+            {% if allow_message_edit_actions %}
+              <input type="hidden" id="edit-message-id" name="edit_message_id" value="" />
+            {% endif %}
             <input type="hidden" name="q" value="{{ query }}" />
             <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
+            {% if folder_filter is not none %}
+              <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
+            {% endif %}
             <div class="compose-row">
               <label class="attach-wrap" title="Прикрепить файл">
                 📎
@@ -999,10 +1038,12 @@
               />
               <button class="send-btn" type="submit">Отправить</button>
             </div>
-            <div id="edit-mode-hint" class="thread-meta" style="display:none; padding: 0 4px;">
-              Режим редактирования сообщения
-              <button id="cancel-edit-btn" type="button" class="btn primary" style="margin-left:8px;">Отмена</button>
-            </div>
+            {% if allow_message_edit_actions %}
+              <div id="edit-mode-hint" class="thread-meta" style="display:none; padding: 0 4px;">
+                Режим редактирования сообщения
+                <button id="cancel-edit-btn" type="button" class="btn primary" style="margin-left:8px;">Отмена</button>
+              </div>
+            {% endif %}
             <div id="slash-menu" class="slash-menu"></div>
           </form>
         </section>
@@ -1015,7 +1056,7 @@
   <div class="folder-create-pop" id="folder-create-pop">
     <div class="folder-create-pop-card">
       <h3>Новая папка</h3>
-      <form class="folder-create-pop-form" method="post" action="/admin/chats/folders">
+      <form class="folder-create-pop-form" method="post" action="{{ create_folder_action }}">
         <input type="hidden" name="q" value="{{ query }}" />
         <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
         {% if folder_filter is not none %}
@@ -1101,6 +1142,13 @@
       if (!threads.length) return;
 
       const folders = {{ chat_folders | tojson }};
+      const markUnreadPrefix = "{{ mark_unread_prefix }}";
+      const moveFolderPrefix = "{{ move_folder_prefix }}";
+      const createFolderEndpoint = "{{ create_folder_endpoint }}";
+      const endpointQuerySuffix = "{{ endpoint_query_suffix }}";
+      const currentQ = encodeURIComponent("{{ query }}");
+      const currentView = encodeURIComponent("{{ 'chat' if mobile_chat_view else '' }}");
+      const currentFolderId = {{ folder_filter if folder_filter is not none else "null" }};
       let selectedThreadId = null;
       let longPressTimer = null;
 
@@ -1130,6 +1178,12 @@
       const hidePop = () => {
         pop.style.display = "none";
       };
+      const currentFolderParam = () => (
+        currentFolderId === null ? "" : `&folder_id=${encodeURIComponent(String(currentFolderId))}`
+      );
+      const currentFolderMoveParam = () => (
+        currentFolderId === null ? "" : `&current_folder_id=${encodeURIComponent(String(currentFolderId))}`
+      );
       const openCtx = (x, y, threadId, unread) => {
         selectedThreadId = threadId;
         ctx.innerHTML = "";
@@ -1140,7 +1194,11 @@
           unreadBtn.textContent = "Отметить непрочитанным";
           unreadBtn.addEventListener("click", async () => {
             hideCtx();
-            await fetch(`/admin/chats/${threadId}/mark-unread`, { method: "POST" });
+            await fetch(`${markUnreadPrefix}${threadId}/mark-unread${endpointQuerySuffix}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: `q=${currentQ}&view=${currentView}${currentFolderParam()}`,
+            });
             window.location.reload();
           });
           ctx.appendChild(unreadBtn);
@@ -1170,10 +1228,10 @@
         noFolder.textContent = "Без папки";
         noFolder.addEventListener("click", async () => {
           if (!selectedThreadId) return;
-          await fetch(`/admin/chats/${selectedThreadId}/move-folder`, {
+          await fetch(`${moveFolderPrefix}${selectedThreadId}/move-folder${endpointQuerySuffix}`, {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: "folder_id=",
+            body: `folder_id=&q=${currentQ}&view=${currentView}${currentFolderMoveParam()}`,
           });
           window.location.reload();
         });
@@ -1186,10 +1244,12 @@
           btn.textContent = folder.name;
           btn.addEventListener("click", async () => {
             if (!selectedThreadId) return;
-            await fetch(`/admin/chats/${selectedThreadId}/move-folder`, {
+            await fetch(`${moveFolderPrefix}${selectedThreadId}/move-folder${endpointQuerySuffix}`, {
               method: "POST",
               headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body: `folder_id=${encodeURIComponent(String(folder.id))}`,
+              body:
+                `folder_id=${encodeURIComponent(String(folder.id))}` +
+                `&q=${currentQ}&view=${currentView}${currentFolderMoveParam()}`,
             });
             window.location.reload();
           });
@@ -1212,10 +1272,13 @@
         const input = pop.querySelector("#new-folder-name");
         const name = (input.value || "").trim();
         if (!name) return;
-        await fetch(`/admin/chats/folders`, {
+        await fetch(`${createFolderEndpoint}${endpointQuerySuffix}`, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: `name=${encodeURIComponent(name)}&conversation_id=${encodeURIComponent(String(selectedThreadId))}`,
+          body:
+            `name=${encodeURIComponent(name)}` +
+            `&conversation_id=${encodeURIComponent(String(selectedThreadId))}` +
+            `&q=${currentQ}&view=${currentView}${currentFolderParam()}`,
         });
         window.location.reload();
       });
@@ -1246,12 +1309,30 @@
 
     (() => {
       const activeConversationId = {{ active_thread.conversation_id if active_thread else "null" }};
+      const allowMessageEditActions = {{ "true" if allow_message_edit_actions else "false" }};
+      const deleteMessagePrefix = "{{ delete_message_prefix }}";
+      const endpointQuerySuffix = "{{ endpoint_query_suffix }}";
       const messageInput = document.getElementById("message-input");
       const editIdInput = document.getElementById("edit-message-id");
       const editHint = document.getElementById("edit-mode-hint");
       const cancelEditBtn = document.getElementById("cancel-edit-btn");
       const bubbles = Array.from(document.querySelectorAll(".bubble[data-message-id]"));
-      if (!messageInput || !editIdInput || !editHint || !bubbles.length || !activeConversationId) return;
+      if (!bubbles.length || !activeConversationId) return;
+
+      // Always keep delivery debug toggles available (both admin and mini-app).
+      bubbles.forEach((bubble) => {
+        const toggle = bubble.querySelector(".delivery-toggle");
+        const debug = bubble.querySelector(".bubble-debug");
+        if (toggle && debug) {
+          toggle.addEventListener("click", (e) => {
+            e.preventDefault();
+            debug.classList.toggle("open");
+            toggle.classList.toggle("open");
+          });
+        }
+      });
+
+      if (!allowMessageEditActions || !messageInput || !editIdInput || !editHint) return;
 
       const msgMenu = document.createElement("div");
       msgMenu.id = "message-context-menu";
@@ -1296,7 +1377,7 @@
           hideMsgMenu();
           if (!selectedMessageId) return;
           const formBody = `q=${encodeURIComponent("{{ query }}")}&view=${encodeURIComponent("{{ 'chat' if mobile_chat_view else '' }}")}`;
-          await fetch(`/admin/chats/${activeConversationId}/messages/${selectedMessageId}/delete`, {
+          await fetch(`${deleteMessagePrefix}${activeConversationId}/messages/${selectedMessageId}/delete${endpointQuerySuffix}`, {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body: formBody,
@@ -1339,16 +1420,6 @@
         bubble.addEventListener("touchmove", () => {
           if (longPressTimer) clearTimeout(longPressTimer);
         });
-
-        const toggle = bubble.querySelector(".delivery-toggle");
-        const debug = bubble.querySelector(".bubble-debug");
-        if (toggle && debug) {
-          toggle.addEventListener("click", (e) => {
-            e.preventDefault();
-            debug.classList.toggle("open");
-            toggle.classList.toggle("open");
-          });
-        }
       });
     })();
 

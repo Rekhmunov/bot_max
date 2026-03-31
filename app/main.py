@@ -334,102 +334,20 @@ async def admin_chats_page(
     request: Request,
     conversation_id: int | None = None,
     q: str = "",
-    quick_query: str = "",
     view: str = "",
     folder_id: int | None = None,
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    # Opportunistically drain due queue items on every admin page load.
-    await process_outbox_queue(db, limit=30)
-
-    sent_flag = request.query_params.get("sent")
-    quick_flag = request.query_params.get("quick")
-    edited_flag = request.query_params.get("edited")
-    deleted_flag = request.query_params.get("deleted")
-    retried_flag = request.query_params.get("retried")
-    op_message = None
-    op_error = None
-    if sent_flag == "1":
-        op_message = "Сообщение отправлено"
-    if sent_flag == "0":
-        op_error = "Не удалось отправить сообщение"
-    if quick_flag == "1":
-        op_message = "Быстрый ответ отправлен"
-    if quick_flag == "0":
-        op_error = "Не удалось отправить быстрый ответ"
-    if edited_flag == "1":
-        op_message = "Сообщение изменено"
-    if edited_flag == "0":
-        op_error = "Не удалось изменить сообщение"
-    if deleted_flag == "1":
-        op_message = "Сообщение удалено"
-    if deleted_flag == "0":
-        op_error = "Не удалось удалить сообщение"
-    if retried_flag == "1":
-        op_message = "Повторная отправка выполнена"
-    if retried_flag == "0":
-        op_error = "Повторная отправка не удалась"
-    if request.query_params.get("unread") == "1":
-        op_message = "Чат отмечен непрочитанным"
-    if request.query_params.get("unread") == "0":
-        op_error = "Не удалось отметить чат непрочитанным"
-    if request.query_params.get("foldered") == "1":
-        op_message = "Чат перемещен в папку"
-    if request.query_params.get("foldered") == "0":
-        op_error = "Не удалось переместить чат в папку"
-
-    threads = load_chat_threads(db, query=q)
-    if folder_id is not None:
-        if folder_id > 0:
-            threads = [item for item in threads if item.folder_id == folder_id]
-        else:
-            threads = [item for item in threads if item.folder_id is None]
-    has_explicit_conversation = conversation_id is not None
-    active_thread = None
-    if conversation_id is not None:
-        for item in threads:
-            if item.conversation_id == conversation_id:
-                active_thread = item
-                break
-    if active_thread is None and threads and not has_explicit_conversation:
-        active_thread = threads[0]
-    messages = []
-    if active_thread:
-        mark_thread_read(db, active_thread.conversation_id)
-        messages = load_chat_messages(db, active_thread.conversation_id)
-    mobile_chat_view = view.strip().lower() == "chat"
-
-    return templates.TemplateResponse(
-        request,
-        "admin_chats.html",
-        {
-            "request": request,
-            "threads": threads,
-            "active_thread": active_thread,
-            "messages": messages,
-            "query": q,
-            "folder_filter": folder_id,
-            "quick_query": quick_query.strip(),
-            "message": op_message,
-            "error": op_error,
-            "quick_replies": list_active_quick_replies(db),
-            "removed": request.query_params.get("removed"),
-            "mobile_chat_view": mobile_chat_view,
-            "chat_metrics": get_chat_metrics(db),
-            "admin_quick_options": [
-                {"command": item.command, "title": item.title}
-                for item in list_active_quick_replies(db)
-            ],
-            "chat_folders": [
-                {"id": folder.id, "name": folder.name}
-                for folder in list_chat_folders(db)
-            ],
-            "removed_message": (
-                "Пользователь и чат удалены" if request.query_params.get("removed") == "1"
-                else ("Не удалось удалить пользователя" if request.query_params.get("removed") == "0" else None)
-            ),
-        },
+    return await _render_chat_workspace(
+        request=request,
+        db=db,
+        conversation_id=conversation_id,
+        q=q,
+        view=view,
+        folder_id=folder_id,
+        ui=_admin_chats_ui(),
+        include_removed=True,
     )
 
 
@@ -894,21 +812,64 @@ def _manager_mini_url(
     return url
 
 
-@app.get("/mini/manager", response_class=HTMLResponse)
-async def manager_mini_page(
-    request: Request,
-    token: str,
-    conversation_id: int | None = None,
-    q: str = "",
-    view: str = "",
-    folder_id: int | None = None,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    _require_manager_mini_access(token=token, db=db)
-    await process_outbox_queue(db, limit=30)
+def _admin_chats_ui() -> dict[str, str | bool]:
+    return {
+        "page_title": "Max Admin Chats",
+        "page_path": "/admin/chats",
+        "page_query_prefix": "/admin/chats?",
+        "access_token": "",
+        "create_folder_action": "/admin/chats/folders",
+        "show_admin_nav": True,
+        "settings_href": "/admin",
+        "logout_action": "/admin/logout",
+        "show_profile_links": True,
+        "show_delete_user": True,
+        "allow_message_edit_actions": True,
+        "send_action_prefix": "/admin/chats/",
+        "send_action_suffix": "",
+        "delete_user_action_prefix": "/admin/chats/",
+        "profile_href_prefix": "/admin/chats/",
+        "mark_unread_prefix": "/admin/chats/",
+        "move_folder_prefix": "/admin/chats/",
+        "create_folder_endpoint": "/admin/chats/folders",
+        "delete_message_prefix": "/admin/chats/",
+        "endpoint_query_suffix": "",
+    }
 
+
+def _manager_mini_ui(token: str) -> dict[str, str | bool]:
+    token_value = quote_plus(token)
+    query_suffix = f"?token={token_value}"
+    return {
+        "page_title": "Max Manager Mini App",
+        "page_path": "/mini/manager",
+        "page_query_prefix": f"/mini/manager?token={token_value}&",
+        "access_token": token,
+        "create_folder_action": f"/mini/manager/chats/folders{query_suffix}",
+        "show_admin_nav": False,
+        "settings_href": "",
+        "logout_action": "",
+        "show_profile_links": False,
+        "show_delete_user": False,
+        "allow_message_edit_actions": False,
+        "send_action_prefix": "/mini/manager/chats/",
+        "send_action_suffix": query_suffix,
+        "delete_user_action_prefix": "",
+        "profile_href_prefix": "",
+        "mark_unread_prefix": "/mini/manager/chats/",
+        "move_folder_prefix": "/mini/manager/chats/",
+        "create_folder_endpoint": "/mini/manager/chats/folders",
+        "delete_message_prefix": "/mini/manager/chats/",
+        "endpoint_query_suffix": query_suffix,
+    }
+
+
+def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
     sent_flag = request.query_params.get("sent")
     quick_flag = request.query_params.get("quick")
+    edited_flag = request.query_params.get("edited")
+    deleted_flag = request.query_params.get("deleted")
+    retried_flag = request.query_params.get("retried")
     op_message = None
     op_error = None
     if sent_flag == "1":
@@ -919,6 +880,18 @@ async def manager_mini_page(
         op_message = "Быстрый ответ отправлен"
     if quick_flag == "0":
         op_error = "Не удалось отправить быстрый ответ"
+    if edited_flag == "1":
+        op_message = "Сообщение изменено"
+    if edited_flag == "0":
+        op_error = "Не удалось изменить сообщение"
+    if deleted_flag == "1":
+        op_message = "Сообщение удалено"
+    if deleted_flag == "0":
+        op_error = "Не удалось удалить сообщение"
+    if retried_flag == "1":
+        op_message = "Повторная отправка выполнена"
+    if retried_flag == "0":
+        op_error = "Повторная отправка не удалась"
     if request.query_params.get("unread") == "1":
         op_message = "Чат отмечен непрочитанным"
     if request.query_params.get("unread") == "0":
@@ -927,6 +900,23 @@ async def manager_mini_page(
         op_message = "Чат перемещен в папку"
     if request.query_params.get("foldered") == "0":
         op_error = "Не удалось переместить чат в папку"
+    return op_message, op_error
+
+
+async def _render_chat_workspace(
+    *,
+    request: Request,
+    db: Session,
+    conversation_id: int | None,
+    q: str,
+    view: str,
+    folder_id: int | None,
+    ui: dict[str, str | bool],
+    include_removed: bool,
+) -> HTMLResponse:
+    # Opportunistically drain due queue items on every workspace open.
+    await process_outbox_queue(db, limit=30)
+    op_message, op_error = _chat_op_messages(request)
 
     threads = load_chat_threads(db, query=q)
     if folder_id is not None:
@@ -951,29 +941,51 @@ async def manager_mini_page(
         messages = load_chat_messages(db, active_thread.conversation_id)
     mobile_chat_view = view.strip().lower() == "chat"
 
-    return templates.TemplateResponse(
-        request,
-        "manager_mini.html",
-        {
-            "request": request,
-            "token": token,
-            "threads": threads,
-            "active_thread": active_thread,
-            "messages": messages,
-            "query": q,
-            "folder_filter": folder_id,
-            "message": op_message,
-            "error": op_error,
-            "mobile_chat_view": mobile_chat_view,
-            "admin_quick_options": [
-                {"command": item.command, "title": item.title}
-                for item in list_active_quick_replies(db)
-            ],
-            "chat_folders": [
-                {"id": folder.id, "name": folder.name}
-                for folder in list_chat_folders(db)
-            ],
-        },
+    context: dict = {
+        "request": request,
+        "threads": threads,
+        "active_thread": active_thread,
+        "messages": messages,
+        "query": q,
+        "folder_filter": folder_id,
+        "message": op_message,
+        "error": op_error,
+        "mobile_chat_view": mobile_chat_view,
+        "admin_quick_options": [
+            {"command": item.command, "title": item.title}
+            for item in list_active_quick_replies(db)
+        ],
+        "chat_folders": [
+            {"id": folder.id, "name": folder.name}
+            for folder in list_chat_folders(db)
+        ],
+        "ui": ui,
+    }
+    if include_removed:
+        context["removed"] = request.query_params.get("removed")
+    return templates.TemplateResponse(request, "admin_chats.html", context)
+
+
+@app.get("/mini/manager", response_class=HTMLResponse)
+async def manager_mini_page(
+    request: Request,
+    token: str,
+    conversation_id: int | None = None,
+    q: str = "",
+    view: str = "",
+    folder_id: int | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    _require_manager_mini_access(token=token, db=db)
+    return await _render_chat_workspace(
+        request=request,
+        db=db,
+        conversation_id=conversation_id,
+        q=q,
+        view=view,
+        folder_id=folder_id,
+        ui=_manager_mini_ui(token),
+        include_removed=False,
     )
 
 

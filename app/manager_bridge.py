@@ -32,15 +32,9 @@ TEMPLATE_PRESTART = "prestart_message"
 TEMPLATE_START = "start_message"
 TEMPLATE_AFTER_PHONE = "after_phone_message"
 MANAGER_HELP_TEXT = (
-    "Новый клиент пишет в боте.\n"
-    "Отвечайте в reply на сообщение с тикетом [T-XXXX], чтобы бот отправил ответ клиенту.\n"
-    "Быстрые ответы: /command (например, /price).\n"
-    "Если клиент не может отправить контакт: /contact +79990001122 (в reply на нужный тикет).\n"
-    "Быстрый поиск в чате: /tickets\n"
-    "Ответ без reply: /reply T-1001 ваш текст\n"
-    "Быстрый ответ без reply: /reply T-1001 /price\n"
-    "Диспетчер: /panel, /new, /mine, /next, /take T-1001, /done T-1001\n"
-    "Mini app: /mini"
+    "Чат менеджера отключен для сквозных сообщений.\n"
+    "Работа ведется только через mini-app.\n"
+    "Открыть mini-app: /mini"
 )
 
 
@@ -662,6 +656,20 @@ def _store_chat_message(
     return item
 
 
+def _mark_conversation_unread_from_customer(db: Session, *, meta: ConversationMeta) -> None:
+    changed = False
+    if not meta.is_unread:
+        meta.is_unread = True
+        changed = True
+    # Reopen thread in queue when customer writes again.
+    if meta.status != "new":
+        meta.status = "new"
+        changed = True
+    if changed:
+        db.add(meta)
+        db.commit()
+
+
 def _extract_contact_from_manager_text(text: str) -> str | None:
     normalized = text.strip()
     if not normalized:
@@ -1210,6 +1218,7 @@ async def handle_customer_event(
         max_message_mid=event.message_mid,
         link_mid=event.link_mid,
     )
+    _mark_conversation_unread_from_customer(db, meta=meta)
 
     phone_just_verified = False
     # If phone is already available (privacy allows it), skip explicit phone-confirmation step.
@@ -1285,73 +1294,14 @@ async def handle_customer_event(
             source="bot_system",
         )
         await process_outbox_queue(db, limit=20)
-        await forward_customer_message_to_manager(
-            db=db,
-            client=client,
-            settings=settings,
-            conversation=conversation,
-            meta=meta,
-            customer=customer,
-            event=event,
-            extra_header="Контакт подтвержден",
-        )
         return {"ok": True, "flow": "phone_verified"}
 
     if not meta.phone_verified and event.text.strip():
-        manager_user_id = settings.manager_account_id.strip()
-        if manager_user_id:
-            ticket_line = _render_ticket_line(meta, customer, event)
-            text = event.text.strip()
-            manager_text = (
-                f"{ticket_line}\n"
-                f"Клиент: {text}\n"
-                "Для подтверждения контакта отправьте в ответ:\n"
-                "/contact +79990001122"
-            )
-            ok = await enqueue_and_process_send_text(
-                db,
-                conversation_id=conversation.id,
-                target_chat_id="",
-                target_user_id=manager_user_id,
-                text=manager_text,
-                source="bot_system",
-            )
-            if ok:
-                sent_msg = (
-                    db.query(ChatMessage)
-                    .filter(
-                        ChatMessage.conversation_id == conversation.id,
-                        ChatMessage.direction == "bot",
-                        ChatMessage.source == "bot_system",
-                    )
-                    .order_by(ChatMessage.id.desc())
-                    .first()
-                )
-                if sent_msg and sent_msg.max_message_mid:
-                    db.add(
-                        ManagerDispatch(
-                            conversation_id=conversation.id,
-                            manager_message_mid=sent_msg.max_message_mid,
-                            dispatch_type="customer_to_manager",
-                        )
-                    )
-                    db.commit()
         return {"ok": True, "flow": "waiting_contact_confirmation"}
 
-    # Forward customer messages to manager only after phone verification.
+    # Customer message stays in thread for manager mini-app.
     if meta.phone_verified and event.text.strip():
-        await forward_customer_message_to_manager(
-            db=db,
-            client=client,
-            settings=settings,
-            conversation=conversation,
-            meta=meta,
-            customer=customer,
-            event=event,
-            extra_header=None,
-        )
-        await process_outbox_queue(db, limit=20)
-        return {"ok": True, "flow": "forwarded_to_manager"}
+        return {"ok": True, "flow": "queued_for_mini_app"}
 
     return {"ok": True, "flow": "ignored_before_phone"}
 
@@ -1422,23 +1372,6 @@ async def handle_manager_message(
         return {"ok": True, "ignored": "not_manager_sender"}
 
     text_value = event.text.strip()
-    callback_action = _parse_manager_callback_action(event.raw_payload)
-    if callback_action:
-        action, maybe_ticket = callback_action
-        if action in {"panel"}:
-            ok = await _send_dispatch_panel(db, manager_id=manager_user_id)
-            return {"ok": True, "panel_sent": ok, "via": "callback"}
-        if action in {"new", "mine", "next"}:
-            mode = "new" if action in {"new", "next"} else "mine"
-            return await _send_first_ticket_from_mode(db, manager_id=manager_user_id, mode=mode)
-        if action in {"take", "done", "mine", "show"} and maybe_ticket is not None:
-            return await _apply_ticket_action(
-                db,
-                manager_id=manager_user_id,
-                action=action,
-                ticket_no=maybe_ticket,
-            )
-
     if text_value.lower() in {"/help", "/h"}:
         await client.send_text_to_user(user_id=manager_user_id, text=MANAGER_HELP_TEXT)
         return {"ok": True, "help_sent": True}
@@ -1456,82 +1389,7 @@ async def handle_manager_message(
             ),
         )
         return {"ok": True, "mini_sent": True}
-
-    if text_value.lower() in {"/panel", "/p"}:
-        ok = await _send_dispatch_panel(db, manager_id=manager_user_id)
-        return {"ok": True, "panel_sent": ok}
-
-    if text_value.lower() == "/new":
-        return await _send_first_ticket_from_mode(db, manager_id=manager_user_id, mode="new")
-
-    if text_value.lower() in {"/mine", "/my"}:
-        return await _send_first_ticket_from_mode(db, manager_id=manager_user_id, mode="mine")
-
-    if text_value.lower() in {"/next", "/n"}:
-        return await _send_first_ticket_from_mode(db, manager_id=manager_user_id, mode="new")
-
-    parsed_ticket_action = _parse_manager_ticket_action(text_value)
-    if parsed_ticket_action:
-        action, ticket_no = parsed_ticket_action
-        return await _apply_ticket_action(
-            db,
-            manager_id=manager_user_id,
-            action=action,
-            ticket_no=ticket_no,
-        )
-
-    if text_value.lower() in {"/tickets", "/list", "/inbox"}:
-        inbox_text = _build_manager_ticket_inbox_text(db)
-        await client.send_text_to_user(user_id=manager_user_id, text=inbox_text)
-        return {"ok": True, "tickets_sent": True}
-
-    target_conversation = None
-    parsed_ticket_reply = _parse_manager_ticket_reply(text_value)
-    if parsed_ticket_reply:
-        ticket_no, payload_text = parsed_ticket_reply
-        target_conversation = _resolve_conversation_by_ticket(db, ticket_no)
-        if target_conversation is None:
-            await client.send_text_to_user(
-                user_id=manager_user_id,
-                text=f"Тикет T-{ticket_no} не найден. Проверьте номер через /tickets",
-            )
-            return {"ok": True, "ignored": "ticket_not_found"}
-        sent_ok = await _send_manager_payload_to_conversation(
-            db,
-            client=client,
-            conversation=target_conversation,
-            manager_event=event,
-            payload_text=payload_text,
-        )
-        return {"ok": True, "ticket_reply_sent": sent_ok, "ticket_no": ticket_no}
-
-    if event.link_mid:
-        dispatch = db.query(ManagerDispatch).filter(ManagerDispatch.manager_message_mid == event.link_mid).first()
-        if dispatch:
-            target_conversation = (
-                db.query(Conversation).filter(Conversation.id == dispatch.conversation_id).first()
-            )
-
-    if target_conversation is None:
-        # Operational helper to manager chat can stay as direct send.
-        await client.send_text_to_user(
-            user_id=manager_user_id,
-            text=(
-                "Нужно отвечать reply на карточку тикета.\n"
-                "Или используйте формат: /reply T-1001 ваш текст\n"
-                "Список активных тикетов: /tickets"
-            ),
-        )
-        return {"ok": True, "ignored": "reply_required"}
-
-    sent_ok = await _send_manager_payload_to_conversation(
-        db,
-        client=client,
-        conversation=target_conversation,
-        manager_event=event,
-        payload_text=text_value,
-    )
-    return {"ok": True, "manager_payload_sent": sent_ok}
+    return {"ok": True, "ignored": "manager_chat_disabled"}
 
 
 async def send_quick_reply_to_customer(
@@ -1646,7 +1504,7 @@ def load_chat_threads(db: Session, query: str = "") -> list[ChatThreadItem]:
             if not preview and last_msg.image_url:
                 preview = "[изображение]"
         status = meta.status if meta else "new"
-        is_unread = status != "read"
+        is_unread = bool(meta.is_unread) if meta else True
         phone_verified = bool(meta.phone_verified) if meta else False
         ticket_no = meta.ticket_no if meta else None
         last_activity_id = last_msg.id if last_msg else conv.id
@@ -1816,10 +1674,10 @@ def mark_thread_unread(db: Session, conversation_id: int) -> bool:
     meta = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).first()
     if meta is None:
         return False
-    if meta.status == "new":
+    if meta.status == "new" and meta.is_unread:
         return True
     meta.status = "new"
-    meta.is_new = True
+    meta.is_unread = True
     db.add(meta)
     db.commit()
     return True
@@ -1842,9 +1700,9 @@ def mark_thread_read(db: Session, conversation_id: int) -> None:
     meta = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).first()
     if meta is None:
         return
-    if meta.status != "read":
+    if meta.status != "read" or meta.is_unread:
         meta.status = "read"
-        meta.is_new = False
+        meta.is_unread = False
         db.add(meta)
         db.commit()
 
