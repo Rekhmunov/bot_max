@@ -212,6 +212,20 @@ def run() -> None:
         assert 'id="message-input"' in admin_chats_page_after_send.text
         assert 'id="slash-menu"' in admin_chats_page_after_send.text
 
+        mobile_list_page = client.get("/admin/chats", cookies=cookies)
+        assert mobile_list_page.status_code == 200
+        assert 'id="chat-list-screen"' in mobile_list_page.text
+        assert "dot-new" in mobile_list_page.text
+        assert "hidden-mobile" in mobile_list_page.text
+
+        mobile_chat_page = client.get(
+            f"/admin/chats?conversation_id={conversation_id}&view=chat",
+            cookies=cookies,
+        )
+        assert mobile_chat_page.status_code == 200
+        assert "back-btn mobile-only" in mobile_chat_page.text
+        assert "attach-wrap" in mobile_chat_page.text
+
         metrics_page = client.get("/admin/chats", cookies=cookies)
         assert metrics_page.status_code == 200
         assert "Success rate" in metrics_page.text

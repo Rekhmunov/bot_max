@@ -71,6 +71,8 @@ class ChatThreadItem:
     phone_verified: bool
     last_message_preview: str
     has_delivery_errors: bool
+    is_unread: bool
+    last_activity_id: int
 
 
 @dataclass
@@ -1155,8 +1157,10 @@ def load_chat_threads(db: Session, query: str = "") -> list[ChatThreadItem]:
             if not preview and last_msg.image_url:
                 preview = "[изображение]"
         status = meta.status if meta else "new"
+        is_unread = status != "read"
         phone_verified = bool(meta.phone_verified) if meta else False
         ticket_no = meta.ticket_no if meta else None
+        last_activity_id = last_msg.id if last_msg else conv.id
         has_delivery_errors = bool(
             db.query(ChatMessage)
             .filter(
@@ -1191,8 +1195,12 @@ def load_chat_threads(db: Session, query: str = "") -> list[ChatThreadItem]:
                 phone_verified=phone_verified,
                 last_message_preview=preview,
                 has_delivery_errors=has_delivery_errors,
+                is_unread=is_unread,
+                last_activity_id=last_activity_id,
             )
         )
+    # New/unread chats first, then by latest activity.
+    items.sort(key=lambda item: (0 if item.is_unread else 1, -item.last_activity_id))
     return items
 
 

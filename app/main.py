@@ -332,13 +332,14 @@ async def admin_chats_page(
         op_error = "Повторная отправка не удалась"
 
     threads = load_chat_threads(db, query=q)
+    has_explicit_conversation = conversation_id is not None
     active_thread = None
     if conversation_id is not None:
         for item in threads:
             if item.conversation_id == conversation_id:
                 active_thread = item
                 break
-    if active_thread is None and threads:
+    if active_thread is None and threads and not has_explicit_conversation:
         active_thread = threads[0]
     messages = []
     if active_thread:

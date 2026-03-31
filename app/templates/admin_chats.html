@@ -6,26 +6,25 @@
   <title>Max Admin Chats</title>
   <style>
     :root {
-      --bg: #f3f5f8;
+      --bg: #f6f8fc;
       --panel: #ffffff;
-      --panel-soft: #f8fafc;
-      --line: #e2e6ef;
+      --line: #e4e8f1;
       --text: #1f2430;
-      --muted: #6d7688;
-      --accent: #2f6df6;
-      --accent-soft: #ebf2ff;
+      --muted: #70798c;
+      --accent: #1976ff;
+      --accent-soft: #ebf3ff;
       --danger: #e34a4a;
-      --danger-soft: #feecec;
-      --ok-soft: #e9f8ef;
-      --ok: #207a49;
-      --failed: #b12424;
-      --shadow: 0 8px 28px rgba(18, 30, 52, 0.08);
+      --danger-soft: #fff0f0;
+      --ok: #1f7a47;
+      --ok-soft: #eaf8f0;
+      --shadow: 0 10px 28px rgba(12, 31, 66, 0.08);
+      --radius: 14px;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; }
     body {
       margin: 0;
-      font-family: "Segoe UI", Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
       background: var(--bg);
       color: var(--text);
     }
@@ -34,29 +33,30 @@
       grid-template-columns: 360px 1fr;
       height: 100vh;
     }
-    .sidebar {
+    .chat-list {
       border-right: 1px solid var(--line);
       background: var(--panel);
-      display: flex;
-      flex-direction: column;
       min-width: 0;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
     }
-    .brand {
-      padding: 14px 14px 10px;
+    .list-head {
+      padding: 12px 14px 10px;
       border-bottom: 1px solid var(--line);
       display: grid;
       gap: 10px;
+      background: var(--panel);
     }
-    .brand-top {
+    .list-title-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 10px;
     }
-    .brand-title {
-      font-size: 18px;
+    .list-title {
+      margin: 0;
+      font-size: 20px;
       font-weight: 800;
-      letter-spacing: 0.2px;
     }
     .top-actions {
       display: flex;
@@ -68,15 +68,15 @@
       color: var(--accent);
       font-size: 12px;
       font-weight: 700;
-      padding: 6px 8px;
-      border-radius: 8px;
+      border-radius: 9px;
       background: var(--accent-soft);
+      padding: 6px 8px;
     }
     .top-btn {
       border: 0;
-      background: #f0f3f9;
-      color: #4f596d;
-      border-radius: 8px;
+      border-radius: 9px;
+      background: #f0f3fa;
+      color: #556079;
       padding: 6px 8px;
       font-size: 12px;
       font-weight: 700;
@@ -88,53 +88,64 @@
       gap: 8px;
     }
     .search-form input {
-      width: 100%;
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 9px 10px;
+      border-radius: 11px;
+      padding: 9px 11px;
       font-size: 14px;
+      width: 100%;
       background: #fff;
     }
     .search-form button {
       border: 0;
-      border-radius: 10px;
+      border-radius: 11px;
       background: var(--accent);
       color: #fff;
       font-weight: 700;
-      cursor: pointer;
       padding: 0 14px;
+      cursor: pointer;
+    }
+    .metrics {
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
     }
     .threads {
       overflow: auto;
       padding: 8px;
       display: grid;
       gap: 6px;
+      align-content: start;
     }
     .thread {
       display: block;
       text-decoration: none;
       color: inherit;
-      border: 1px solid transparent;
-      border-radius: 12px;
-      padding: 10px 12px;
       background: #fff;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      padding: 10px 12px;
     }
     .thread:hover {
       border-color: var(--line);
-      background: var(--panel-soft);
+      background: #fbfdff;
     }
     .thread.active {
-      border-color: #cdd9ff;
-      background: #f0f5ff;
+      border-color: #cfe0ff;
+      background: #f2f7ff;
     }
     .thread-head {
       display: flex;
-      justify-content: space-between;
       align-items: center;
+      justify-content: space-between;
       gap: 8px;
       margin-bottom: 4px;
     }
     .thread-name {
+      font-size: 16px;
       font-weight: 700;
       min-width: 0;
       white-space: nowrap;
@@ -142,65 +153,88 @@
       text-overflow: ellipsis;
     }
     .thread-meta {
-      color: var(--muted);
       font-size: 12px;
+      color: var(--muted);
       margin-bottom: 4px;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
     .thread-preview {
-      color: #3a4254;
-      font-size: 13px;
+      font-size: 14px;
+      color: #3d4557;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .alert-dot {
+    .dot-new,
+    .dot-error {
       width: 10px;
       height: 10px;
       border-radius: 50%;
-      background: var(--danger);
       flex: 0 0 auto;
     }
-    .chat {
-      display: grid;
-      grid-template-rows: auto 1fr auto;
+    .dot-new { background: #2d7cff; }
+    .dot-error { background: var(--danger); }
+
+    .chat-screen {
       min-width: 0;
       height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
     }
     .chat-header {
-      background: var(--panel);
+      padding: 10px 12px;
       border-bottom: 1px solid var(--line);
-      padding: 12px 16px;
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 12px;
+      background: var(--panel);
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 8px;
     }
+    .back-btn {
+      border: 0;
+      background: transparent;
+      color: #222f4b;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      font-size: 24px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .back-btn:hover { background: #f1f4fb; }
+    .chat-title-wrap { min-width: 0; }
     .chat-title {
       margin: 0;
       font-size: 18px;
       font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .chat-sub {
-      margin-top: 3px;
+      margin-top: 2px;
       color: var(--muted);
       font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
     .danger-btn {
       border: 0;
-      border-radius: 10px;
-      background: var(--danger-soft);
-      color: var(--failed);
-      font-size: 12px;
-      font-weight: 800;
+      border-radius: 9px;
       padding: 8px 10px;
       cursor: pointer;
+      background: var(--danger-soft);
+      color: var(--danger);
+      font-weight: 800;
+      font-size: 12px;
+      white-space: nowrap;
     }
     .messages-wrap {
       overflow: auto;
-      padding: 14px 16px;
+      padding: 12px;
       display: flex;
       flex-direction: column;
       gap: 10px;
@@ -209,39 +243,40 @@
       border-radius: 10px;
       padding: 8px 10px;
       font-size: 13px;
-      margin-bottom: 8px;
     }
     .notice.ok { background: var(--ok-soft); color: var(--ok); }
-    .notice.err { background: var(--danger-soft); color: var(--failed); }
+    .notice.err { background: var(--danger-soft); color: var(--danger); }
     .bubble {
-      max-width: 78%;
+      max-width: 82%;
       border: 1px solid var(--line);
       border-radius: 14px;
       padding: 10px 12px;
       background: #fff;
       box-shadow: var(--shadow);
+      word-break: break-word;
     }
     .bubble.customer {
       align-self: flex-start;
       border-bottom-left-radius: 6px;
-      background: #f9fbff;
+      background: #fbfdff;
     }
     .bubble.bot {
       align-self: flex-end;
       border-bottom-right-radius: 6px;
-      background: #f1f6ff;
+      background: #f2f7ff;
     }
     .bubble-meta {
       font-size: 12px;
       color: var(--muted);
       margin-bottom: 6px;
     }
-    .bubble-text { white-space: pre-wrap; word-break: break-word; }
+    .bubble-text { white-space: pre-wrap; }
     .bubble img {
       margin-top: 8px;
       max-width: 240px;
-      border: 1px solid var(--line);
+      width: 100%;
       border-radius: 10px;
+      border: 1px solid var(--line);
     }
     .delivery {
       display: inline-block;
@@ -252,14 +287,13 @@
       font-weight: 800;
     }
     .delivery.sent { background: var(--ok-soft); color: var(--ok); }
-    .delivery.queued { background: var(--accent-soft); color: var(--accent); }
-    .delivery.failed { background: var(--danger-soft); color: var(--failed); }
+    .delivery.queued { background: #eef4ff; color: var(--accent); }
+    .delivery.failed { background: var(--danger-soft); color: var(--danger); }
     .delivery-error {
       margin-top: 6px;
-      color: var(--failed);
+      color: var(--danger);
       font-size: 12px;
       white-space: pre-wrap;
-      word-break: break-word;
     }
     .actions {
       margin-top: 8px;
@@ -273,7 +307,7 @@
       border: 1px solid var(--line);
       border-radius: 8px;
       padding: 6px 8px;
-      min-width: 170px;
+      min-width: 160px;
       font-size: 13px;
     }
     .btn {
@@ -285,50 +319,65 @@
       font-weight: 700;
     }
     .btn.primary { background: var(--accent-soft); color: var(--accent); }
-    .btn.danger { background: var(--danger-soft); color: var(--failed); }
+    .btn.danger { background: var(--danger-soft); color: var(--danger); }
+
     .compose {
       border-top: 1px solid var(--line);
       background: var(--panel);
-      padding: 10px 12px;
+      padding: 10px;
       display: grid;
       gap: 8px;
     }
     .compose-row {
       display: grid;
-      grid-template-columns: 1fr auto auto;
+      grid-template-columns: auto 1fr auto;
       gap: 8px;
       align-items: center;
+    }
+    .attach-wrap {
+      position: relative;
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #58637d;
+      font-size: 18px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .attach-wrap input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
     }
     .compose input[type="text"] {
       width: 100%;
       border: 1px solid var(--line);
-      border-radius: 12px;
+      border-radius: 18px;
       padding: 10px 12px;
-      font-size: 14px;
-      background: #fff;
+      font-size: 15px;
     }
-    .compose input[type="file"] {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 7px 8px;
-      background: #fff;
-      font-size: 12px;
-    }
-    .compose button[type="submit"] {
+    .send-btn {
       border: 0;
-      border-radius: 12px;
+      border-radius: 18px;
       background: var(--accent);
       color: #fff;
       font-weight: 800;
       padding: 10px 14px;
       cursor: pointer;
+      font-size: 14px;
     }
     .slash-menu {
       display: none;
       border: 1px solid var(--line);
       border-radius: 12px;
       background: #fff;
-      max-height: 190px;
+      max-height: 180px;
       overflow: auto;
       box-shadow: var(--shadow);
     }
@@ -336,41 +385,50 @@
       padding: 8px 10px;
       cursor: pointer;
       font-size: 13px;
-      border-bottom: 1px solid #f0f3f8;
+      border-bottom: 1px solid #eef2f8;
     }
     .slash-item:last-child { border-bottom: 0; }
-    .slash-item:hover { background: #f5f8ff; }
-    .footer-metrics {
-      margin-top: 6px;
-      color: var(--muted);
-      font-size: 12px;
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-    }
+    .slash-item:hover { background: #f5f9ff; }
     .empty {
-      padding: 18px;
+      padding: 20px;
       color: var(--muted);
       text-align: center;
     }
-    @media (max-width: 1100px) {
-      .app { grid-template-columns: 300px 1fr; }
-    }
-    @media (max-width: 860px) {
+
+    .mobile-only { display: none; }
+    .desktop-only { display: inline-flex; }
+
+    @media (max-width: 900px) {
       .app { grid-template-columns: 1fr; }
-      .sidebar { height: 260px; }
-      .chat { height: calc(100vh - 260px); }
-      .bubble { max-width: 90%; }
-      .compose-row { grid-template-columns: 1fr; }
+      .chat-list,
+      .chat-screen {
+        height: 100vh;
+      }
+      .mobile-only { display: inline-flex; }
+      .desktop-only { display: none; }
+
+      .chat-list.hidden-mobile,
+      .chat-screen.hidden-mobile {
+        display: none;
+      }
+      .chat-screen {
+        border-right: 0;
+      }
+      .bubble {
+        max-width: 92%;
+      }
+      .danger-btn {
+        padding: 7px 9px;
+      }
     }
   </style>
 </head>
 <body>
   <div class="app">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-top">
-          <div class="brand-title">MAX Chats</div>
+    <aside class="chat-list {% if active_thread and mobile_chat_view %}hidden-mobile{% endif %}" id="chat-list-screen">
+      <div class="list-head">
+        <div class="list-title-row">
+          <h1 class="list-title">Чаты</h1>
           <div class="top-actions">
             <a class="top-link" href="/admin">Настройки</a>
             <form method="post" action="/admin/logout">
@@ -382,24 +440,26 @@
           <input name="q" value="{{ query }}" placeholder="Поиск по имени, телефону, T-номеру..." />
           <button type="submit">Найти</button>
         </form>
-        <div class="footer-metrics">
+      </div>
+      <div class="metrics">
           <span>Success rate: {{ delivery_metrics.success_rate }}%</span>
           <span>Attempts: {{ delivery_metrics.total_sent_attempts }}</span>
           <span>Avg retry: {{ delivery_metrics.avg_retry_count }}</span>
           <span>Permanent fail: {{ delivery_metrics.permanent_failures }}</span>
-        </div>
       </div>
 
       <div class="threads">
         {% if threads %}
           {% for thread in threads %}
-            <a class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %}" href="/admin/chats?conversation_id={{ thread.conversation_id }}&q={{ query }}">
+            <a class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %}" href="/admin/chats?conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat">
               <div class="thread-head">
                 <div class="thread-name">
                   {% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}
                 </div>
                 {% if thread.has_delivery_errors %}
-                  <span class="alert-dot" title="Есть ошибки доставки"></span>
+                  <span class="dot-error" title="Есть ошибки доставки"></span>
+                {% elif thread.is_new %}
+                  <span class="dot-new" title="Новый чат"></span>
                 {% endif %}
               </div>
               <div class="thread-meta">chat: {{ thread.chat_id }} | статус: {{ thread.status }}</div>
@@ -412,10 +472,11 @@
       </div>
     </aside>
 
-    <main class="chat">
+    <main class="chat-screen {% if not active_thread or not mobile_chat_view %}hidden-mobile{% endif %}" id="chat-screen">
       {% if active_thread %}
         <div class="chat-header">
-          <div>
+          <a class="back-btn mobile-only" href="/admin/chats?q={{ query }}" aria-label="Назад к чатам">‹</a>
+          <div class="chat-title-wrap">
             <h2 class="chat-title">
               {% if active_thread.ticket_no %}[T-{{ active_thread.ticket_no }}] {% endif %}
               {{ active_thread.customer_label }}
@@ -490,6 +551,10 @@
         <section class="compose">
           <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/send" enctype="multipart/form-data">
             <div class="compose-row">
+              <label class="attach-wrap" title="Прикрепить файл">
+                📎
+                <input type="file" name="photo" accept=".png,.jpg,.jpeg,.gif,.webp" />
+              </label>
               <input
                 id="message-input"
                 type="text"
@@ -497,8 +562,7 @@
                 autocomplete="off"
                 placeholder="Введите сообщение или / для быстрых ответов"
               />
-              <input type="file" name="photo" accept=".png,.jpg,.jpeg,.gif,.webp" />
-              <button type="submit">Отправить</button>
+              <button class="send-btn" type="submit">Отправить</button>
             </div>
             <div id="slash-menu" class="slash-menu"></div>
           </form>
