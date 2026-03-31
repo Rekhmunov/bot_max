@@ -12,7 +12,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
 
-from app.auth import get_current_admin, require_admin, sign_in_admin
+from app.auth import (
+    get_current_admin,
+    require_admin,
+    sign_in_admin,
+    verify_manager_mini_token,
+)
 from app.config import settings
 from app.database import get_db, init_db
 from app.manager_bridge import (
@@ -851,6 +856,277 @@ async def admin_chats_delete_conversation(
     deleted = delete_conversation(db, conversation_id=conversation_id)
     suffix = "1" if deleted else "0"
     return RedirectResponse(url=f"/admin/chats?removed={suffix}", status_code=302)
+
+
+def _require_manager_mini_access(token: str, db: Session) -> str:
+    manager_id = verify_manager_mini_token(token)
+    if not manager_id:
+        raise HTTPException(status_code=403, detail="Недействительный токен mini-app")
+    settings_db = get_or_create_settings(db)
+    expected_manager_id = settings_db.manager_account_id.strip()
+    if not expected_manager_id or manager_id != expected_manager_id:
+        raise HTTPException(status_code=403, detail="Доступ mini-app запрещен")
+    return manager_id
+
+
+def _manager_mini_url(
+    *,
+    token: str,
+    conversation_id: int | None = None,
+    q: str = "",
+    view: str = "",
+    folder_id: int | None = None,
+    extra: str = "",
+) -> str:
+    url = f"/mini/manager?token={quote_plus(token)}"
+    if conversation_id is not None:
+        url += f"&conversation_id={conversation_id}"
+    if q.strip():
+        url += f"&q={quote_plus(q.strip())}"
+    if view.strip().lower() == "chat":
+        url += "&view=chat"
+    if folder_id is not None:
+        url += f"&folder_id={folder_id}"
+    if extra:
+        if not extra.startswith("&"):
+            url += "&"
+        url += extra.lstrip("&")
+    return url
+
+
+@app.get("/mini/manager", response_class=HTMLResponse)
+async def manager_mini_page(
+    request: Request,
+    token: str,
+    conversation_id: int | None = None,
+    q: str = "",
+    view: str = "",
+    folder_id: int | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    _require_manager_mini_access(token=token, db=db)
+    await process_outbox_queue(db, limit=30)
+
+    sent_flag = request.query_params.get("sent")
+    quick_flag = request.query_params.get("quick")
+    op_message = None
+    op_error = None
+    if sent_flag == "1":
+        op_message = "Сообщение отправлено"
+    if sent_flag == "0":
+        op_error = "Не удалось отправить сообщение"
+    if quick_flag == "1":
+        op_message = "Быстрый ответ отправлен"
+    if quick_flag == "0":
+        op_error = "Не удалось отправить быстрый ответ"
+    if request.query_params.get("unread") == "1":
+        op_message = "Чат отмечен непрочитанным"
+    if request.query_params.get("unread") == "0":
+        op_error = "Не удалось отметить чат непрочитанным"
+    if request.query_params.get("foldered") == "1":
+        op_message = "Чат перемещен в папку"
+    if request.query_params.get("foldered") == "0":
+        op_error = "Не удалось переместить чат в папку"
+
+    threads = load_chat_threads(db, query=q)
+    if folder_id is not None:
+        if folder_id > 0:
+            threads = [item for item in threads if item.folder_id == folder_id]
+        else:
+            threads = [item for item in threads if item.folder_id is None]
+
+    has_explicit_conversation = conversation_id is not None
+    active_thread = None
+    if conversation_id is not None:
+        for item in threads:
+            if item.conversation_id == conversation_id:
+                active_thread = item
+                break
+    if active_thread is None and threads and not has_explicit_conversation:
+        active_thread = threads[0]
+
+    messages = []
+    if active_thread:
+        mark_thread_read(db, active_thread.conversation_id)
+        messages = load_chat_messages(db, active_thread.conversation_id)
+    mobile_chat_view = view.strip().lower() == "chat"
+
+    return templates.TemplateResponse(
+        request,
+        "manager_mini.html",
+        {
+            "request": request,
+            "token": token,
+            "threads": threads,
+            "active_thread": active_thread,
+            "messages": messages,
+            "query": q,
+            "folder_filter": folder_id,
+            "message": op_message,
+            "error": op_error,
+            "mobile_chat_view": mobile_chat_view,
+            "admin_quick_options": [
+                {"command": item.command, "title": item.title}
+                for item in list_active_quick_replies(db)
+            ],
+            "chat_folders": [
+                {"id": folder.id, "name": folder.name}
+                for folder in list_chat_folders(db)
+            ],
+        },
+    )
+
+
+@app.post("/mini/manager/chats/folders", response_class=RedirectResponse)
+def manager_mini_create_folder(
+    token: str,
+    name: str = Form(""),
+    conversation_id: int | None = Form(default=None),
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _require_manager_mini_access(token=token, db=db)
+    folder_name = name.strip()
+    if folder_name:
+        created = create_chat_folder(db, folder_name=folder_name)
+        if conversation_id is not None:
+            assign_conversation_to_folder(
+                db,
+                conversation_id=conversation_id,
+                folder_id=created.id,
+            )
+    return RedirectResponse(
+        url=_manager_mini_url(
+            token=token,
+            conversation_id=conversation_id,
+            q=q,
+            view=view,
+            folder_id=folder_id,
+        ),
+        status_code=302,
+    )
+
+
+@app.post("/mini/manager/chats/{conversation_id}/mark-unread", response_class=RedirectResponse)
+def manager_mini_mark_unread(
+    conversation_id: int,
+    token: str,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _require_manager_mini_access(token=token, db=db)
+    ok = mark_thread_unread(db, conversation_id=conversation_id)
+    suffix = "1" if ok else "0"
+    return RedirectResponse(
+        url=_manager_mini_url(
+            token=token,
+            conversation_id=conversation_id,
+            q=q,
+            view=view,
+            folder_id=folder_id,
+            extra=f"unread={suffix}",
+        ),
+        status_code=302,
+    )
+
+
+@app.post("/mini/manager/chats/{conversation_id}/move-folder", response_class=RedirectResponse)
+def manager_mini_move_folder(
+    conversation_id: int,
+    token: str,
+    folder_id: int = Form(0),
+    q: str = Form(""),
+    view: str = Form(""),
+    current_folder_id: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _require_manager_mini_access(token=token, db=db)
+    ok = assign_conversation_to_folder(
+        db,
+        conversation_id=conversation_id,
+        folder_id=(folder_id if folder_id > 0 else None),
+    )
+    suffix = "1" if ok else "0"
+    return RedirectResponse(
+        url=_manager_mini_url(
+            token=token,
+            conversation_id=conversation_id,
+            q=q,
+            view=view,
+            folder_id=current_folder_id,
+            extra=f"foldered={suffix}",
+        ),
+        status_code=302,
+    )
+
+
+@app.post("/mini/manager/chats/{conversation_id}/send", response_class=RedirectResponse)
+async def manager_mini_send_message(
+    conversation_id: int,
+    token: str,
+    text: str = Form(""),
+    photo: UploadFile | None = File(default=None),
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _require_manager_mini_access(token=token, db=db)
+    text_value = text.strip()
+    view_value = view.strip().lower()
+    image_path = None
+    if photo and photo.filename:
+        ext = Path(photo.filename).suffix.lower()
+        allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+        if ext not in allowed:
+            raise HTTPException(status_code=400, detail="Неподдерживаемый формат фото")
+        safe_name = f"{uuid4().hex}{ext}"
+        target = Path("app/static/uploads") / safe_name
+        content = await photo.read()
+        target.write_bytes(content)
+        image_path = f"/static/uploads/{safe_name}"
+
+    if text_value.startswith("/") and not image_path:
+        sent_ok = await send_admin_quick_reply(
+            db=db,
+            conversation_id=conversation_id,
+            command_text=text_value,
+        )
+        suffix = "1" if sent_ok else "0"
+        return RedirectResponse(
+            url=_manager_mini_url(
+                token=token,
+                conversation_id=conversation_id,
+                q=q,
+                view=view_value,
+                folder_id=folder_id,
+                extra=f"quick={suffix}",
+            ),
+            status_code=302,
+        )
+
+    sent_ok = await send_admin_chat_message(
+        db=db,
+        conversation_id=conversation_id,
+        text=text_value,
+        image_path=image_path,
+    )
+    suffix = "1" if sent_ok else "0"
+    return RedirectResponse(
+        url=_manager_mini_url(
+            token=token,
+            conversation_id=conversation_id,
+            q=q,
+            view=view_value,
+            folder_id=folder_id,
+            extra=f"sent={suffix}",
+        ),
+        status_code=302,
+    )
 
 
 @app.post(webhook_path)

@@ -5,10 +5,12 @@ import re
 from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import quote_plus
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.auth import create_manager_mini_token
 from app.config import settings
 from app.max_client import MaxClient
 from app.models import (
@@ -37,7 +39,8 @@ MANAGER_HELP_TEXT = (
     "Быстрый поиск в чате: /tickets\n"
     "Ответ без reply: /reply T-1001 ваш текст\n"
     "Быстрый ответ без reply: /reply T-1001 /price\n"
-    "Диспетчер: /panel, /new, /mine, /next, /take T-1001, /done T-1001"
+    "Диспетчер: /panel, /new, /mine, /next, /take T-1001, /done T-1001\n"
+    "Mini app: /mini"
 )
 
 
@@ -1439,6 +1442,18 @@ async def handle_manager_message(
     if text_value.lower() in {"/help", "/h"}:
         await client.send_text_to_user(user_id=manager_user_id, text=MANAGER_HELP_TEXT)
         return {"ok": True, "help_sent": True}
+
+    if text_value.lower() in {"/mini", "/app", "/miniapp"}:
+        mini_token = create_manager_mini_token(manager_user_id)
+        mini_url = f"{settings.public_base_url.rstrip('/')}/mini/manager?token={quote_plus(mini_token)}"
+        await client.send_text_to_user(
+            user_id=manager_user_id,
+            text=(
+                "Откройте mini-app менеджера:\n"
+                f"{mini_url}"
+            ),
+        )
+        return {"ok": True, "mini_sent": True}
 
     if text_value.lower() in {"/panel", "/p"}:
         ok = await _send_dispatch_panel(db, manager_id=manager_user_id)

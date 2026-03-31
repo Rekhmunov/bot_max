@@ -1,0 +1,1122 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Max Manager Mini App</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --panel: #ffffff;
+      --line: #e4e8f1;
+      --text: #1f2430;
+      --muted: #70798c;
+      --accent: #1976ff;
+      --accent-soft: #ebf3ff;
+      --danger: #e34a4a;
+      --danger-soft: #fff0f0;
+      --ok: #1f7a47;
+      --ok-soft: #eaf8f0;
+      --shadow: 0 10px 28px rgba(12, 31, 66, 0.08);
+      --radius: 14px;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .app {
+      display: grid;
+      grid-template-columns: minmax(0, 460px) minmax(0, 1fr);
+      height: 100vh;
+    }
+    .chat-list {
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      overflow: hidden;
+    }
+    .list-head {
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      gap: 10px;
+      background: var(--panel);
+    }
+    .list-title {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 800;
+    }
+    .search-form {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+    }
+    .search-form input {
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      padding: 9px 11px;
+      font-size: 14px;
+      width: 100%;
+      background: #fff;
+    }
+    .search-form button {
+      border: 0;
+      border-radius: 11px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      padding: 0 14px;
+      cursor: pointer;
+    }
+    .chat-list-body {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 132px minmax(0, 1fr);
+      overflow: hidden;
+    }
+    .folder-rail {
+      border-right: 1px solid var(--line);
+      background: #fbfcff;
+      min-width: 0;
+      display: grid;
+      grid-template-rows: 1fr auto;
+    }
+    .folder-rail-scroll {
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 8px 6px;
+      display: grid;
+      gap: 6px;
+      align-content: start;
+    }
+    .folder-rail-item {
+      display: block;
+      text-decoration: none;
+      color: #3e4a66;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: #fff;
+      padding: 8px 6px;
+      text-align: left;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      line-height: 1.25;
+    }
+    .folder-rail-item:hover {
+      border-color: var(--line);
+      background: #f5f9ff;
+    }
+    .folder-rail-item.active {
+      border-color: #cfe0ff;
+      background: #edf4ff;
+      color: #1a4fb3;
+    }
+    .folder-rail-add {
+      margin: 8px 6px;
+      border: 0;
+      border-radius: 10px;
+      height: 34px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 20px;
+      line-height: 1;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .mobile-folder-bar {
+      display: none;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+      padding: 8px 10px;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .mobile-folder-scroll {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding-bottom: 2px;
+    }
+    .mobile-folder-item {
+      flex: 0 0 auto;
+      text-decoration: none;
+      color: #3e4a66;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .mobile-folder-item.active {
+      border-color: #cfe0ff;
+      background: #edf4ff;
+      color: #1a4fb3;
+    }
+    .mobile-folder-add {
+      flex: 0 0 auto;
+      width: 32px;
+      height: 32px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .threads {
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 8px;
+      display: grid;
+      gap: 6px;
+      align-content: start;
+      min-width: 0;
+    }
+    .thread {
+      display: block;
+      text-decoration: none;
+      color: inherit;
+      background: #fff;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      padding: 10px 12px;
+    }
+    .thread:hover {
+      border-color: var(--line);
+      background: #fbfdff;
+    }
+    .thread.active {
+      border-color: #cfe0ff;
+      background: #f2f7ff;
+    }
+    .thread.unread {
+      border-color: #d4e5ff;
+      background: #f4f9ff;
+    }
+    .thread.unread .thread-name {
+      color: #185fdb;
+    }
+    .thread-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .thread-name {
+      font-size: 16px;
+      font-weight: 700;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .thread-meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .thread-folder-row {
+      min-height: 16px;
+      margin-bottom: 4px;
+    }
+    .thread-preview {
+      font-size: 14px;
+      color: #3d4557;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      line-height: 1.25;
+      max-height: 2.5em;
+    }
+    .dot-new,
+    .dot-error {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex: 0 0 auto;
+    }
+    .dot-new { background: #2d7cff; }
+    .dot-error { background: var(--danger); }
+    .folder-chip {
+      display: inline-block;
+      margin-left: 0;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      color: #1a4fb3;
+      background: #edf4ff;
+      border: 1px solid #d7e6ff;
+    }
+
+    .chat-screen {
+      min-width: 0;
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+    }
+    .chat-header {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      display: grid;
+      grid-template-columns: auto 1fr;
+      align-items: center;
+      gap: 8px;
+      position: sticky;
+      top: 0;
+      z-index: 6;
+    }
+    .back-btn {
+      border: 0;
+      background: transparent;
+      color: #222f4b;
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      font-size: 24px;
+      line-height: 1;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .back-btn:hover { background: #f1f4fb; }
+    .chat-title-wrap { min-width: 0; }
+    .chat-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 800;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .chat-sub {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .messages-wrap {
+      overflow: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .notice {
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+    .notice.ok { background: var(--ok-soft); color: var(--ok); }
+    .notice.err { background: var(--danger-soft); color: var(--danger); }
+    .bubble {
+      max-width: 82%;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      word-break: break-word;
+    }
+    .bubble.customer {
+      align-self: flex-start;
+      border-bottom-left-radius: 6px;
+      background: #fbfdff;
+    }
+    .bubble.bot {
+      align-self: flex-end;
+      border-bottom-right-radius: 6px;
+      background: #f2f7ff;
+    }
+    .bubble-head {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .bubble-text { white-space: pre-wrap; }
+    .bubble img {
+      margin-top: 8px;
+      max-width: 240px;
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+    }
+    .delivery {
+      display: inline-block;
+      margin-left: 8px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .delivery.sent { background: var(--ok-soft); color: var(--ok); }
+    .delivery.queued { background: #eef4ff; color: var(--accent); }
+    .delivery.failed { background: var(--danger-soft); color: var(--danger); }
+    .delivery-error {
+      margin-top: 6px;
+      color: var(--danger);
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+    .delivery-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .delivery-toggle {
+      border: 0;
+      background: transparent;
+      color: #6c768c;
+      font-size: 14px;
+      cursor: pointer;
+      width: 18px;
+      height: 18px;
+      line-height: 1;
+      padding: 0;
+    }
+    .delivery-toggle.open {
+      transform: rotate(90deg);
+    }
+    .bubble-debug {
+      display: none;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .bubble-debug.open { display: block; }
+    .compose {
+      border-top: 1px solid var(--line);
+      background: var(--panel);
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      position: sticky;
+      bottom: 0;
+      z-index: 6;
+    }
+    .compose-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .attach-wrap {
+      position: relative;
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #58637d;
+      font-size: 18px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .attach-wrap input[type="file"] {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .compose input[type="text"] {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 10px 12px;
+      font-size: 15px;
+    }
+    .send-btn {
+      border: 0;
+      border-radius: 18px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 800;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .slash-menu {
+      display: none;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      max-height: 180px;
+      overflow: auto;
+      box-shadow: var(--shadow);
+    }
+    .slash-item {
+      padding: 8px 10px;
+      cursor: pointer;
+      font-size: 13px;
+      border-bottom: 1px solid #eef2f8;
+    }
+    .slash-item:last-child { border-bottom: 0; }
+    .slash-item:hover { background: #f5f9ff; }
+    .empty {
+      padding: 20px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .context-menu {
+      position: fixed;
+      z-index: 1000;
+      min-width: 220px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      display: none;
+      padding: 6px;
+    }
+    .context-menu button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      padding: 9px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      color: #1f2a45;
+    }
+    .context-menu button:hover {
+      background: #f2f6ff;
+    }
+    .folder-pop {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 24, 44, 0.35);
+      display: none;
+      z-index: 1001;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .folder-pop-card {
+      width: min(480px, 100%);
+      background: #fff;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+    .folder-pop-title {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .folder-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .folder-btn {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      padding: 8px 10px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .folder-btn:hover {
+      background: #f6f9ff;
+      border-color: #d7e6ff;
+    }
+    .folder-create {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+    }
+    .folder-create input {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 14px;
+    }
+    .folder-create button,
+    .folder-close {
+      border: 0;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      padding: 9px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .folder-create-pop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(15, 24, 44, 0.35);
+      z-index: 1003;
+      padding: 16px;
+    }
+    .folder-create-pop-card {
+      width: min(420px, 100%);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .folder-create-pop-card h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .folder-create-pop-form {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+    }
+    .folder-create-pop-form input {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 14px;
+    }
+    .folder-create-pop-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .folder-create-cancel {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: #40506d;
+      padding: 9px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .mobile-only { display: none; }
+
+    @media (max-width: 900px) {
+      .app { grid-template-columns: 1fr; }
+      .chat-list,
+      .chat-screen {
+        height: 100vh;
+      }
+      .mobile-only { display: inline-flex; }
+      .chat-list.hidden-mobile,
+      .chat-screen.hidden-mobile {
+        display: none;
+      }
+      .chat-list-body {
+        grid-template-columns: 1fr;
+      }
+      .folder-rail {
+        display: none;
+      }
+      .mobile-folder-bar {
+        display: flex;
+      }
+      .chat-header {
+        padding-top: max(10px, env(safe-area-inset-top));
+      }
+      .compose {
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
+      }
+      .bubble {
+        max-width: 92%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="chat-list {% if active_thread and mobile_chat_view %}hidden-mobile{% endif %}" id="chat-list-screen">
+      <div class="list-head">
+        <h1 class="list-title">Чаты</h1>
+        <form class="search-form" method="get" action="/mini/manager">
+          <input type="hidden" name="token" value="{{ token }}" />
+          {% if folder_filter is not none %}
+            <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
+          {% endif %}
+          <input name="q" value="{{ query }}" placeholder="Поиск по имени, телефону, T-номеру..." />
+          <button type="submit">Найти</button>
+        </form>
+      </div>
+
+      <div class="mobile-folder-bar">
+        <div class="mobile-folder-scroll">
+          <a class="mobile-folder-item {% if folder_filter is none %}active{% endif %}" href="/mini/manager?token={{ token }}&q={{ query }}">Все</a>
+          <a class="mobile-folder-item {% if folder_filter == 0 %}active{% endif %}" href="/mini/manager?token={{ token }}&q={{ query }}&folder_id=0">Без папки</a>
+          {% for folder in chat_folders %}
+            <a
+              class="mobile-folder-item {% if folder_filter == folder.id %}active{% endif %}"
+              href="/mini/manager?token={{ token }}&q={{ query }}&folder_id={{ folder.id }}"
+              title="{{ folder.name }}"
+            >
+              {{ folder.name }}
+            </a>
+          {% endfor %}
+        </div>
+        <button type="button" class="mobile-folder-add" data-open-folder-create aria-label="Создать папку">+</button>
+      </div>
+
+      <div class="chat-list-body">
+        <nav class="folder-rail" aria-label="Папки">
+          <div class="folder-rail-scroll">
+            <a class="folder-rail-item {% if folder_filter is none %}active{% endif %}" href="/mini/manager?token={{ token }}&q={{ query }}">Все</a>
+            <a class="folder-rail-item {% if folder_filter == 0 %}active{% endif %}" href="/mini/manager?token={{ token }}&q={{ query }}&folder_id=0">Без папки</a>
+            {% for folder in chat_folders %}
+              <a
+                class="folder-rail-item {% if folder_filter == folder.id %}active{% endif %}"
+                href="/mini/manager?token={{ token }}&q={{ query }}&folder_id={{ folder.id }}"
+                title="{{ folder.name }}"
+              >
+                {{ folder.name }}
+              </a>
+            {% endfor %}
+          </div>
+          <button type="button" class="folder-rail-add" data-open-folder-create aria-label="Создать папку">+</button>
+        </nav>
+
+        <div class="threads">
+          {% if threads %}
+            {% for thread in threads %}
+              <a
+                class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %} {% if thread.is_unread %}unread{% endif %}"
+                href="/mini/manager?token={{ token }}&conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}"
+                data-thread-id="{{ thread.conversation_id }}"
+                data-thread-unread="{{ '1' if thread.is_unread else '0' }}"
+              >
+                <div class="thread-head">
+                  <div class="thread-name">{% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}</div>
+                  {% if thread.has_delivery_errors %}
+                    <span class="dot-error" title="Есть ошибки доставки"></span>
+                  {% elif thread.is_new %}
+                    <span class="dot-new" title="Новый чат"></span>
+                  {% endif %}
+                </div>
+                <div class="thread-folder-row">
+                  {% if thread.folder_name %}
+                    <span class="folder-chip">{{ thread.folder_name }}</span>
+                  {% endif %}
+                </div>
+                <div class="thread-meta">chat: {{ thread.chat_id }} | статус: {{ thread.status }}</div>
+                <div class="thread-preview">{{ thread.last_message_preview or "—" }}</div>
+              </a>
+            {% endfor %}
+          {% else %}
+            <div class="empty">Чаты не найдены</div>
+          {% endif %}
+        </div>
+      </div>
+    </aside>
+
+    <main class="chat-screen {% if not active_thread or not mobile_chat_view %}hidden-mobile{% endif %}" id="chat-screen">
+      {% if active_thread %}
+        <div class="chat-header">
+          <a class="back-btn mobile-only" href="/mini/manager?token={{ token }}&q={{ query }}{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}" aria-label="Назад к чатам">‹</a>
+          <div class="chat-title-wrap">
+            <h2 class="chat-title">
+              {% if active_thread.ticket_no %}[T-{{ active_thread.ticket_no }}] {% endif %}
+              {{ active_thread.customer_label }}
+            </h2>
+            <div class="chat-sub">
+              chat_id: {{ active_thread.chat_id }} | phone_verified: {{ "да" if active_thread.phone_verified else "нет" }}
+            </div>
+          </div>
+        </div>
+
+        <div class="messages-wrap">
+          {% if message %}
+            <div class="notice ok">{{ message }}</div>
+          {% endif %}
+          {% if error %}
+            <div class="notice err">{{ error }}</div>
+          {% endif %}
+
+          {% if messages %}
+            {% for msg in messages %}
+              <article class="bubble {{ msg.direction }}">
+                <div class="bubble-head">
+                  {% if msg.direction == "bot" %}
+                    {% set state = msg.delivery_state or "sent" %}
+                    <span class="delivery-wrap">
+                      <span class="delivery {{ state }}">
+                        {% if state == "sent" %}доставлено{% elif state == "failed" %}ошибка{% else %}в очереди{% endif %}
+                      </span>
+                      <button class="delivery-toggle" type="button" aria-label="Показать детали">›</button>
+                    </span>
+                  {% endif %}
+                </div>
+                {% if msg.direction == "bot" %}
+                  <div class="bubble-debug">
+                    {{ msg.direction }} / {{ msg.source }}{% if msg.max_message_mid %} | mid: {{ msg.max_message_mid }}{% endif %}
+                  </div>
+                {% endif %}
+                <div class="bubble-text">{{ msg.text }}</div>
+                {% if msg.image_url %}
+                  <img src="{{ msg.image_url }}" alt="image" />
+                {% endif %}
+                {% if msg.direction == "bot" and msg.delivery_state == "failed" %}
+                  <div class="delivery-error">{{ msg.delivery_error }}</div>
+                {% endif %}
+              </article>
+            {% endfor %}
+          {% else %}
+            <div class="empty">В этом чате пока нет сообщений.</div>
+          {% endif %}
+        </div>
+
+        <section class="compose">
+          <form method="post" action="/mini/manager/chats/{{ active_thread.conversation_id }}/send?token={{ token }}" enctype="multipart/form-data">
+            <input type="hidden" name="q" value="{{ query }}" />
+            <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
+            {% if folder_filter is not none %}
+              <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
+            {% endif %}
+            <div class="compose-row">
+              <label class="attach-wrap" title="Прикрепить файл">
+                📎
+                <input type="file" name="photo" accept=".png,.jpg,.jpeg,.gif,.webp" />
+              </label>
+              <input
+                id="message-input"
+                type="text"
+                name="text"
+                autocomplete="off"
+                placeholder="Введите сообщение или / для быстрых ответов"
+              />
+              <button class="send-btn" type="submit">Отправить</button>
+            </div>
+            <div id="slash-menu" class="slash-menu"></div>
+          </form>
+        </section>
+      {% else %}
+        <div class="empty">Выберите чат слева</div>
+      {% endif %}
+    </main>
+  </div>
+
+  <div class="folder-create-pop" id="folder-create-pop">
+    <div class="folder-create-pop-card">
+      <h3>Новая папка</h3>
+      <form class="folder-create-pop-form" method="post" action="/mini/manager/chats/folders?token={{ token }}">
+        <input type="hidden" name="q" value="{{ query }}" />
+        <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
+        {% if folder_filter is not none %}
+          <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
+        {% endif %}
+        <input type="text" name="name" placeholder="Название папки" required />
+        <button type="submit" class="folder-close">Создать</button>
+      </form>
+      <div class="folder-create-pop-actions">
+        <button type="button" class="folder-create-cancel" data-close-folder-create>Отмена</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const input = document.getElementById("message-input");
+      const menu = document.getElementById("slash-menu");
+      if (!input || !menu) return;
+
+      const options = {{ admin_quick_options | tojson }};
+      let visible = [];
+
+      const hideMenu = () => {
+        menu.style.display = "none";
+        menu.innerHTML = "";
+      };
+
+      const applyCommand = (cmd) => {
+        input.value = "/" + cmd;
+        input.focus();
+        hideMenu();
+      };
+
+      const renderMenu = (items) => {
+        if (!items.length) {
+          hideMenu();
+          return;
+        }
+        visible = items;
+        menu.innerHTML = items
+          .map((item) => `<div class="slash-item" data-cmd="${item.command}">/${item.command} — ${item.title}</div>`)
+          .join("");
+        menu.style.display = "block";
+      };
+
+      menu.addEventListener("mousedown", (e) => {
+        const target = e.target.closest(".slash-item");
+        if (!target) return;
+        e.preventDefault();
+        applyCommand(target.dataset.cmd || "");
+      });
+
+      input.addEventListener("input", () => {
+        const val = input.value || "";
+        if (!val.startsWith("/")) {
+          hideMenu();
+          return;
+        }
+        const needle = val.slice(1).trim().toLowerCase();
+        const filtered = options.filter((opt) => opt.command.toLowerCase().includes(needle)).slice(0, 30);
+        renderMenu(filtered);
+      });
+
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          hideMenu();
+          return;
+        }
+        if (e.key === "Enter" && menu.style.display === "block" && visible.length === 1) {
+          e.preventDefault();
+          applyCommand(visible[0].command);
+        }
+      });
+
+      input.addEventListener("blur", () => {
+        setTimeout(hideMenu, 120);
+      });
+    })();
+
+    (() => {
+      const threads = Array.from(document.querySelectorAll(".thread[data-thread-id]"));
+      if (!threads.length) return;
+
+      const folders = {{ chat_folders | tojson }};
+      const token = encodeURIComponent("{{ token }}");
+      const currentQ = encodeURIComponent("{{ query }}");
+      const currentView = encodeURIComponent("chat");
+      const currentFolderId = {{ folder_filter if folder_filter is not none else "null" }};
+      let selectedThreadId = null;
+      let longPressTimer = null;
+
+      const ctx = document.createElement("div");
+      ctx.className = "context-menu";
+      document.body.appendChild(ctx);
+
+      const pop = document.createElement("div");
+      pop.className = "folder-pop";
+      pop.innerHTML = `
+        <div class="folder-pop-card">
+          <h3 class="folder-pop-title">Поместить в папку</h3>
+          <div class="folder-actions" id="folder-actions"></div>
+          <form class="folder-create" id="folder-create-form">
+            <input id="new-folder-name" name="name" placeholder="Новая папка" />
+            <button type="submit">Создать</button>
+          </form>
+          <button class="folder-close" type="button" id="folder-close-btn">Закрыть</button>
+        </div>
+      `;
+      document.body.appendChild(pop);
+
+      const hideCtx = () => {
+        ctx.style.display = "none";
+        ctx.innerHTML = "";
+      };
+      const hidePop = () => {
+        pop.style.display = "none";
+      };
+      const currentFolderParam = () => currentFolderId === null ? "" : `&folder_id=${encodeURIComponent(String(currentFolderId))}`;
+
+      const openCtx = (x, y, threadId, unread) => {
+        selectedThreadId = threadId;
+        ctx.innerHTML = "";
+
+        if (!unread) {
+          const unreadBtn = document.createElement("button");
+          unreadBtn.type = "button";
+          unreadBtn.textContent = "Отметить непрочитанным";
+          unreadBtn.addEventListener("click", async () => {
+            hideCtx();
+            await fetch(`/mini/manager/chats/${threadId}/mark-unread?token=${token}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: `q=${currentQ}&view=${currentView}${currentFolderParam()}`,
+            });
+            window.location.reload();
+          });
+          ctx.appendChild(unreadBtn);
+        }
+
+        const folderBtn = document.createElement("button");
+        folderBtn.type = "button";
+        folderBtn.textContent = "Поместить в папку";
+        folderBtn.addEventListener("click", () => {
+          hideCtx();
+          renderFolderButtons();
+          pop.style.display = "flex";
+        });
+        ctx.appendChild(folderBtn);
+
+        ctx.style.left = `${Math.max(8, x)}px`;
+        ctx.style.top = `${Math.max(8, y)}px`;
+        ctx.style.display = "block";
+      };
+
+      const renderFolderButtons = () => {
+        const actions = pop.querySelector("#folder-actions");
+        actions.innerHTML = "";
+        const noFolder = document.createElement("button");
+        noFolder.type = "button";
+        noFolder.className = "folder-btn";
+        noFolder.textContent = "Без папки";
+        noFolder.addEventListener("click", async () => {
+          if (!selectedThreadId) return;
+          await fetch(`/mini/manager/chats/${selectedThreadId}/move-folder?token=${token}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: `folder_id=&q=${currentQ}&view=${currentView}&current_folder_id=${currentFolderId === null ? "" : encodeURIComponent(String(currentFolderId))}`,
+          });
+          window.location.reload();
+        });
+        actions.appendChild(noFolder);
+
+        folders.forEach((folder) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "folder-btn";
+          btn.textContent = folder.name;
+          btn.addEventListener("click", async () => {
+            if (!selectedThreadId) return;
+            await fetch(`/mini/manager/chats/${selectedThreadId}/move-folder?token=${token}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: `folder_id=${encodeURIComponent(String(folder.id))}&q=${currentQ}&view=${currentView}&current_folder_id=${currentFolderId === null ? "" : encodeURIComponent(String(currentFolderId))}`,
+            });
+            window.location.reload();
+          });
+          actions.appendChild(btn);
+        });
+      };
+
+      document.addEventListener("click", (e) => {
+        if (!ctx.contains(e.target)) hideCtx();
+      });
+      window.addEventListener("resize", hideCtx);
+      pop.querySelector("#folder-close-btn").addEventListener("click", hidePop);
+      pop.addEventListener("click", (e) => {
+        if (e.target === pop) hidePop();
+      });
+
+      pop.querySelector("#folder-create-form").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        if (!selectedThreadId) return;
+        const input = pop.querySelector("#new-folder-name");
+        const name = (input.value || "").trim();
+        if (!name) return;
+        await fetch(`/mini/manager/chats/folders?token=${token}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `name=${encodeURIComponent(name)}&conversation_id=${encodeURIComponent(String(selectedThreadId))}&q=${currentQ}&view=${currentView}${currentFolderParam()}`,
+        });
+        window.location.reload();
+      });
+
+      threads.forEach((threadEl) => {
+        const threadId = threadEl.dataset.threadId;
+        const unread = threadEl.dataset.threadUnread === "1";
+
+        threadEl.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          openCtx(e.clientX, e.clientY, threadId, unread);
+        });
+
+        threadEl.addEventListener("touchstart", (e) => {
+          const touch = e.touches[0];
+          longPressTimer = setTimeout(() => {
+            openCtx(touch.clientX, touch.clientY, threadId, unread);
+          }, 550);
+        }, { passive: true });
+        threadEl.addEventListener("touchend", () => {
+          if (longPressTimer) clearTimeout(longPressTimer);
+        });
+        threadEl.addEventListener("touchmove", () => {
+          if (longPressTimer) clearTimeout(longPressTimer);
+        });
+      });
+    })();
+
+    (() => {
+      const popup = document.getElementById("folder-create-pop");
+      if (!popup) return;
+      const openButtons = Array.from(document.querySelectorAll("[data-open-folder-create]"));
+      const closeButtons = Array.from(popup.querySelectorAll("[data-close-folder-create]"));
+
+      const openPopup = () => {
+        popup.style.display = "flex";
+        const input = popup.querySelector("input[name='name']");
+        if (input) input.focus();
+      };
+      const closePopup = () => {
+        popup.style.display = "none";
+      };
+
+      openButtons.forEach((btn) => btn.addEventListener("click", openPopup));
+      closeButtons.forEach((btn) => btn.addEventListener("click", closePopup));
+      popup.addEventListener("click", (e) => {
+        if (e.target === popup) closePopup();
+      });
+    })();
+
+    (() => {
+      const bubbles = Array.from(document.querySelectorAll(".bubble.bot"));
+      bubbles.forEach((bubble) => {
+        const toggle = bubble.querySelector(".delivery-toggle");
+        const debug = bubble.querySelector(".bubble-debug");
+        if (toggle && debug) {
+          toggle.addEventListener("click", (e) => {
+            e.preventDefault();
+            debug.classList.toggle("open");
+            toggle.classList.toggle("open");
+          });
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
