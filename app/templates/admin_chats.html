@@ -30,7 +30,7 @@
     }
     .app {
       display: grid;
-      grid-template-columns: 460px 1fr;
+      grid-template-columns: minmax(0, 460px) minmax(0, 1fr);
       height: 100vh;
     }
     .chat-list {
@@ -39,6 +39,7 @@
       min-width: 0;
       display: grid;
       grid-template-rows: auto auto auto 1fr;
+      overflow: hidden;
     }
     .list-head {
       padding: 12px 14px 10px;
@@ -60,8 +61,9 @@
     }
     .top-actions {
       display: flex;
-      gap: 8px;
-      align-items: center;
+      flex-direction: column;
+      gap: 6px;
+      align-items: stretch;
       margin-top: auto;
       padding: 10px 8px 10px;
       border-top: 1px solid var(--line);
@@ -69,6 +71,9 @@
       position: sticky;
       bottom: 0;
       z-index: 2;
+    }
+    .top-actions form {
+      margin: 0;
     }
     .top-link {
       text-decoration: none;
@@ -78,6 +83,8 @@
       border-radius: 9px;
       background: var(--accent-soft);
       padding: 6px 8px;
+      width: 100%;
+      text-align: center;
     }
     .top-btn {
       border: 0;
@@ -88,6 +95,7 @@
       font-size: 12px;
       font-weight: 700;
       cursor: pointer;
+      width: 100%;
     }
     .search-form {
       display: grid;
@@ -298,6 +306,7 @@
       height: 100vh;
       display: grid;
       grid-template-rows: auto 1fr auto;
+      overflow: hidden;
     }
     .chat-header {
       padding: 10px 12px;
