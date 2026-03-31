@@ -239,6 +239,20 @@ def run() -> None:
         assert webhook_manager_ticket_reply.status_code == 200
         assert webhook_manager_ticket_reply.json().get("ticket_reply_sent") is True
 
+        webhook_manager_ticket_reply_with_mention = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "message_created",
+                "message": {
+                    "sender": {"user_id": "90000"},
+                    "recipient": {"chat_id": "mgr-chat-1", "chat_type": "dialog"},
+                    "body": {"text": "/reply@maxbot T-1001 Проверка через mention"},
+                },
+            },
+        )
+        assert webhook_manager_ticket_reply_with_mention.status_code == 200
+        assert webhook_manager_ticket_reply_with_mention.json().get("ticket_reply_sent") is True
+
         webhook_manager = client.post(
             "/webhook/max",
             json={

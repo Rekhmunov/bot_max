@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from dataclasses import dataclass
 from typing import Optional
@@ -672,11 +673,18 @@ def _extract_contact_from_manager_text(text: str) -> str | None:
 
 
 def _parse_ticket_identifier(raw_value: str) -> int | None:
-    value = raw_value.strip().strip("[]").upper()
+    value = (raw_value or "").strip()
+    if not value:
+        return None
+    value = value.strip("[](){}<>")
+    value = value.replace("Т", "T").replace("т", "t")
+    value = value.replace("–", "-").replace("—", "-")
+    value = value.upper()
     if value.startswith("T-"):
         value = value[2:]
     elif value.startswith("T"):
         value = value[1:]
+    value = value.strip()
     if not value.isdigit():
         return None
     return int(value)
@@ -717,20 +725,25 @@ def _resolve_conversation_by_ticket(db: Session, ticket_no: int) -> Conversation
 
 
 def _parse_manager_ticket_reply(text_value: str) -> tuple[int, str] | None:
-    normalized = text_value.strip()
+    normalized = (text_value or "").strip()
     if not normalized:
         return None
-    lowered = normalized.lower()
-    if not (lowered.startswith("/reply ") or lowered.startswith("/r ")):
+    # Supports:
+    # /reply T-1001 текст
+    # /reply@botname T-1001 текст
+    # /r T-1001 текст
+    # /reply [T-1001] текст
+    match = re.match(
+        r"^/(?:reply|r)(?:@\S+)?\s+([^\s]+)\s+(.+)$",
+        normalized,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not match:
         return None
-
-    parts = normalized.split(maxsplit=2)
-    if len(parts) < 3:
-        return None
-    ticket_no = _parse_ticket_identifier(parts[1])
+    ticket_no = _parse_ticket_identifier(match.group(1))
     if ticket_no is None:
         return None
-    payload = parts[2].strip()
+    payload = (match.group(2) or "").strip()
     if not payload:
         return None
     return ticket_no, payload
@@ -1053,19 +1066,18 @@ async def _apply_ticket_action(
 
 
 def _parse_manager_ticket_action(text_value: str) -> tuple[str, int] | None:
-    normalized = text_value.strip()
+    normalized = (text_value or "").strip()
     if not normalized:
         return None
-    parts = normalized.split(maxsplit=1)
-    command = parts[0].strip().lower()
-    if command not in {"/take", "/done"}:
+    # Supports /take T-1001 and /take@bot T-1001 (same for /done).
+    match = re.match(r"^/(take|done)(?:@\S+)?\s+([^\s]+)\s*$", normalized, flags=re.IGNORECASE)
+    if not match:
         return None
-    if len(parts) < 2:
-        return None
-    ticket_no = _parse_ticket_identifier(parts[1])
+    action = match.group(1).lower()
+    ticket_no = _parse_ticket_identifier(match.group(2))
     if ticket_no is None:
         return None
-    return command.lstrip("/"), ticket_no
+    return action, ticket_no
 
 
 def _parse_manager_callback_action(
