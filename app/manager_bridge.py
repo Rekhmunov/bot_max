@@ -395,13 +395,19 @@ async def _dispatch_outbox(
     def _is_chat_not_found_error(result_value: dict) -> bool:
         if not isinstance(result_value, dict):
             return False
-        if result_value.get("status_code") != 404:
+        raw_status = result_value.get("status_code")
+        try:
+            status_code = int(raw_status) if raw_status is not None else None
+        except (TypeError, ValueError):
+            status_code = None
+        if status_code != 404:
             return False
         response = result_value.get("response")
         if not isinstance(response, dict):
             return False
         code = str(response.get("code") or "").strip().lower()
-        return code == "chat.not_found"
+        message = str(response.get("message") or "").strip().lower()
+        return "chat.not_found" in code or "chat " in message and " not found" in message
 
     if target_chat_id:
         result = await _send_by_chat()
@@ -833,8 +839,8 @@ async def handle_customer_event(
         return {"ok": True, "flow": "phone_verified"}
 
     if not meta.phone_verified and event.text.strip():
-        manager_chat_id = settings.manager_account_id.strip()
-        if manager_chat_id:
+        manager_user_id = settings.manager_account_id.strip()
+        if manager_user_id:
             ticket_line = _render_ticket_line(meta, customer, event)
             text = event.text.strip()
             manager_text = (
@@ -846,8 +852,8 @@ async def handle_customer_event(
             ok = await enqueue_and_process_send_text(
                 db,
                 conversation_id=conversation.id,
-                target_chat_id=manager_chat_id,
-                target_user_id=settings.manager_account_id.strip(),
+                target_chat_id="",
+                target_user_id=manager_user_id,
                 text=manager_text,
                 source="bot_system",
             )
@@ -901,8 +907,8 @@ async def forward_customer_message_to_manager(
     event: MaxWebhookEvent,
     extra_header: str | None,
 ) -> ForwardResult:
-    manager_chat_id = settings.manager_account_id.strip()
-    if not manager_chat_id:
+    manager_user_id = settings.manager_account_id.strip()
+    if not manager_user_id:
         return ForwardResult(ok=False, message="manager_account_id is empty")
 
     ticket_line = _render_ticket_line(meta, customer, event)
@@ -913,8 +919,8 @@ async def forward_customer_message_to_manager(
     ok = await enqueue_and_process_send_text(
         db,
         conversation_id=conversation.id,
-        target_chat_id=manager_chat_id,
-        target_user_id=settings.manager_account_id.strip(),
+        target_chat_id="",
+        target_user_id=manager_user_id,
         text=manager_text,
         source="bot_system",
     )
@@ -952,8 +958,8 @@ async def handle_manager_message(
     settings: BotSettings,
     event: MaxWebhookEvent,
 ) -> dict:
-    manager_chat_id = settings.manager_account_id.strip()
-    if str(event.sender_id).strip() != str(manager_chat_id).strip():
+    manager_user_id = settings.manager_account_id.strip()
+    if str(event.sender_id).strip() != str(manager_user_id).strip():
         return {"ok": True, "ignored": "not_manager_sender"}
 
     target_conversation = None
@@ -966,8 +972,8 @@ async def handle_manager_message(
 
     if target_conversation is None:
         # Operational helper to manager chat can stay as direct send.
-        await client.send_text(
-            chat_id=manager_chat_id,
+        await client.send_text_to_user(
+            user_id=manager_user_id,
             text=(
                 "Нужно отвечать reply на карточку тикета.\n"
                 "Нажмите «Ответить» на сообщение вида 🆕 [T-xxxx] ..."
