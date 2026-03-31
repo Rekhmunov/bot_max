@@ -37,7 +37,15 @@ class MaxWebhookEvent(BaseModel):
     contact_phone: str | None = Field(default=None)
     sender_first_name: str | None = Field(default=None)
     sender_username: str | None = Field(default=None)
+    update_id: str | None = Field(default=None)
     raw_payload: dict[str, Any] = Field(default_factory=dict)
+
+    def event_uid_value(self) -> str | None:
+        if self.update_id:
+            return f"update:{self.update_id}"
+        if self.message_mid:
+            return f"message:{self.message_mid}"
+        return None
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "MaxWebhookEvent | None":
@@ -129,5 +137,10 @@ class MaxWebhookEvent(BaseModel):
                 user.get("name"),
             ),
             sender_username=_pick_first(sender.get("username"), user.get("username")),
+            update_id=(
+                str(_pick_first(payload.get("update_id"), payload.get("updateId")))
+                if _pick_first(payload.get("update_id"), payload.get("updateId")) is not None
+                else None
+            ),
             raw_payload=payload,
         )

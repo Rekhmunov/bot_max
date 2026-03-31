@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from uuid import uuid4
 
@@ -16,7 +17,9 @@ from app.manager_bridge import (
     TEMPLATE_AFTER_PHONE,
     TEMPLATE_PRESTART,
     TEMPLATE_START,
+    delete_conversation,
     ensure_default_templates,
+    get_delivery_metrics,
     get_template_text,
     list_active_quick_replies,
     load_chat_messages,
@@ -33,7 +36,7 @@ from app.manager_bridge import (
     update_chat_message_text,
 )
 from app.max_client import MaxClient
-from app.models import QuickReply
+from app.models import QuickReply, WebhookEvent
 from app.schemas import MaxWebhookEvent
 from app.services import get_or_create_settings
 from fastapi.templating import Jinja2Templates
@@ -260,17 +263,16 @@ def delete_quick_reply(
 
 
 @app.get("/admin/chats", response_class=HTMLResponse)
-def admin_chats_page(
+async def admin_chats_page(
     request: Request,
     conversation_id: int | None = None,
     q: str = "",
+    quick_query: str = "",
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    import asyncio
-
     # Opportunistically drain due queue items on every admin page load.
-    asyncio.run(process_outbox_queue(db, limit=30))
+    await process_outbox_queue(db, limit=30)
 
     sent_flag = request.query_params.get("sent")
     quick_flag = request.query_params.get("quick")
@@ -323,9 +325,20 @@ def admin_chats_page(
             "active_thread": active_thread,
             "messages": messages,
             "query": q,
+            "quick_query": quick_query.strip(),
             "message": op_message,
             "error": op_error,
             "quick_replies": list_active_quick_replies(db),
+            "removed": request.query_params.get("removed"),
+            "delivery_metrics": get_delivery_metrics(db),
+            "admin_quick_options": [
+                {"command": item.command, "title": item.title}
+                for item in list_active_quick_replies(db)
+            ],
+            "removed_message": (
+                "Пользователь и чат удалены" if request.query_params.get("removed") == "1"
+                else ("Не удалось удалить пользователя" if request.query_params.get("removed") == "0" else None)
+            ),
         },
     )
 
@@ -395,6 +408,39 @@ async def admin_chats_send_quick_reply(
     )
 
 
+@app.get("/admin/chats/{conversation_id}/quick-options")
+def admin_chats_quick_options(
+    conversation_id: int,
+    q: str = "",
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> dict:
+    conversation = (
+        db.query(QuickReply)
+        .filter(QuickReply.is_active.is_(True))
+        .order_by(QuickReply.command.asc())
+        .all()
+    )
+    query = q.strip().lstrip("/").lower()
+    results = []
+    for item in conversation:
+        if query:
+            hay = f"{item.command} {item.title} {item.text}".lower()
+            if query not in hay:
+                continue
+        results.append(
+            {
+                "command": item.command,
+                "title": item.title,
+                "text": item.text,
+                "has_image": bool(item.image_path),
+            }
+        )
+        if len(results) >= 12:
+            break
+    return {"conversation_id": conversation_id, "items": results}
+
+
 @app.post("/admin/chats/{conversation_id}/messages/{chat_message_id}/edit", response_class=RedirectResponse)
 async def admin_chats_edit_message(
     conversation_id: int,
@@ -448,6 +494,17 @@ async def admin_chats_retry_message(
     )
 
 
+@app.post("/admin/chats/{conversation_id}/delete-user", response_class=RedirectResponse)
+async def admin_chats_delete_conversation(
+    conversation_id: int,
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    deleted = delete_conversation(db, conversation_id=conversation_id)
+    suffix = "1" if deleted else "0"
+    return RedirectResponse(url=f"/admin/chats?removed={suffix}", status_code=302)
+
+
 @app.post(webhook_path)
 @app.post("/webhook/max")
 @app.post("/max-webhook")
@@ -461,6 +518,15 @@ async def max_webhook(
     if event is None:
         # Ignore non-message updates or malformed events without failing webhook delivery.
         return {"ok": True, "ignored": "unsupported_payload"}
+
+    # Webhook dedup by stable event UID.
+    event_uid = event.event_uid_value()
+    if event_uid:
+        seen = db.query(WebhookEvent).filter(WebhookEvent.event_uid == event_uid).first()
+        if seen:
+            return {"ok": True, "ignored": "duplicate_event"}
+        db.add(WebhookEvent(event_uid=event_uid, update_type=event.update_type))
+        db.commit()
 
     if event.update_type and event.update_type not in {"message_created", "bot_started"}:
         return {"ok": True, "ignored": event.update_type}

@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 from app.database import SessionLocal, init_db
 from app.main import app
 from app.manager_bridge import DEFAULT_TEMPLATES
-from app.models import Conversation, OutboxMessage
+from app.models import Conversation, WebhookEvent
 from uuid import uuid4
 
 
@@ -139,6 +139,22 @@ def run() -> None:
         assert webhook_manager.status_code == 200
         assert "ok" in webhook_manager.json()
 
+        # Webhook dedup by update_id
+        duplicate_payload = {
+            "update_id": "dup-evt-1",
+            "update_type": "message_created",
+            "message": {
+                "sender": {"user_id": "buyer_1", "first_name": "Иван"},
+                "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                "body": {"text": "dup test"},
+            },
+        }
+        first_dup = client.post("/webhook/max", json=duplicate_payload)
+        second_dup = client.post("/webhook/max", json=duplicate_payload)
+        assert first_dup.status_code == 200
+        assert second_dup.status_code == 200
+        assert second_dup.json().get("ignored") == "duplicate_event"
+
         with SessionLocal() as db:
             conversation = db.query(Conversation).filter(Conversation.chat_id == chat_id).first()
             assert conversation is not None
@@ -149,8 +165,8 @@ def run() -> None:
             cookies=cookies,
         )
         assert admin_chats_page.status_code == 200
-        assert "Быстрые ответы" in admin_chats_page.text
-        assert f"/{command}" in admin_chats_page.text
+        assert "slash-menu" in admin_chats_page.text
+        assert command in admin_chats_page.text
 
         admin_quick_reply = client.post(
             f"/admin/chats/{conversation_id}/quick-reply",
@@ -169,25 +185,29 @@ def run() -> None:
         )
         assert send_attempt.status_code in (302, 303)
 
-        failed_chat_message_id = None
-        with SessionLocal() as db:
-            outbox_row = (
-                db.query(OutboxMessage)
-                .filter(OutboxMessage.conversation_id == conversation_id)
-                .order_by(OutboxMessage.id.desc())
-                .first()
-            )
-            assert outbox_row is not None
-            failed_chat_message_id = outbox_row.chat_message_id
+        admin_chats_page_after_send = client.get(
+            f"/admin/chats?conversation_id={conversation_id}",
+            cookies=cookies,
+        )
+        assert admin_chats_page_after_send.status_code == 200
+        assert "доставлено" in admin_chats_page_after_send.text
+        assert 'id="message-input"' in admin_chats_page_after_send.text
+        assert 'id="slash-menu"' in admin_chats_page_after_send.text
 
-        assert failed_chat_message_id is not None
-        retry_resp = client.post(
-            f"/admin/chats/{conversation_id}/messages/{failed_chat_message_id}/retry",
+        metrics_page = client.get("/admin/chats", cookies=cookies)
+        assert metrics_page.status_code == 200
+        assert "Success rate" in metrics_page.text
+
+        delete_user = client.post(
+            f"/admin/chats/{conversation_id}/delete-user",
             cookies=cookies,
             follow_redirects=False,
         )
-        assert retry_resp.status_code in (302, 303)
-        assert "retried=" in retry_resp.headers.get("location", "")
+        assert delete_user.status_code in (302, 303)
+
+        with SessionLocal() as db:
+            stored_dup = db.query(WebhookEvent).filter(WebhookEvent.event_uid == "update:dup-evt-1").first()
+            assert stored_dup is not None
 
         webhook_unknown = client.post(
             "/webhook/max",

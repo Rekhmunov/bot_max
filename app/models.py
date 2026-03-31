@@ -93,6 +93,7 @@ class OutboxMessage(Base):
     operation: Mapped[str] = mapped_column(String(50), default="send_text")
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
     state: Mapped[str] = mapped_column(String(20), default="queued", index=True)  # queued | sent | failed
+    is_permanent_failure: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     retry_count: Mapped[int] = mapped_column(Integer, default=0)
     next_retry_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -121,6 +122,7 @@ class ConversationMeta(Base):
     phone_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     start_prompt_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     phone_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    unread_errors_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class CustomerProfile(Base):
@@ -141,3 +143,12 @@ class ManagerDispatch(Base):
     conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), index=True)
     manager_message_mid: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     dispatch_type: Mapped[str] = mapped_column(String(50), default="customer_to_manager")
+
+
+class WebhookEvent(Base):
+    __tablename__ = "webhook_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_uid: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    update_type: Mapped[str] = mapped_column(String(100), default="")
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

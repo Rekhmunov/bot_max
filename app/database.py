@@ -54,3 +54,22 @@ def _ensure_lightweight_migrations() -> None:
                 )
             if "delivery_next_retry_at" not in chat_columns:
                 conn.execute(text("ALTER TABLE chat_messages ADD COLUMN delivery_next_retry_at DATETIME"))
+
+        if "conversation_meta" in table_names:
+            meta_columns = {col["name"] for col in inspector.get_columns("conversation_meta")}
+            if "unread_errors_count" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN unread_errors_count INTEGER DEFAULT 0")
+                )
+
+        if "outbox_messages" in table_names:
+            outbox_columns = {col["name"] for col in inspector.get_columns("outbox_messages")}
+            if "is_permanent_failure" not in outbox_columns:
+                conn.execute(
+                    text("ALTER TABLE outbox_messages ADD COLUMN is_permanent_failure INTEGER DEFAULT 0")
+                )
+
+        if "webhook_events" in table_names:
+            webhook_columns = {col["name"] for col in inspector.get_columns("webhook_events")}
+            if "event_uid" not in webhook_columns and "event_key" in webhook_columns:
+                conn.execute(text("ALTER TABLE webhook_events RENAME COLUMN event_key TO event_uid"))

@@ -3,255 +3,577 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Чаты покупателей</title>
+  <title>Max Admin Chats</title>
   <style>
     :root {
-      --bg: #f6f8fc;
-      --line: #dbe1eb;
-      --text: #202637;
-      --muted: #637089;
-      --primary: #2459f2;
-      --card: #ffffff;
-      --ok: #e9f9ef;
-      --err: #fde9e9;
+      --bg: #f3f5f8;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --line: #e2e6ef;
+      --text: #1f2430;
+      --muted: #6d7688;
+      --accent: #2f6df6;
+      --accent-soft: #ebf2ff;
+      --danger: #e34a4a;
+      --danger-soft: #feecec;
+      --ok-soft: #e9f8ef;
+      --ok: #207a49;
+      --failed: #b12424;
+      --shadow: 0 8px 28px rgba(18, 30, 52, 0.08);
     }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: Arial, sans-serif; color: var(--text); background: var(--bg); }
-    .top {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 12px 16px; background: #fff; border-bottom: 1px solid var(--line);
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
     }
-    .top a { color: var(--primary); text-decoration: none; font-weight: 700; }
-    .layout { display: grid; grid-template-columns: 360px 1fr; height: calc(100vh - 58px); }
-    .left { border-right: 1px solid var(--line); background: #fff; overflow: auto; }
-    .right { overflow: auto; padding: 14px; }
-    .search { padding: 12px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: #fff; }
-    .search form { display: flex; gap: 8px; }
-    .search input { flex: 1; padding: 10px; border: 1px solid var(--line); border-radius: 8px; }
-    .search button { border: 0; border-radius: 8px; background: var(--primary); color: #fff; padding: 10px 12px; font-weight: 700; }
-    .thread {
-      display: block; text-decoration: none; color: inherit;
-      padding: 12px; border-bottom: 1px solid #eef2f8;
+    .app {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      height: 100vh;
     }
-    .thread:hover { background: #f8faff; }
-    .thread.active { background: #edf3ff; }
-    .thread .name { font-weight: 700; margin-bottom: 4px; }
-    .thread .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
-    .thread .preview { color: #384052; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
-    .header { margin-bottom: 12px; }
-    .header h2 { margin: 0 0 4px; }
-    .header .meta { color: var(--muted); font-size: 13px; }
-    .notice { margin-bottom: 10px; padding: 8px 10px; border-radius: 8px; font-size: 13px; }
-    .notice.ok { background: var(--ok); }
-    .notice.error { background: var(--err); }
-    .messages { display: flex; flex-direction: column; gap: 10px; max-height: 55vh; overflow: auto; margin-bottom: 12px; }
-    .msg { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: #fff; }
-    .msg.customer { background: #f7fbff; }
-    .msg .meta { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-    .delivery {
-      display: inline-flex;
+    .sidebar {
+      border-right: 1px solid var(--line);
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .brand {
+      padding: 14px 14px 10px;
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      gap: 10px;
+    }
+    .brand-top {
+      display: flex;
       align-items: center;
-      gap: 4px;
-      margin-left: 8px;
-      padding: 2px 7px;
-      border-radius: 999px;
-      font-size: 11px;
-      font-weight: 700;
-      vertical-align: middle;
+      justify-content: space-between;
+      gap: 10px;
     }
-    .delivery.sent { background: #e9f9ef; color: #237447; }
-    .delivery.queued { background: #edf3ff; color: #1f4fd8; }
-    .delivery.failed { background: #fff1f1; color: #b72323; }
-    .delivery-error {
-      margin-top: 6px;
-      color: #b72323;
+    .brand-title {
+      font-size: 18px;
+      font-weight: 800;
+      letter-spacing: 0.2px;
+    }
+    .top-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .top-link {
+      text-decoration: none;
+      color: var(--accent);
       font-size: 12px;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .msg .text { white-space: pre-wrap; }
-    .msg img { margin-top: 8px; max-width: 220px; border-radius: 8px; border: 1px solid var(--line); }
-    .inline-actions { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
-    .inline-actions form { display: inline-flex; gap: 6px; align-items: center; }
-    .inline-actions input[type="text"] { padding: 6px; border: 1px solid var(--line); border-radius: 6px; min-width: 210px; }
-    .inline-actions button { border: 0; border-radius: 6px; padding: 7px 10px; cursor: pointer; }
-    .btn-edit { background: #edf3ff; color: #1f4fd8; }
-    .btn-del { background: #fff1f1; color: #b72323; }
-    .send-box form { display: grid; gap: 8px; }
-    .send-box textarea { min-height: 84px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
-    .send-box input[type="file"] { border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff; }
-    .send-box button { border: 0; border-radius: 8px; background: var(--primary); color: #fff; padding: 10px 12px; font-weight: 700; }
-    .quick-box {
-      margin-top: 12px;
-      border-top: 1px dashed var(--line);
-      padding-top: 10px;
-    }
-    .quick-title { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
-    .quick-list { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-    .quick-list form { display: inline-flex; }
-    .quick-btn {
-      border: 1px solid #c9d7ff;
-      background: #edf3ff;
-      color: #1f4fd8;
-      border-radius: 999px;
-      padding: 6px 10px;
-      cursor: pointer;
-      font-size: 13px;
       font-weight: 700;
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: var(--accent-soft);
     }
-    .quick-manual {
+    .top-btn {
+      border: 0;
+      background: #f0f3f9;
+      color: #4f596d;
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .search-form {
       display: grid;
       grid-template-columns: 1fr auto;
       gap: 8px;
     }
-    .quick-manual input {
+    .search-form input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 14px;
+      background: #fff;
+    }
+    .search-form button {
+      border: 0;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 700;
+      cursor: pointer;
+      padding: 0 14px;
+    }
+    .threads {
+      overflow: auto;
+      padding: 8px;
+      display: grid;
+      gap: 6px;
+    }
+    .thread {
+      display: block;
+      text-decoration: none;
+      color: inherit;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: #fff;
+    }
+    .thread:hover {
+      border-color: var(--line);
+      background: var(--panel-soft);
+    }
+    .thread.active {
+      border-color: #cdd9ff;
+      background: #f0f5ff;
+    }
+    .thread-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    .thread-name {
+      font-weight: 700;
+      min-width: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .thread-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .thread-preview {
+      color: #3a4254;
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .alert-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--danger);
+      flex: 0 0 auto;
+    }
+    .chat {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-width: 0;
+      height: 100vh;
+    }
+    .chat-header {
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .chat-title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 800;
+    }
+    .chat-sub {
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .danger-btn {
+      border: 0;
+      border-radius: 10px;
+      background: var(--danger-soft);
+      color: var(--failed);
+      font-size: 12px;
+      font-weight: 800;
+      padding: 8px 10px;
+      cursor: pointer;
+    }
+    .messages-wrap {
+      overflow: auto;
+      padding: 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .notice {
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    .notice.ok { background: var(--ok-soft); color: var(--ok); }
+    .notice.err { background: var(--danger-soft); color: var(--failed); }
+    .bubble {
+      max-width: 78%;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 10px 12px;
+      background: #fff;
+      box-shadow: var(--shadow);
+    }
+    .bubble.customer {
+      align-self: flex-start;
+      border-bottom-left-radius: 6px;
+      background: #f9fbff;
+    }
+    .bubble.bot {
+      align-self: flex-end;
+      border-bottom-right-radius: 6px;
+      background: #f1f6ff;
+    }
+    .bubble-meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .bubble-text { white-space: pre-wrap; word-break: break-word; }
+    .bubble img {
+      margin-top: 8px;
+      max-width: 240px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+    }
+    .delivery {
+      display: inline-block;
+      margin-left: 8px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+    }
+    .delivery.sent { background: var(--ok-soft); color: var(--ok); }
+    .delivery.queued { background: var(--accent-soft); color: var(--accent); }
+    .delivery.failed { background: var(--danger-soft); color: var(--failed); }
+    .delivery-error {
+      margin-top: 6px;
+      color: var(--failed);
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .actions {
+      margin-top: 8px;
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .actions form { display: inline-flex; gap: 6px; align-items: center; }
+    .actions input[type="text"] {
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 8px 10px;
+      padding: 6px 8px;
+      min-width: 170px;
+      font-size: 13px;
     }
-    .empty { color: var(--muted); padding: 14px; }
-    @media (max-width: 980px) {
-      .layout { grid-template-columns: 1fr; height: auto; }
-      .left { max-height: 300px; border-right: 0; border-bottom: 1px solid var(--line); }
+    .btn {
+      border: 0;
+      border-radius: 8px;
+      padding: 7px 9px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .btn.primary { background: var(--accent-soft); color: var(--accent); }
+    .btn.danger { background: var(--danger-soft); color: var(--failed); }
+    .compose {
+      border-top: 1px solid var(--line);
+      background: var(--panel);
+      padding: 10px 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .compose-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .compose input[type="text"] {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 14px;
+      background: #fff;
+    }
+    .compose input[type="file"] {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 7px 8px;
+      background: #fff;
+      font-size: 12px;
+    }
+    .compose button[type="submit"] {
+      border: 0;
+      border-radius: 12px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 800;
+      padding: 10px 14px;
+      cursor: pointer;
+    }
+    .slash-menu {
+      display: none;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      max-height: 190px;
+      overflow: auto;
+      box-shadow: var(--shadow);
+    }
+    .slash-item {
+      padding: 8px 10px;
+      cursor: pointer;
+      font-size: 13px;
+      border-bottom: 1px solid #f0f3f8;
+    }
+    .slash-item:last-child { border-bottom: 0; }
+    .slash-item:hover { background: #f5f8ff; }
+    .footer-metrics {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .empty {
+      padding: 18px;
+      color: var(--muted);
+      text-align: center;
+    }
+    @media (max-width: 1100px) {
+      .app { grid-template-columns: 300px 1fr; }
+    }
+    @media (max-width: 860px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { height: 260px; }
+      .chat { height: calc(100vh - 260px); }
+      .bubble { max-width: 90%; }
+      .compose-row { grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <div class="top">
-    <div><strong>Чаты покупателей</strong></div>
-    <div style="display:flex; gap:12px; align-items:center;">
-      <a href="/admin">Настройки бота</a>
-      <form method="post" action="/admin/logout">
-        <button type="submit" style="border:1px solid var(--line); background:#fff; border-radius:8px; padding:8px 10px; cursor:pointer;">Выйти</button>
-      </form>
-    </div>
-  </div>
-
-  <div class="layout">
-    <aside class="left">
-      <div class="search">
-        <form method="get" action="/admin/chats">
-          <input name="q" value="{{ query }}" placeholder="Поиск: имя, @username, телефон, статус, T-номер" />
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-top">
+          <div class="brand-title">MAX Chats</div>
+          <div class="top-actions">
+            <a class="top-link" href="/admin">Настройки</a>
+            <form method="post" action="/admin/logout">
+              <button class="top-btn" type="submit">Выйти</button>
+            </form>
+          </div>
+        </div>
+        <form class="search-form" method="get" action="/admin/chats">
+          <input name="q" value="{{ query }}" placeholder="Поиск по имени, телефону, T-номеру..." />
           <button type="submit">Найти</button>
         </form>
+        <div class="footer-metrics">
+          <span>Success rate: {{ delivery_metrics.success_rate }}%</span>
+          <span>Attempts: {{ delivery_metrics.total_sent_attempts }}</span>
+          <span>Avg retry: {{ delivery_metrics.avg_retry_count }}</span>
+          <span>Permanent fail: {{ delivery_metrics.permanent_failures }}</span>
+        </div>
       </div>
-      {% if threads %}
-        {% for thread in threads %}
-          <a class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %}" href="/admin/chats?conversation_id={{ thread.conversation_id }}&q={{ query }}">
-            <div class="name">
-              {% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}
-            </div>
-            <div class="meta">Статус: {{ thread.status }} | chat_id: {{ thread.chat_id }}</div>
-            <div class="preview">{{ thread.last_message_preview or "—" }}</div>
-          </a>
-        {% endfor %}
-      {% else %}
-        <div class="empty">Чаты не найдены.</div>
-      {% endif %}
+
+      <div class="threads">
+        {% if threads %}
+          {% for thread in threads %}
+            <a class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %}" href="/admin/chats?conversation_id={{ thread.conversation_id }}&q={{ query }}">
+              <div class="thread-head">
+                <div class="thread-name">
+                  {% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}
+                </div>
+                {% if thread.has_delivery_errors %}
+                  <span class="alert-dot" title="Есть ошибки доставки"></span>
+                {% endif %}
+              </div>
+              <div class="thread-meta">chat: {{ thread.chat_id }} | статус: {{ thread.status }}</div>
+              <div class="thread-preview">{{ thread.last_message_preview or "—" }}</div>
+            </a>
+          {% endfor %}
+        {% else %}
+          <div class="empty">Чаты не найдены</div>
+        {% endif %}
+      </div>
     </aside>
 
-    <main class="right">
+    <main class="chat">
       {% if active_thread %}
-        <div class="card">
-          <div class="header">
-            <h2>
+        <div class="chat-header">
+          <div>
+            <h2 class="chat-title">
               {% if active_thread.ticket_no %}[T-{{ active_thread.ticket_no }}] {% endif %}
               {{ active_thread.customer_label }}
             </h2>
-            <div class="meta">
-              chat_id: {{ active_thread.chat_id }} | статус: {{ active_thread.status }} |
-              phone_verified: {{ "да" if active_thread.phone_verified else "нет" }}
+            <div class="chat-sub">
+              chat_id: {{ active_thread.chat_id }} | phone_verified: {{ "да" if active_thread.phone_verified else "нет" }}
             </div>
           </div>
+          <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/delete-user">
+            <button type="submit" class="danger-btn">Удалить пользователя</button>
+          </form>
+        </div>
+
+        <div class="messages-wrap">
+          {% if removed == "1" %}
+            <div class="notice ok">Пользователь и его чат удалены</div>
+          {% elif removed == "0" %}
+            <div class="notice err">Не удалось удалить пользователя</div>
+          {% endif %}
 
           {% if message %}
             <div class="notice ok">{{ message }}</div>
           {% endif %}
           {% if error %}
-            <div class="notice error">{{ error }}</div>
+            <div class="notice err">{{ error }}</div>
           {% endif %}
 
-          <div class="messages">
-            {% if messages %}
-              {% for msg in messages %}
-                <div class="msg {{ msg.direction }}">
-                  <div class="meta">
-                    {{ msg.direction }} / {{ msg.source }}
-                    {% if msg.max_message_mid %} | mid: {{ msg.max_message_mid }}{% endif %}
-                    {% if msg.direction == "bot" %}
-                      {% set state = msg.delivery_state or "sent" %}
-                      <span class="delivery {{ state }}">
-                        {% if state == "sent" %}доставлено{% elif state == "failed" %}ошибка{% else %}в очереди{% endif %}
-                      </span>
+          {% if messages %}
+            {% for msg in messages %}
+              <article class="bubble {{ msg.direction }}">
+                <div class="bubble-meta">
+                  {{ msg.direction }} / {{ msg.source }}
+                  {% if msg.max_message_mid %} | mid: {{ msg.max_message_mid }}{% endif %}
+                  {% if msg.direction == "bot" %}
+                    {% set state = msg.delivery_state or "sent" %}
+                    <span class="delivery {{ state }}">
+                      {% if state == "sent" %}доставлено{% elif state == "failed" %}ошибка{% else %}в очереди{% endif %}
+                    </span>
+                  {% endif %}
+                </div>
+                <div class="bubble-text">{{ msg.text }}</div>
+                {% if msg.image_url %}
+                  <img src="{{ msg.image_url }}" alt="image" />
+                {% endif %}
+                {% if msg.direction == "bot" and msg.delivery_state == "failed" %}
+                  <div class="delivery-error">{{ msg.delivery_error }}</div>
+                {% endif %}
+
+                {% if msg.direction == "bot" %}
+                  <div class="actions">
+                    <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/edit">
+                      <input type="text" name="text" value="{{ msg.text }}" />
+                      <button class="btn primary" type="submit">Изменить</button>
+                    </form>
+                    <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/delete">
+                      <button class="btn danger" type="submit">Удалить</button>
+                    </form>
+                    {% if msg.delivery_state == "failed" %}
+                      <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/retry">
+                        <button class="btn primary" type="submit">Повторить отправку</button>
+                      </form>
                     {% endif %}
                   </div>
-                  <div class="text">{{ msg.text }}</div>
-                  {% if msg.image_url %}
-                    <img src="{{ msg.image_url }}" alt="image" />
-                  {% endif %}
-                  {% if msg.direction == "bot" and msg.delivery_state == "failed" %}
-                    <div class="delivery-error">{{ msg.delivery_error }}</div>
-                  {% endif %}
+                {% endif %}
+              </article>
+            {% endfor %}
+          {% else %}
+            <div class="empty">В этом чате пока нет сообщений.</div>
+          {% endif %}
+        </div>
 
-                  {% if msg.direction == "bot" %}
-                    <div class="inline-actions">
-                      <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/edit">
-                        <input type="text" name="text" value="{{ msg.text }}" />
-                        <button class="btn-edit" type="submit">Изменить</button>
-                      </form>
-                      <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/delete">
-                        <button class="btn-del" type="submit">Удалить</button>
-                      </form>
-                      {% if msg.delivery_state == "failed" %}
-                        <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/retry">
-                          <button class="btn-edit" type="submit">Повторить отправку</button>
-                        </form>
-                      {% endif %}
-                    </div>
-                  {% endif %}
-                </div>
-              {% endfor %}
-            {% else %}
-              <div class="empty">В этом чате пока нет сообщений.</div>
-            {% endif %}
-          </div>
-
-          <section class="send-box">
-            <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/send" enctype="multipart/form-data">
-              <textarea name="text" placeholder="Сообщение покупателю от имени бота"></textarea>
+        <section class="compose">
+          <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/send" enctype="multipart/form-data">
+            <div class="compose-row">
+              <input
+                id="message-input"
+                type="text"
+                name="text"
+                autocomplete="off"
+                placeholder="Введите сообщение или / для быстрых ответов"
+              />
               <input type="file" name="photo" accept=".png,.jpg,.jpeg,.gif,.webp" />
-              <button type="submit">Отправить в чат</button>
-            </form>
-
-            <div class="quick-box">
-              <div class="quick-title">Быстрые ответы</div>
-              {% if quick_replies %}
-                <div class="quick-list">
-                  {% for qr in quick_replies %}
-                    <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/quick-reply">
-                      <input type="hidden" name="command" value="{{ qr.command }}" />
-                      <button class="quick-btn" type="submit">/{{ qr.command }}</button>
-                    </form>
-                  {% endfor %}
-                </div>
-              {% else %}
-                <div class="empty" style="padding:0 0 8px;">Нет активных быстрых ответов.</div>
-              {% endif %}
-
-              <form class="quick-manual" method="post" action="/admin/chats/{{ active_thread.conversation_id }}/quick-reply">
-                <input type="text" name="command" placeholder="Или введите команду: /price" />
-                <button type="submit">Применить</button>
-              </form>
+              <button type="submit">Отправить</button>
             </div>
-          </section>
-        </div>
+            <div id="slash-menu" class="slash-menu"></div>
+          </form>
+        </section>
       {% else %}
-        <div class="card">
-          <div class="empty">Выберите чат слева.</div>
-        </div>
+        <div class="empty">Выберите чат слева</div>
       {% endif %}
     </main>
   </div>
+
+  <script>
+    (() => {
+      const input = document.getElementById("message-input");
+      const menu = document.getElementById("slash-menu");
+      if (!input || !menu) return;
+
+      const options = {{ admin_quick_options | tojson }};
+      let visible = [];
+
+      const hideMenu = () => {
+        menu.style.display = "none";
+        menu.innerHTML = "";
+      };
+
+      const applyCommand = (cmd) => {
+        input.value = "/" + cmd;
+        input.focus();
+        hideMenu();
+      };
+
+      const renderMenu = (items) => {
+        if (!items.length) {
+          hideMenu();
+          return;
+        }
+        visible = items;
+        menu.innerHTML = items
+          .map((item) => `<div class="slash-item" data-cmd="${item.command}">/${item.command} — ${item.title}</div>`)
+          .join("");
+        menu.style.display = "block";
+      };
+
+      menu.addEventListener("mousedown", (e) => {
+        const target = e.target.closest(".slash-item");
+        if (!target) return;
+        e.preventDefault();
+        applyCommand(target.dataset.cmd || "");
+      });
+
+      input.addEventListener("input", () => {
+        const val = input.value || "";
+        if (!val.startsWith("/")) {
+          hideMenu();
+          return;
+        }
+        const needle = val.slice(1).trim().toLowerCase();
+        const filtered = options.filter((opt) => opt.command.toLowerCase().includes(needle)).slice(0, 30);
+        renderMenu(filtered);
+      });
+
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          hideMenu();
+          return;
+        }
+        if (e.key === "Enter" && menu.style.display === "block" && visible.length === 1) {
+          e.preventDefault();
+          applyCommand(visible[0].command);
+        }
+      });
+
+      input.addEventListener("blur", () => {
+        setTimeout(hideMenu, 120);
+      });
+    })();
+  </script>
 </body>
 </html>

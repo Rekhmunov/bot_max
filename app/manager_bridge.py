@@ -69,6 +69,28 @@ class ChatThreadItem:
     status: str
     phone_verified: bool
     last_message_preview: str
+    has_delivery_errors: bool
+
+
+@dataclass
+class DeliveryStats:
+    total_sent_attempts: int
+    success_count: int
+    failed_count: int
+    retry_sum: int
+    permanent_failures: int
+
+    @property
+    def success_rate(self) -> float:
+        if self.total_sent_attempts <= 0:
+            return 0.0
+        return round((self.success_count / self.total_sent_attempts) * 100.0, 2)
+
+    @property
+    def avg_retry_count(self) -> float:
+        if self.total_sent_attempts <= 0:
+            return 0.0
+        return round(self.retry_sum / self.total_sent_attempts, 2)
 
 
 def ensure_default_templates(db: Session) -> None:
@@ -1017,6 +1039,15 @@ def load_chat_threads(db: Session, query: str = "") -> list[ChatThreadItem]:
         status = meta.status if meta else "new"
         phone_verified = bool(meta.phone_verified) if meta else False
         ticket_no = meta.ticket_no if meta else None
+        has_delivery_errors = bool(
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.conversation_id == conv.id,
+                ChatMessage.direction == "bot",
+                ChatMessage.delivery_state == "failed",
+            )
+            .first()
+        )
 
         searchable = " ".join(
             [
@@ -1041,9 +1072,79 @@ def load_chat_threads(db: Session, query: str = "") -> list[ChatThreadItem]:
                 status=status,
                 phone_verified=phone_verified,
                 last_message_preview=preview,
+                has_delivery_errors=has_delivery_errors,
             )
         )
     return items
+
+
+def delete_conversation(db: Session, conversation_id: int) -> bool:
+    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    if conversation is None:
+        return False
+    db.query(OutboxMessage).filter(OutboxMessage.conversation_id == conversation_id).delete()
+    db.query(ManagerDispatch).filter(ManagerDispatch.conversation_id == conversation_id).delete()
+    db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).delete()
+    db.query(ChatMessage).filter(ChatMessage.conversation_id == conversation_id).delete()
+    db.query(MessageLog).filter(MessageLog.conversation_id == conversation_id).delete()
+    db.delete(conversation)
+    db.commit()
+    return True
+
+
+def get_delivery_metrics(db: Session) -> DeliveryStats:
+    total = db.query(OutboxMessage).count()
+    success_count = db.query(OutboxMessage).filter(OutboxMessage.state == "sent").count()
+    failed_count = db.query(OutboxMessage).filter(OutboxMessage.state == "failed").count()
+    permanent_failures = (
+        db.query(OutboxMessage)
+        .filter(
+            OutboxMessage.state == "failed",
+            OutboxMessage.retry_count >= len(OUTBOX_RETRY_BACKOFF_SECONDS),
+        )
+        .count()
+    )
+    retry_sum = int(db.query(func.sum(OutboxMessage.retry_count)).scalar() or 0)
+    return DeliveryStats(
+        total_sent_attempts=total,
+        success_count=success_count,
+        failed_count=failed_count,
+        retry_sum=retry_sum,
+        permanent_failures=permanent_failures,
+    )
+
+
+def get_conversation_meta(db: Session, conversation_id: int) -> ConversationMeta | None:
+    return db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).first()
+
+
+def list_conversation_quick_commands(db: Session, conversation_id: int, limit: int = 8) -> list[str]:
+    recent_commands = (
+        db.query(ChatMessage.text)
+        .filter(
+            ChatMessage.conversation_id == conversation_id,
+            ChatMessage.direction == "bot",
+            ChatMessage.source.in_(["manager", "bot_system"]),
+        )
+        .order_by(ChatMessage.id.desc())
+        .limit(200)
+        .all()
+    )
+    seen: list[str] = []
+    for (text_value,) in recent_commands:
+        if not text_value:
+            continue
+        normalized = text_value.strip()
+        if not normalized.startswith("/"):
+            continue
+        command = normalized.split(maxsplit=1)[0].strip().lower()
+        if command and command not in seen:
+            seen.append(command)
+        if len(seen) >= limit:
+            break
+    if seen:
+        return seen
+    return [f"/{item.command}" for item in list_active_quick_replies(db)[:limit]]
 
 
 def load_chat_messages(db: Session, conversation_id: int) -> list[ChatMessage]:
