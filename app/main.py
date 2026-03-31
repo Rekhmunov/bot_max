@@ -297,6 +297,7 @@ async def admin_chats_page(
     conversation_id: int | None = None,
     q: str = "",
     quick_query: str = "",
+    view: str = "",
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -345,6 +346,7 @@ async def admin_chats_page(
     if active_thread:
         mark_thread_read(db, active_thread.conversation_id)
         messages = load_chat_messages(db, active_thread.conversation_id)
+    mobile_chat_view = view.strip().lower() == "chat"
 
     return templates.TemplateResponse(
         request,
@@ -360,6 +362,7 @@ async def admin_chats_page(
             "error": op_error,
             "quick_replies": list_active_quick_replies(db),
             "removed": request.query_params.get("removed"),
+            "mobile_chat_view": mobile_chat_view,
             "delivery_metrics": get_delivery_metrics(db),
             "admin_quick_options": [
                 {"command": item.command, "title": item.title}
