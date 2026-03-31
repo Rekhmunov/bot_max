@@ -134,7 +134,7 @@ def run() -> None:
                 "update_type": "message_created",
                 "message": {
                     "sender": {"user_id": "90000"},
-                    "recipient": {"chat_id": "90000", "chat_type": "dialog"},
+                    "recipient": {"chat_id": "mgr-chat-1", "chat_type": "dialog"},
                     "body": {"text": f"/{command}"},
                 },
             },
@@ -148,7 +148,7 @@ def run() -> None:
                 "update_type": "message_created",
                 "message": {
                     "sender": {"user_id": "90000"},
-                    "recipient": {"chat_id": "90000", "chat_type": "dialog"},
+                    "recipient": {"chat_id": "mgr-chat-1", "chat_type": "dialog"},
                     "link": {"message": {"mid": "reply-mid-1"}},
                     "body": {"text": f"/{command}"},
                 },

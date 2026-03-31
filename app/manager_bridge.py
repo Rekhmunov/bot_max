@@ -765,10 +765,12 @@ async def handle_customer_event(
             phone_number=event.contact_phone,
         )
 
-    is_bot_started = event.update_type == "bot_started"
+    update_type = (event.update_type or "").strip().lower()
+    is_bot_started = update_type in {"bot_started", "bot_start"}
+    is_message_event = update_type in {"", "message_created", "message_callback", "new_message"}
 
     # Message before Start (custom behavior for message_created before start)
-    if not meta.start_prompt_sent and event.update_type == "message_created" and not event.contact_phone:
+    if not meta.start_prompt_sent and is_message_event and not is_bot_started and not event.contact_phone:
         prestart_text = get_template_text(db, TEMPLATE_PRESTART)
         if prestart_text:
             await queue_only_send_text(
@@ -782,7 +784,7 @@ async def handle_customer_event(
             await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "prestart"}
 
-    if not meta.start_prompt_sent and (is_bot_started or event.update_type == "message_created"):
+    if not meta.start_prompt_sent and (is_bot_started or is_message_event):
         meta.start_prompt_sent = True
         db.add(meta)
         db.commit()
@@ -951,8 +953,8 @@ async def handle_manager_message(
     event: MaxWebhookEvent,
 ) -> dict:
     manager_chat_id = settings.manager_account_id.strip()
-    if str(event.chat_id) != str(manager_chat_id):
-        return {"ok": True, "ignored": "not_manager_chat"}
+    if str(event.sender_id).strip() != str(manager_chat_id).strip():
+        return {"ok": True, "ignored": "not_manager_sender"}
 
     target_conversation = None
     if event.link_mid:
