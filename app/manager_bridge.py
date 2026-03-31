@@ -8,6 +8,7 @@ from typing import Optional
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.max_client import MaxClient
 from app.models import (
     BotSettings,
@@ -233,19 +234,59 @@ def _next_backoff_delay(retry_count: int) -> int:
 
 def _schedule_outbox_retry(item: OutboxMessage, result: dict) -> None:
     item.state = "failed"
+    item.is_permanent_failure = False
     item.retry_count += 1
     item.last_attempt_at = _as_naive_utc(_utc_now())
-    item.last_error = json.dumps(result, ensure_ascii=False)[:2000]
+    item.last_error = _format_delivery_error(result)
     item.next_retry_at = _as_naive_utc(_utc_now() + timedelta(seconds=_next_backoff_delay(item.retry_count)))
 
 
 def _mark_outbox_sent(item: OutboxMessage, result: dict) -> None:
     item.state = "sent"
+    item.is_permanent_failure = False
     item.last_attempt_at = _as_naive_utc(_utc_now())
     item.sent_at = _as_naive_utc(_utc_now())
     item.last_error = ""
     item.external_message_mid = _extract_sent_mid(result)
     item.next_retry_at = _as_naive_utc(_utc_now())
+
+
+def _format_delivery_error(result: dict) -> str:
+    if not isinstance(result, dict):
+        return "Неизвестная ошибка доставки"
+
+    status_code = result.get("status_code")
+    response = result.get("response") if isinstance(result.get("response"), dict) else {}
+    code = str(response.get("code") or "").strip()
+    message = str(response.get("message") or "").strip()
+
+    lowered_message = message.lower()
+    lowered_code = code.lower()
+
+    if lowered_code == "chat.not_found":
+        human = "Не найден чат получателя"
+    elif "dialogs.suspended" in lowered_message or lowered_code == "chat.denied":
+        human = "Пользователь запретил сообщения от бота или не активировал диалог"
+    elif status_code == 403:
+        human = "Нет прав на отправку сообщения"
+    elif status_code == 404:
+        human = "Получатель недоступен"
+    elif result.get("error") == "http_error":
+        human = "Сетевая ошибка при отправке в Max API"
+    else:
+        human = "Ошибка отправки сообщения"
+
+    details: list[str] = []
+    if status_code:
+        details.append(f"status={status_code}")
+    if code:
+        details.append(f"code={code}")
+    if message:
+        details.append(f"message={message}")
+    if result.get("endpoint"):
+        details.append(f"endpoint={result.get('endpoint')}")
+    detail_text = "; ".join(details)
+    return f"{human} ({detail_text})"[:2000] if detail_text else human
 
 
 def _enqueue_outbox_message(
@@ -254,6 +295,7 @@ def _enqueue_outbox_message(
     conversation_id: int | None,
     chat_message_id: int | None,
     target_chat_id: str,
+    target_user_id: str | None,
     operation: str,
     payload: dict,
 ) -> OutboxMessage:
@@ -262,6 +304,7 @@ def _enqueue_outbox_message(
         chat_message_id=chat_message_id,
         target_chat_id=target_chat_id,
         operation=operation,
+        target_user_id=target_user_id or "",
         payload_json=json.dumps(payload, ensure_ascii=False),
         state="queued",
         retry_count=0,
@@ -310,22 +353,66 @@ async def _dispatch_outbox(
     except json.JSONDecodeError:
         payload = {}
 
-    if item.operation == "send_text":
-        result = await client.send_text(chat_id=item.target_chat_id, text=str(payload.get("text") or ""))
-    elif item.operation == "send_photo":
-        result = await client.send_photo(
-            chat_id=item.target_chat_id,
-            photo_url=str(payload.get("photo_url") or ""),
-            caption=str(payload.get("caption")) if payload.get("caption") is not None else None,
-        )
-    elif item.operation == "send_message":
-        result = await client.send_message(
-            chat_id=item.target_chat_id,
-            text=str(payload.get("text")) if payload.get("text") is not None else None,
-            attachments=payload.get("attachments"),
-        )
+    target_user_id = (item.target_user_id or "").strip() or None
+    target_chat_id = (item.target_chat_id or "").strip()
+
+    async def _send_by_chat() -> dict:
+        if item.operation == "send_text":
+            return await client.send_text(chat_id=target_chat_id, text=str(payload.get("text") or ""))
+        if item.operation == "send_photo":
+            return await client.send_photo(
+                chat_id=target_chat_id,
+                photo_url=str(payload.get("photo_url") or ""),
+                caption=str(payload.get("caption")) if payload.get("caption") is not None else None,
+            )
+        if item.operation == "send_message":
+            return await client.send_message(
+                chat_id=target_chat_id,
+                text=str(payload.get("text")) if payload.get("text") is not None else None,
+                attachments=payload.get("attachments"),
+            )
+        return {"success": False, "error": "unsupported_operation", "operation": item.operation}
+
+    async def _send_by_user() -> dict:
+        if not target_user_id:
+            return {"success": False, "error": "user_id_unavailable"}
+        if item.operation == "send_text":
+            return await client.send_text_to_user(user_id=target_user_id, text=str(payload.get("text") or ""))
+        if item.operation == "send_photo":
+            return await client.send_photo_to_user(
+                user_id=target_user_id,
+                photo_url=str(payload.get("photo_url") or ""),
+                caption=str(payload.get("caption")) if payload.get("caption") is not None else None,
+            )
+        if item.operation == "send_message":
+            return await client.send_message(
+                user_id=target_user_id,
+                text=str(payload.get("text")) if payload.get("text") is not None else None,
+                attachments=payload.get("attachments"),
+            )
+        return {"success": False, "error": "unsupported_operation", "operation": item.operation}
+
+    def _is_chat_not_found_error(result_value: dict) -> bool:
+        if not isinstance(result_value, dict):
+            return False
+        if result_value.get("status_code") != 404:
+            return False
+        response = result_value.get("response")
+        if not isinstance(response, dict):
+            return False
+        code = str(response.get("code") or "").strip().lower()
+        return code == "chat.not_found"
+
+    if target_chat_id:
+        result = await _send_by_chat()
+        if not (bool(result.get("success", True) or result.get("message"))) and _is_chat_not_found_error(result):
+            # For dialogs Max may reject chat_id while accepting user_id. Try fallback.
+            fallback = await _send_by_user()
+            result = fallback
+    elif target_user_id:
+        result = await _send_by_user()
     else:
-        result = {"success": False, "error": "unsupported_operation", "operation": item.operation}
+        result = {"success": False, "error": "chat_id_or_user_id_required"}
 
     ok = bool(result.get("success", True) or result.get("message"))
     retriable = _is_retriable_error(result)
@@ -359,9 +446,10 @@ async def _dispatch_outbox(
         return False, True, result
 
     item.state = "failed"
+    item.is_permanent_failure = True
     item.retry_count += 1
     item.last_attempt_at = _as_naive_utc(_utc_now())
-    item.last_error = json.dumps(result, ensure_ascii=False)[:2000]
+    item.last_error = _format_delivery_error(result)
     item.next_retry_at = _as_naive_utc(_utc_now() + timedelta(hours=24))
     db.add(item)
     db.commit()
@@ -423,6 +511,7 @@ async def enqueue_and_process_send_text(
     *,
     conversation_id: int,
     target_chat_id: str,
+    target_user_id: str | None = None,
     text: str,
     source: str,
     link_mid: str | None = None,
@@ -444,6 +533,7 @@ async def enqueue_and_process_send_text(
         conversation_id=conversation_id,
         chat_message_id=msg.id,
         target_chat_id=target_chat_id,
+        target_user_id=target_user_id,
         operation="send_text",
         payload={"text": text},
     )
@@ -456,6 +546,7 @@ async def enqueue_and_process_send_photo(
     *,
     conversation_id: int,
     target_chat_id: str,
+    target_user_id: str | None = None,
     photo_url: str,
     caption: str,
     source: str,
@@ -477,6 +568,7 @@ async def enqueue_and_process_send_photo(
         conversation_id=conversation_id,
         chat_message_id=msg.id,
         target_chat_id=target_chat_id,
+        target_user_id=target_user_id,
         operation="send_photo",
         payload={"photo_url": photo_url, "caption": caption},
     )
@@ -489,6 +581,7 @@ async def queue_only_send_text(
     *,
     conversation_id: int,
     target_chat_id: str,
+    target_user_id: str | None = None,
     text: str,
     source: str,
     link_mid: str | None = None,
@@ -510,6 +603,7 @@ async def queue_only_send_text(
         conversation_id=conversation_id,
         chat_message_id=msg.id,
         target_chat_id=target_chat_id,
+        target_user_id=target_user_id,
         operation="send_text",
         payload={"text": text},
     )
@@ -567,6 +661,7 @@ async def _send_contact_request_prompt(
     conversation_id: int,
     client: MaxClient,
     chat_id: str,
+    user_id: str | None,
     text: str,
 ) -> dict:
     full_text = (
@@ -605,6 +700,7 @@ async def _send_contact_request_prompt(
         conversation_id=conversation_id,
         chat_message_id=msg.id,
         target_chat_id=chat_id,
+        target_user_id=user_id,
         operation="send_message",
         payload={"text": full_text, "attachments": attachments},
     )
@@ -679,6 +775,7 @@ async def handle_customer_event(
                 db,
                 conversation_id=conversation.id,
                 target_chat_id=event.chat_id,
+                target_user_id=event.sender_id,
                 text=prestart_text,
                 source="bot_system",
             )
@@ -694,6 +791,7 @@ async def handle_customer_event(
                 db,
                 conversation_id=conversation.id,
                 target_chat_id=event.chat_id,
+                target_user_id=event.sender_id,
                 text=get_template_text(db, TEMPLATE_AFTER_PHONE),
                 source="bot_system",
             )
@@ -705,6 +803,7 @@ async def handle_customer_event(
             conversation_id=conversation.id,
             client=client,
             chat_id=event.chat_id,
+            user_id=event.sender_id,
             text=start_text,
         )
         return {"ok": True, "flow": "start_prompt"}
@@ -714,6 +813,7 @@ async def handle_customer_event(
             db,
             conversation_id=conversation.id,
             target_chat_id=event.chat_id,
+            target_user_id=event.sender_id,
             text=get_template_text(db, TEMPLATE_AFTER_PHONE),
             source="bot_system",
         )
@@ -745,6 +845,7 @@ async def handle_customer_event(
                 db,
                 conversation_id=conversation.id,
                 target_chat_id=manager_chat_id,
+                target_user_id=settings.manager_account_id.strip(),
                 text=manager_text,
                 source="bot_system",
             )
@@ -811,6 +912,7 @@ async def forward_customer_message_to_manager(
         db,
         conversation_id=conversation.id,
         target_chat_id=manager_chat_id,
+        target_user_id=settings.manager_account_id.strip(),
         text=manager_text,
         source="bot_system",
     )
@@ -872,6 +974,7 @@ async def handle_manager_message(
         return {"ok": True, "ignored": "reply_required"}
 
     customer_chat_id = target_conversation.chat_id
+    customer_user_id = target_conversation.customer_account_id
     text_value = event.text.strip()
     contact_from_text = _extract_contact_from_manager_text(text_value)
     if contact_from_text:
@@ -898,6 +1001,7 @@ async def handle_manager_message(
             db,
             conversation_id=target_conversation.id,
             target_chat_id=customer_chat_id,
+            target_user_id=customer_user_id,
             text=get_template_text(db, TEMPLATE_AFTER_PHONE),
             source="manager",
             link_mid=event.link_mid,
@@ -910,6 +1014,7 @@ async def handle_manager_message(
             client=client,
             conversation_id=target_conversation.id,
             customer_chat_id=customer_chat_id,
+            customer_user_id=customer_user_id,
             command_text=text_value,
         )
         return {"ok": True, "manager_command_sent": sent}
@@ -920,6 +1025,7 @@ async def handle_manager_message(
             db,
             conversation_id=target_conversation.id,
             target_chat_id=customer_chat_id,
+            target_user_id=customer_user_id,
             text=text,
             source="manager",
             link_mid=event.link_mid,
@@ -935,6 +1041,7 @@ async def send_quick_reply_to_customer(
     conversation_id: int,
     customer_chat_id: str,
     command_text: str,
+    customer_user_id: str | None = None,
     *,
     sender_prefix: str | None = "Менеджер: ",
     source: str = "manager",
@@ -960,6 +1067,7 @@ async def send_quick_reply_to_customer(
             db,
             conversation_id=conversation_id,
             target_chat_id=customer_chat_id,
+            target_user_id=customer_user_id,
             text=rendered_text,
             source=source,
         )
@@ -972,6 +1080,7 @@ async def send_quick_reply_to_customer(
             db,
             conversation_id=conversation_id,
             target_chat_id=customer_chat_id,
+            target_user_id=customer_user_id,
             photo_url=image_url,
             caption=image_caption,
             source=source,
@@ -1006,6 +1115,7 @@ async def send_admin_quick_reply(
         client=client,
         conversation_id=conversation_id,
         customer_chat_id=conversation.chat_id,
+        customer_user_id=conversation.customer_account_id,
         command_text=command_text,
         sender_prefix=None,
         source="bot_system",
@@ -1100,7 +1210,7 @@ def get_delivery_metrics(db: Session) -> DeliveryStats:
         db.query(OutboxMessage)
         .filter(
             OutboxMessage.state == "failed",
-            OutboxMessage.retry_count >= len(OUTBOX_RETRY_BACKOFF_SECONDS),
+            OutboxMessage.is_permanent_failure.is_(True),
         )
         .count()
     )
@@ -1187,6 +1297,7 @@ async def send_admin_chat_message(
             db,
             conversation_id=conversation_id,
             target_chat_id=conversation.chat_id,
+            target_user_id=conversation.customer_account_id,
             text=text,
             source="bot_system",
         )
@@ -1199,6 +1310,7 @@ async def send_admin_chat_message(
             db,
             conversation_id=conversation_id,
             target_chat_id=conversation.chat_id,
+            target_user_id=conversation.customer_account_id,
             photo_url=image_url,
             caption="Изображение от оператора",
             source="bot_system",

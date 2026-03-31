@@ -152,6 +152,17 @@ class MaxClient:
         text = f"{caption}\n{photo_url}" if caption else photo_url
         return await self.send_text(chat_id=chat_id, text=text)
 
+    async def send_photo_to_user(
+        self,
+        *,
+        user_id: str,
+        photo_url: str,
+        caption: str | None = None,
+    ) -> dict[str, Any]:
+        # Same URL-as-text fallback as send_photo, but routed by user_id.
+        text = f"{caption}\n{photo_url}" if caption else photo_url
+        return await self.send_text_to_user(user_id=user_id, text=text)
+
     async def edit_message(
         self,
         *,

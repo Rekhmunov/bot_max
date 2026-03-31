@@ -68,6 +68,10 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE outbox_messages ADD COLUMN is_permanent_failure INTEGER DEFAULT 0")
                 )
+            if "target_user_id" not in outbox_columns:
+                conn.execute(
+                    text("ALTER TABLE outbox_messages ADD COLUMN target_user_id VARCHAR(255) DEFAULT ''")
+                )
 
         if "webhook_events" in table_names:
             webhook_columns = {col["name"] for col in inspector.get_columns("webhook_events")}

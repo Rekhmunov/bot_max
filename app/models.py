@@ -90,6 +90,7 @@ class OutboxMessage(Base):
     conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), index=True, nullable=True)
     chat_message_id: Mapped[int | None] = mapped_column(ForeignKey("chat_messages.id"), index=True, nullable=True)
     target_chat_id: Mapped[str] = mapped_column(String(255), index=True)
+    target_user_id: Mapped[str] = mapped_column(String(255), default="", index=True)
     operation: Mapped[str] = mapped_column(String(50), default="send_text")
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
     state: Mapped[str] = mapped_column(String(20), default="queued", index=True)  # queued | sent | failed
