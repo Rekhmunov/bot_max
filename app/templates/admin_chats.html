@@ -121,7 +121,8 @@
     }
     .metrics { display: none; }
     .threads {
-      overflow: auto;
+      overflow-y: auto;
+      overflow-x: hidden;
       padding: 8px;
       display: grid;
       gap: 6px;
@@ -287,9 +288,16 @@
     .thread-preview {
       font-size: 14px;
       color: #3d4557;
-      white-space: nowrap;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
       overflow: hidden;
       text-overflow: ellipsis;
+      line-height: 1.25;
+      max-height: 2.5em;
     }
     .dot-new,
     .dot-error {
