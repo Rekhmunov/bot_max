@@ -1,10 +1,11 @@
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 
 from app.database import SessionLocal, init_db
 from app.main import app
 from app.manager_bridge import DEFAULT_TEMPLATES
 from app.models import ChatFolder, Conversation, WebhookEvent
-from uuid import uuid4
 
 
 def run() -> None:
@@ -234,6 +235,12 @@ def run() -> None:
         assert "доставлено" in admin_chats_page_after_send.text
         assert 'id="message-input"' in admin_chats_page_after_send.text
         assert 'id="slash-menu"' in admin_chats_page_after_send.text
+        assert "context-menu" in admin_chats_page_after_send.text
+        assert "msg-context-menu" in admin_chats_page_after_send.text
+        assert "delivery-toggle" in admin_chats_page_after_send.text
+        assert "bubble-debug" in admin_chats_page_after_send.text
+        assert "id=\"edit-message-id\"" in admin_chats_page_after_send.text
+        assert "Режим редактирования сообщения" in admin_chats_page_after_send.text
 
         mobile_list_page = client.get("/admin/chats", cookies=cookies)
         assert mobile_list_page.status_code == 200
@@ -252,16 +259,17 @@ def run() -> None:
         assert 'id="chat-screen"' in mobile_chat_page.text
         assert "chat-screen hidden-mobile" not in mobile_chat_page.text
 
+        folder_name = f"В работе {uuid4().hex[:6]}"
         create_folder = client.post(
             "/admin/chats/folders",
-            data={"name": "В работе", "q": ""},
+            data={"name": folder_name, "q": ""},
             cookies=cookies,
             follow_redirects=False,
         )
         assert create_folder.status_code in (302, 303)
 
         with SessionLocal() as db:
-            folder = db.query(ChatFolder).filter(ChatFolder.name == "В работе").first()
+            folder = db.query(ChatFolder).filter(ChatFolder.name == folder_name).first()
             assert folder is not None
             folder_id = folder.id
 
@@ -285,7 +293,7 @@ def run() -> None:
 
         folder_page = client.get("/admin/chats", cookies=cookies)
         assert folder_page.status_code == 200
-        assert "В работе" in folder_page.text
+        assert folder_name in folder_page.text
         assert "folder-chip" in folder_page.text
         assert f"/admin/chats/{conversation_id}/profile?from=chat&q=" in mobile_chat_page.text
 

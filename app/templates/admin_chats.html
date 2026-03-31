@@ -475,6 +475,74 @@
     .context-menu button:hover {
       background: #f2f6ff;
     }
+    .msg-context-menu {
+      position: fixed;
+      z-index: 1002;
+      min-width: 180px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      display: none;
+      padding: 6px;
+    }
+    .msg-context-menu button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      padding: 9px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      color: #1f2a45;
+    }
+    .msg-context-menu button:hover {
+      background: #f2f6ff;
+    }
+    .bubble-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .bubble-identity {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      min-width: 0;
+    }
+    .delivery-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .delivery-toggle {
+      border: 0;
+      background: transparent;
+      color: #6c768c;
+      font-size: 14px;
+      cursor: pointer;
+      width: 18px;
+      height: 18px;
+      line-height: 1;
+      padding: 0;
+    }
+    .delivery-toggle.open {
+      transform: rotate(90deg);
+    }
+    .bubble-debug {
+      display: none;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .bubble-debug.open { display: block; }
     .folder-pop {
       position: fixed;
       inset: 0;
@@ -674,40 +742,39 @@
 
           {% if messages %}
             {% for msg in messages %}
-              <article class="bubble {{ msg.direction }}">
-                <div class="bubble-meta">
-                  {{ msg.direction }} / {{ msg.source }}
-                  {% if msg.max_message_mid %} | mid: {{ msg.max_message_mid }}{% endif %}
+              <article
+                class="bubble {{ msg.direction }}"
+                data-message-id="{{ msg.id }}"
+                data-message-text="{{ (msg.text or '')|e }}"
+                data-message-direction="{{ msg.direction }}"
+              >
+                <div class="bubble-head">
+                  {% if msg.direction != "bot" %}
+                    <span class="bubble-identity">
+                      {{ msg.direction }} / {{ msg.source }}{% if msg.max_message_mid %} | mid: {{ msg.max_message_mid }}{% endif %}
+                    </span>
+                  {% endif %}
                   {% if msg.direction == "bot" %}
                     {% set state = msg.delivery_state or "sent" %}
-                    <span class="delivery {{ state }}">
-                      {% if state == "sent" %}доставлено{% elif state == "failed" %}ошибка{% else %}в очереди{% endif %}
+                    <span class="delivery-wrap">
+                      <span class="delivery {{ state }}">
+                        {% if state == "sent" %}доставлено{% elif state == "failed" %}ошибка{% else %}в очереди{% endif %}
+                      </span>
+                      <button class="delivery-toggle" type="button" aria-label="Показать детали">›</button>
                     </span>
                   {% endif %}
                 </div>
+                {% if msg.direction == "bot" %}
+                  <div class="bubble-debug">
+                    {{ msg.direction }} / {{ msg.source }}{% if msg.max_message_mid %} | mid: {{ msg.max_message_mid }}{% endif %}
+                  </div>
+                {% endif %}
                 <div class="bubble-text">{{ msg.text }}</div>
                 {% if msg.image_url %}
                   <img src="{{ msg.image_url }}" alt="image" />
                 {% endif %}
                 {% if msg.direction == "bot" and msg.delivery_state == "failed" %}
                   <div class="delivery-error">{{ msg.delivery_error }}</div>
-                {% endif %}
-
-                {% if msg.direction == "bot" %}
-                  <div class="actions">
-                    <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/edit">
-                      <input type="text" name="text" value="{{ msg.text }}" />
-                      <button class="btn primary" type="submit">Изменить</button>
-                    </form>
-                    <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/delete">
-                      <button class="btn danger" type="submit">Удалить</button>
-                    </form>
-                    {% if msg.delivery_state == "failed" %}
-                      <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/messages/{{ msg.id }}/retry">
-                        <button class="btn primary" type="submit">Повторить отправку</button>
-                      </form>
-                    {% endif %}
-                  </div>
                 {% endif %}
               </article>
             {% endfor %}
@@ -718,6 +785,9 @@
 
         <section class="compose">
           <form method="post" action="/admin/chats/{{ active_thread.conversation_id }}/send" enctype="multipart/form-data">
+            <input type="hidden" id="edit-message-id" name="edit_message_id" value="" />
+            <input type="hidden" name="q" value="{{ query }}" />
+            <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
             <div class="compose-row">
               <label class="attach-wrap" title="Прикрепить файл">
                 📎
@@ -731,6 +801,10 @@
                 placeholder="Введите сообщение или / для быстрых ответов"
               />
               <button class="send-btn" type="submit">Отправить</button>
+            </div>
+            <div id="edit-mode-hint" class="thread-meta" style="display:none; padding: 0 4px;">
+              Режим редактирования сообщения
+              <button id="cancel-edit-btn" type="button" class="btn primary" style="margin-left:8px;">Отмена</button>
             </div>
             <div id="slash-menu" class="slash-menu"></div>
           </form>
@@ -881,7 +955,7 @@
         noFolder.textContent = "Без папки";
         noFolder.addEventListener("click", async () => {
           if (!selectedThreadId) return;
-          await fetch(`/admin/chats/${selectedThreadId}/set-folder`, {
+          await fetch(`/admin/chats/${selectedThreadId}/move-folder`, {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body: "folder_id=",
@@ -897,7 +971,7 @@
           btn.textContent = folder.name;
           btn.addEventListener("click", async () => {
             if (!selectedThreadId) return;
-            await fetch(`/admin/chats/${selectedThreadId}/set-folder`, {
+            await fetch(`/admin/chats/${selectedThreadId}/move-folder`, {
               method: "POST",
               headers: { "Content-Type": "application/x-www-form-urlencoded" },
               body: `folder_id=${encodeURIComponent(String(folder.id))}`,
@@ -923,7 +997,7 @@
         const input = pop.querySelector("#new-folder-name");
         const name = (input.value || "").trim();
         if (!name) return;
-        await fetch(`/admin/chat-folders/create`, {
+        await fetch(`/admin/chats/folders`, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: `name=${encodeURIComponent(name)}&conversation_id=${encodeURIComponent(String(selectedThreadId))}`,
@@ -952,6 +1026,114 @@
         threadEl.addEventListener("touchmove", () => {
           if (longPressTimer) clearTimeout(longPressTimer);
         });
+      });
+    })();
+
+    (() => {
+      const activeConversationId = {{ active_thread.conversation_id if active_thread else "null" }};
+      const messageInput = document.getElementById("message-input");
+      const editIdInput = document.getElementById("edit-message-id");
+      const editHint = document.getElementById("edit-mode-hint");
+      const cancelEditBtn = document.getElementById("cancel-edit-btn");
+      const bubbles = Array.from(document.querySelectorAll(".bubble[data-message-id]"));
+      if (!messageInput || !editIdInput || !editHint || !bubbles.length || !activeConversationId) return;
+
+      const msgMenu = document.createElement("div");
+      msgMenu.id = "message-context-menu";
+      msgMenu.className = "msg-context-menu";
+      document.body.appendChild(msgMenu);
+
+      let selectedMessageId = null;
+      let selectedMessageText = "";
+      let longPressTimer = null;
+
+      const hideMsgMenu = () => {
+        msgMenu.style.display = "none";
+        msgMenu.innerHTML = "";
+      };
+
+      const clearEditMode = () => {
+        editIdInput.value = "";
+        editHint.style.display = "none";
+      };
+
+      const openMsgMenu = (x, y, bubble) => {
+        selectedMessageId = bubble.dataset.messageId;
+        selectedMessageText = bubble.dataset.messageText || "";
+        msgMenu.innerHTML = "";
+
+        const editBtn = document.createElement("button");
+        editBtn.type = "button";
+        editBtn.textContent = "Изменить";
+        editBtn.addEventListener("click", () => {
+          hideMsgMenu();
+          editIdInput.value = selectedMessageId || "";
+          messageInput.value = selectedMessageText;
+          editHint.style.display = "block";
+          messageInput.focus();
+        });
+        msgMenu.appendChild(editBtn);
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.textContent = "Удалить";
+        deleteBtn.addEventListener("click", async () => {
+          hideMsgMenu();
+          if (!selectedMessageId) return;
+          const formBody = `q=${encodeURIComponent("{{ query }}")}&view=${encodeURIComponent("{{ 'chat' if mobile_chat_view else '' }}")}`;
+          await fetch(`/admin/chats/${activeConversationId}/messages/${selectedMessageId}/delete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: formBody,
+          });
+          window.location.reload();
+        });
+        msgMenu.appendChild(deleteBtn);
+
+        msgMenu.style.left = `${Math.max(8, x)}px`;
+        msgMenu.style.top = `${Math.max(8, y)}px`;
+        msgMenu.style.display = "block";
+      };
+
+      cancelEditBtn?.addEventListener("click", () => {
+        clearEditMode();
+      });
+
+      document.addEventListener("click", (e) => {
+        if (!msgMenu.contains(e.target)) hideMsgMenu();
+      });
+      window.addEventListener("resize", hideMsgMenu);
+
+      bubbles.forEach((bubble) => {
+        if (bubble.dataset.messageDirection !== "bot") return;
+
+        bubble.addEventListener("contextmenu", (e) => {
+          e.preventDefault();
+          openMsgMenu(e.clientX, e.clientY, bubble);
+        });
+
+        bubble.addEventListener("touchstart", (e) => {
+          const touch = e.touches[0];
+          longPressTimer = setTimeout(() => {
+            openMsgMenu(touch.clientX, touch.clientY, bubble);
+          }, 550);
+        }, { passive: true });
+        bubble.addEventListener("touchend", () => {
+          if (longPressTimer) clearTimeout(longPressTimer);
+        });
+        bubble.addEventListener("touchmove", () => {
+          if (longPressTimer) clearTimeout(longPressTimer);
+        });
+
+        const toggle = bubble.querySelector(".delivery-toggle");
+        const debug = bubble.querySelector(".bubble-debug");
+        if (toggle && debug) {
+          toggle.addEventListener("click", (e) => {
+            e.preventDefault();
+            debug.classList.toggle("open");
+            toggle.classList.toggle("open");
+          });
+        }
       });
     })();
   </script>

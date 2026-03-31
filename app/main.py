@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 from pathlib import Path
+from urllib.parse import quote_plus
 from uuid import uuid4
 
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -583,11 +584,15 @@ def admin_chat_customer_profile(
 async def admin_chats_send_message(
     conversation_id: int,
     text: str = Form(""),
+    edit_message_id: int | None = Form(default=None),
     photo: UploadFile | None = File(default=None),
+    q: str = Form(""),
+    view: str = Form(""),
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     text_value = text.strip()
+    view_value = view.strip().lower()
     image_path = None
     if photo and photo.filename:
         ext = Path(photo.filename).suffix.lower()
@@ -600,6 +605,22 @@ async def admin_chats_send_message(
         target.write_bytes(content)
         image_path = f"/static/uploads/{safe_name}"
 
+    if edit_message_id is not None:
+        updated = None
+        if text_value and not image_path:
+            updated = await update_chat_message_text(
+                db=db,
+                chat_message_id=edit_message_id,
+                new_text=text_value,
+            )
+        suffix = "1" if updated else "0"
+        redirect_url = f"/admin/chats?conversation_id={conversation_id}&edited={suffix}"
+        if q.strip():
+            redirect_url += f"&q={quote_plus(q.strip())}"
+        if view_value == "chat":
+            redirect_url += "&view=chat"
+        return RedirectResponse(url=redirect_url, status_code=302)
+
     if text_value.startswith("/") and not image_path:
         sent_ok = await send_admin_quick_reply(
             db=db,
@@ -607,10 +628,12 @@ async def admin_chats_send_message(
             command_text=text_value,
         )
         suffix = "1" if sent_ok else "0"
-        return RedirectResponse(
-            url=f"/admin/chats?conversation_id={conversation_id}&quick={suffix}",
-            status_code=302,
-        )
+        redirect_url = f"/admin/chats?conversation_id={conversation_id}&quick={suffix}"
+        if q.strip():
+            redirect_url += f"&q={quote_plus(q.strip())}"
+        if view_value == "chat":
+            redirect_url += "&view=chat"
+        return RedirectResponse(url=redirect_url, status_code=302)
 
     sent_ok = await send_admin_chat_message(
         db=db,
@@ -619,10 +642,12 @@ async def admin_chats_send_message(
         image_path=image_path,
     )
     suffix = "1" if sent_ok else "0"
-    return RedirectResponse(
-        url=f"/admin/chats?conversation_id={conversation_id}&sent={suffix}",
-        status_code=302,
-    )
+    redirect_url = f"/admin/chats?conversation_id={conversation_id}&sent={suffix}"
+    if q.strip():
+        redirect_url += f"&q={quote_plus(q.strip())}"
+    if view_value == "chat":
+        redirect_url += "&view=chat"
+    return RedirectResponse(url=redirect_url, status_code=302)
 
 
 @app.post("/admin/chats/{conversation_id}/quick-reply", response_class=RedirectResponse)
@@ -701,15 +726,19 @@ async def admin_chats_edit_message(
 async def admin_chats_delete_message(
     conversation_id: int,
     chat_message_id: int,
+    q: str = Form(""),
+    view: str = Form(""),
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     removed = await remove_chat_message(db=db, chat_message_id=chat_message_id)
     suffix = "1" if removed else "0"
-    return RedirectResponse(
-        url=f"/admin/chats?conversation_id={conversation_id}&deleted={suffix}",
-        status_code=302,
-    )
+    redirect_url = f"/admin/chats?conversation_id={conversation_id}&deleted={suffix}"
+    if q.strip():
+        redirect_url += f"&q={quote_plus(q.strip())}"
+    if view.strip().lower() == "chat":
+        redirect_url += "&view=chat"
+    return RedirectResponse(url=redirect_url, status_code=302)
 
 
 @app.post(
