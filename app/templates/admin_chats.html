@@ -38,7 +38,7 @@
       background: var(--panel);
       min-width: 0;
       display: grid;
-      grid-template-rows: auto auto 1fr;
+      grid-template-rows: auto auto auto 1fr;
     }
     .list-head {
       padding: 12px 14px 10px;
@@ -119,6 +119,110 @@
       display: grid;
       gap: 6px;
       align-content: start;
+    }
+    .chat-list-body {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 92px 1fr;
+      overflow: hidden;
+    }
+    .folder-rail {
+      border-right: 1px solid var(--line);
+      background: #fbfcff;
+      min-width: 0;
+      display: grid;
+      grid-template-rows: 1fr auto;
+    }
+    .folder-rail-scroll {
+      overflow-y: auto;
+      overflow-x: hidden;
+      padding: 8px 6px;
+      display: grid;
+      gap: 6px;
+      align-content: start;
+    }
+    .folder-rail-item {
+      display: block;
+      text-decoration: none;
+      color: #3e4a66;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: #fff;
+      padding: 8px 6px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .folder-rail-item:hover {
+      border-color: var(--line);
+      background: #f5f9ff;
+    }
+    .folder-rail-item.active {
+      border-color: #cfe0ff;
+      background: #edf4ff;
+      color: #1a4fb3;
+    }
+    .folder-rail-add {
+      margin: 8px 6px;
+      border: 0;
+      border-radius: 10px;
+      height: 34px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 20px;
+      line-height: 1;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .mobile-folder-bar {
+      display: none;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+      padding: 8px 10px;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+    .mobile-folder-scroll {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding-bottom: 2px;
+    }
+    .mobile-folder-item {
+      flex: 0 0 auto;
+      text-decoration: none;
+      color: #3e4a66;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      padding: 7px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .mobile-folder-item.active {
+      border-color: #cfe0ff;
+      background: #edf4ff;
+      color: #1a4fb3;
+    }
+    .mobile-folder-add {
+      flex: 0 0 auto;
+      width: 32px;
+      height: 32px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
     }
     .thread {
       display: block;
@@ -412,33 +516,6 @@
       background: #f2f6ff;
       color: #1a4fb3;
     }
-    .folders-toolbar {
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--line);
-      background: #fff;
-    }
-    .folder-create-inline {
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 8px;
-    }
-    .folder-create-inline input {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 8px 10px;
-      font-size: 13px;
-    }
-    .folder-create-inline button {
-      border: 0;
-      border-radius: 10px;
-      background: #edf4ff;
-      color: #1a4fb3;
-      font-weight: 700;
-      padding: 8px 10px;
-      cursor: pointer;
-      font-size: 12px;
-      white-space: nowrap;
-    }
     .folder-chip {
       display: inline-block;
       margin-left: 6px;
@@ -606,6 +683,56 @@
       font-weight: 700;
       cursor: pointer;
     }
+    .folder-create-pop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(15, 24, 44, 0.35);
+      z-index: 1003;
+      padding: 16px;
+    }
+    .folder-create-pop-card {
+      width: min(420px, 100%);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .folder-create-pop-card h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .folder-create-pop-form {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+    }
+    .folder-create-pop-form input {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 14px;
+    }
+    .folder-create-pop-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .folder-create-cancel {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: #40506d;
+      padding: 9px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
 
     .mobile-only { display: none; }
     .desktop-only { display: inline-flex; }
@@ -622,6 +749,15 @@
       .chat-list.hidden-mobile,
       .chat-screen.hidden-mobile {
         display: none;
+      }
+      .chat-list-body {
+        grid-template-columns: 1fr;
+      }
+      .folder-rail {
+        display: none;
+      }
+      .mobile-folder-bar {
+        display: flex;
       }
       .chat-screen {
         border-right: 0;
@@ -666,43 +802,71 @@
           <span>Permanent fail: {{ delivery_metrics.permanent_failures }}</span>
       </div>
 
-      <div class="folders-toolbar">
-        <form class="folder-create-inline" method="post" action="/admin/chats/folders">
-          <input type="hidden" name="q" value="{{ query }}" />
-          <input type="text" name="name" placeholder="Новая папка" />
-          <button type="submit">Создать папку</button>
-        </form>
-      </div>
-
-      <div class="threads">
-        {% if threads %}
-          {% for thread in threads %}
+      <div class="mobile-folder-bar">
+        <div class="mobile-folder-scroll">
+          <a class="mobile-folder-item {% if folder_filter is none %}active{% endif %}" href="/admin/chats?q={{ query }}">Все</a>
+          <a class="mobile-folder-item {% if folder_filter == 0 %}active{% endif %}" href="/admin/chats?q={{ query }}&folder_id=0">Без папки</a>
+          {% for folder in chat_folders %}
             <a
-              class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %}"
-              href="/admin/chats?conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat"
-              data-thread-id="{{ thread.conversation_id }}"
-              data-thread-unread="{{ '1' if thread.is_unread else '0' }}"
+              class="mobile-folder-item {% if folder_filter == folder.id %}active{% endif %}"
+              href="/admin/chats?q={{ query }}&folder_id={{ folder.id }}"
+              title="{{ folder.name }}"
             >
-              <div class="thread-head">
-                <div class="thread-name">
-                  {% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}
-                  {% if thread.folder_name %}
-                    <span class="folder-chip">{{ thread.folder_name }}</span>
-                  {% endif %}
-                </div>
-                {% if thread.has_delivery_errors %}
-                  <span class="dot-error" title="Есть ошибки доставки"></span>
-                {% elif thread.is_new %}
-                  <span class="dot-new" title="Новый чат"></span>
-                {% endif %}
-              </div>
-              <div class="thread-meta">chat: {{ thread.chat_id }} | статус: {{ thread.status }}</div>
-              <div class="thread-preview">{{ thread.last_message_preview or "—" }}</div>
+              {{ folder.name }}
             </a>
           {% endfor %}
-        {% else %}
-          <div class="empty">Чаты не найдены</div>
-        {% endif %}
+        </div>
+        <button type="button" class="mobile-folder-add" data-open-folder-create aria-label="Создать папку">+</button>
+      </div>
+
+      <div class="chat-list-body">
+        <nav class="folder-rail" aria-label="Папки">
+          <div class="folder-rail-scroll">
+            <a class="folder-rail-item {% if folder_filter is none %}active{% endif %}" href="/admin/chats?q={{ query }}">Все</a>
+            <a class="folder-rail-item {% if folder_filter == 0 %}active{% endif %}" href="/admin/chats?q={{ query }}&folder_id=0">Без папки</a>
+            {% for folder in chat_folders %}
+              <a
+                class="folder-rail-item {% if folder_filter == folder.id %}active{% endif %}"
+                href="/admin/chats?q={{ query }}&folder_id={{ folder.id }}"
+                title="{{ folder.name }}"
+              >
+                {{ folder.name }}
+              </a>
+            {% endfor %}
+          </div>
+          <button type="button" class="folder-rail-add" data-open-folder-create aria-label="Создать папку">+</button>
+        </nav>
+
+        <div class="threads">
+          {% if threads %}
+            {% for thread in threads %}
+              <a
+                class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %}"
+                href="/admin/chats?conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat"
+                data-thread-id="{{ thread.conversation_id }}"
+                data-thread-unread="{{ '1' if thread.is_unread else '0' }}"
+              >
+                <div class="thread-head">
+                  <div class="thread-name">
+                    {% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}
+                    {% if thread.folder_name %}
+                      <span class="folder-chip">{{ thread.folder_name }}</span>
+                    {% endif %}
+                  </div>
+                  {% if thread.has_delivery_errors %}
+                    <span class="dot-error" title="Есть ошибки доставки"></span>
+                  {% elif thread.is_new %}
+                    <span class="dot-new" title="Новый чат"></span>
+                  {% endif %}
+                </div>
+                <div class="thread-meta">chat: {{ thread.chat_id }} | статус: {{ thread.status }}</div>
+                <div class="thread-preview">{{ thread.last_message_preview or "—" }}</div>
+              </a>
+            {% endfor %}
+          {% else %}
+            <div class="empty">Чаты не найдены</div>
+          {% endif %}
+        </div>
       </div>
     </aside>
 
@@ -813,6 +977,24 @@
         <div class="empty">Выберите чат слева</div>
       {% endif %}
     </main>
+  </div>
+
+  <div class="folder-create-pop" id="folder-create-pop">
+    <div class="folder-create-pop-card">
+      <h3>Новая папка</h3>
+      <form class="folder-create-pop-form" method="post" action="/admin/chats/folders">
+        <input type="hidden" name="q" value="{{ query }}" />
+        <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
+        {% if folder_filter is not none %}
+          <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
+        {% endif %}
+        <input type="text" name="name" placeholder="Название папки" required />
+        <button type="submit" class="folder-close">Создать</button>
+      </form>
+      <div class="folder-create-pop-actions">
+        <button type="button" class="folder-create-cancel" data-close-folder-create>Отмена</button>
+      </div>
+    </div>
   </div>
 
   <script>
@@ -1134,6 +1316,28 @@
             toggle.classList.toggle("open");
           });
         }
+      });
+    })();
+
+    (() => {
+      const popup = document.getElementById("folder-create-pop");
+      if (!popup) return;
+      const openButtons = Array.from(document.querySelectorAll("[data-open-folder-create]"));
+      const closeButtons = Array.from(popup.querySelectorAll("[data-close-folder-create]"));
+
+      const openPopup = () => {
+        popup.style.display = "flex";
+        const input = popup.querySelector("input[name='name']");
+        if (input) input.focus();
+      };
+      const closePopup = () => {
+        popup.style.display = "none";
+      };
+
+      openButtons.forEach((btn) => btn.addEventListener("click", openPopup));
+      closeButtons.forEach((btn) => btn.addEventListener("click", closePopup));
+      popup.addEventListener("click", (e) => {
+        if (e.target === popup) closePopup();
       });
     })();
   </script>
