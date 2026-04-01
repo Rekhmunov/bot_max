@@ -181,6 +181,80 @@
       box-shadow: 0 12px 26px rgba(66, 151, 255, 0.3);
     }
 
+    .modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      background: rgba(4, 8, 18, 0.68);
+      z-index: 30;
+    }
+    .modal.active {
+      display: flex;
+      animation: modalFade .2s ease;
+    }
+    @keyframes modalFade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .modal-card {
+      width: min(520px, 100%);
+      border: 1px solid rgba(149, 179, 255, 0.42);
+      border-radius: 18px;
+      background: var(--card-strong);
+      box-shadow:
+        0 38px 80px rgba(5, 10, 24, 0.82),
+        0 16px 42px rgba(27, 73, 194, 0.34),
+        inset 0 1px 0 rgba(210, 225, 255, 0.22);
+      padding: 16px;
+      position: relative;
+      animation: panelIn .2s ease forwards;
+    }
+    .modal-card::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border-radius: 18px;
+      pointer-events: none;
+      background: linear-gradient(130deg, rgba(103, 194, 255, 0.44), rgba(138, 125, 255, 0.34), transparent 46%);
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+      -webkit-mask-composite: xor;
+      padding: 1px;
+    }
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+      position: relative;
+      z-index: 1;
+    }
+    .modal-head h3 {
+      margin: 0;
+      font-size: 21px;
+      color: #eef4ff;
+    }
+    .close-btn {
+      border: 1px solid rgba(154, 183, 255, 0.42);
+      background: rgba(255, 255, 255, 0.06);
+      color: #d9e5ff;
+      border-radius: 10px;
+      height: 34px;
+      width: 34px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
     .notice-stack {
       display: grid;
       gap: 8px;
@@ -476,7 +550,7 @@
           </div>
         </section>
 
-        <div class="modal {% if view == 'login' or view == 'home' %}active{% endif %}" id="modal-login">
+        <div class="modal {% if view == 'login' %}active{% endif %}" id="modal-login">
           <div class="modal-card">
             <div class="modal-head">
               <h3>Авторизация</h3>
@@ -586,7 +660,7 @@
       openModal("register");
       {% elif view == "manager_invite" %}
       openModal("manager");
-      {% elif view == "login" or view == "home" %}
+      {% elif view == "login" %}
       openModal("login");
       {% endif %}
 
