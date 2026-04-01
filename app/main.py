@@ -1511,6 +1511,17 @@ def _is_password_complex(password: str) -> tuple[bool, list[str]]:
     return len(missing) == 0, missing
 
 
+def _verify_superadmin_2fa_code(*, user: ServiceUser, code: str) -> bool:
+    """
+    Accept TOTP by default, with an optional explicit fallback code for bootstrap.
+    """
+    fallback_code = (settings.superadmin_static_2fa_code or "").strip()
+    normalized_code = (code or "").strip()
+    if fallback_code and secrets.compare_digest(normalized_code, fallback_code):
+        return True
+    return verify_totp_code(code=normalized_code, secret_b32=settings.admin_totp_secret.strip())
+
+
 @app.get("/app", response_class=HTMLResponse)
 def app_landing(
     request: Request,
@@ -1628,8 +1639,10 @@ def app_login(
             default_username=username.strip().lower(),
             view="login",
         )
-    if user.role == "superadmin" and settings.admin_totp_secret.strip():
-        if not verify_totp_code(code=totp_code, secret_b32=settings.admin_totp_secret.strip()):
+    if user.role == "superadmin" and (
+        settings.admin_totp_secret.strip() or settings.superadmin_static_2fa_code.strip()
+    ):
+        if not _verify_superadmin_2fa_code(user=user, code=totp_code):
             return _render_app_landing(
                 request,
                 login_error="Неверный 2FA код.",

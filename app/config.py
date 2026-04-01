@@ -31,6 +31,7 @@ class AppSettings(BaseSettings):
     outbox_worker_batch_size: int = 30
     secure_cookies: bool = False
     admin_totp_secret: str = ""
+    superadmin_static_2fa_code: str = ""
     billing_hook_secret: str = ""
     webhook_secret: str = ""
     default_grace_days: int = 7
