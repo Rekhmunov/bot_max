@@ -93,7 +93,7 @@
       backdrop-filter: blur(10px);
       padding: 22px;
       position: relative;
-      overflow: hidden;
+      overflow: visible;
     }
     .shell::before {
       content: "";
@@ -253,6 +253,7 @@
       background: rgba(2, 6, 15, 0.68);
       z-index: 15;
       padding: 16px;
+      overflow-y: auto;
     }
     .modal.active { display: flex; }
     .modal-card {
@@ -260,10 +261,29 @@
       border: 1px solid rgba(149, 179, 255, 0.42);
       border-radius: 18px;
       background: var(--card-strong);
-      box-shadow: var(--shadow);
+      box-shadow:
+        0 38px 80px rgba(5, 10, 24, 0.82),
+        0 16px 42px rgba(27, 73, 194, 0.34),
+        inset 0 1px 0 rgba(210, 225, 255, 0.22);
       padding: 16px;
+      max-height: min(88vh, 720px);
+      overflow: auto;
       transform: translateY(4px) scale(.99);
       animation: modalIn .2s ease forwards;
+      position: relative;
+    }
+    .modal-card::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border-radius: 18px;
+      pointer-events: none;
+      background: linear-gradient(130deg, rgba(103, 194, 255, 0.44), rgba(138, 125, 255, 0.34), transparent 46%);
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+      -webkit-mask-composite: xor;
+      padding: 1px;
     }
     @keyframes modalIn {
       to { transform: translateY(0) scale(1); }
