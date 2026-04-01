@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
 from uuid import uuid4
@@ -13,9 +15,21 @@ from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
 
 from app.auth import (
+    clear_service_session_cookie,
+    create_manager_mini_token,
+    create_manager_invite_token,
+    create_service_session,
     get_current_admin,
+    get_current_service_user,
     require_admin,
+    require_service_user,
+    revoke_all_service_sessions,
+    revoke_workspace_sessions,
+    set_service_session_cookie,
     sign_in_admin,
+    sign_in_service_user,
+    verify_manager_invite_token,
+    verify_manager_mini_claims,
     verify_manager_mini_token,
 )
 from app.config import settings
@@ -49,19 +63,34 @@ from app.manager_bridge import (
 )
 from app.max_client import MaxClient
 from app.models import (
+    AuditLog,
+    BillingEvent,
     ChatMessage,
     ChatFolder,
     Conversation,
     ConversationMeta,
     CustomerProfile,
+    ManagerInvite,
     ManagerDispatch,
     MessageLog,
     OutboxMessage,
     QuickReply,
+    ServiceUser,
+    Subscription,
+    UserSession,
     WebhookEvent,
+    Workspace,
 )
 from app.schemas import MaxWebhookEvent
-from app.services import get_or_create_settings
+from app.services import (
+    DEFAULT_WORKSPACE_ID,
+    create_service_user,
+    create_workspace_with_owner,
+    ensure_default_workspace,
+    get_or_create_settings,
+    get_workspace_by_tenant_code,
+    list_workspace_managers,
+)
 from fastapi.templating import Jinja2Templates
 
 app = FastAPI(title=settings.app_name)
@@ -72,6 +101,16 @@ webhook_path = settings.webhook_path if settings.webhook_path.startswith("/") el
 Path("app/static/uploads").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 _outbox_worker_task: asyncio.Task | None = None
+
+
+def _workspace_id_for_user(user: ServiceUser | None) -> int:
+    if user is None:
+        return DEFAULT_WORKSPACE_ID
+    return int(user.workspace_id or DEFAULT_WORKSPACE_ID)
+
+
+def _sha256(value: str) -> str:
+    return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
 
 
 async def _outbox_worker_loop() -> None:
@@ -112,7 +151,7 @@ async def shutdown() -> None:
 
 @app.get("/", response_class=RedirectResponse)
 def index() -> RedirectResponse:
-    return RedirectResponse(url="/admin")
+    return RedirectResponse(url="/app")
 
 
 @app.get("/health")
@@ -153,19 +192,29 @@ def admin_page(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    bot_settings = get_or_create_settings(db)
-    replies = db.query(QuickReply).order_by(QuickReply.command.asc()).all()
-    chat_metrics = get_chat_metrics(db)
-    delivery_metrics = get_delivery_metrics(db)
+    workspace_id = DEFAULT_WORKSPACE_ID
+    bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
+    replies = (
+        db.query(QuickReply)
+        .filter(QuickReply.workspace_id == workspace_id)
+        .order_by(QuickReply.command.asc())
+        .all()
+    )
+    chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
+    delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
     return templates.TemplateResponse(
         request,
         "admin.html",
         {
             "request": request,
             "settings": bot_settings,
-            "template_prestart": get_template_text(db, TEMPLATE_PRESTART),
-            "template_start": get_template_text(db, TEMPLATE_START),
-            "template_after_phone": get_template_text(db, TEMPLATE_AFTER_PHONE),
+            "template_prestart": get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id),
+            "template_start": get_template_text(db, TEMPLATE_START, workspace_id=workspace_id),
+            "template_after_phone": get_template_text(
+                db,
+                TEMPLATE_AFTER_PHONE,
+                workspace_id=workspace_id,
+            ),
             "quick_replies": replies,
             "webhook_path": webhook_path,
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
@@ -190,28 +239,37 @@ def update_settings(
 ) -> HTMLResponse:
     if _admin is None:
         return RedirectResponse(url="/admin/login", status_code=302)
-
-    bot_settings = get_or_create_settings(db)
+    workspace_id = DEFAULT_WORKSPACE_ID
+    bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
     bot_settings.manager_account_id = manager_account_id.strip()
     bot_settings.admin_account_id = admin_account_id.strip()
     db.add(bot_settings)
-    set_template_text(db, TEMPLATE_PRESTART, prestart_message)
-    set_template_text(db, TEMPLATE_START, start_message)
-    set_template_text(db, TEMPLATE_AFTER_PHONE, after_phone_message)
+    set_template_text(db, TEMPLATE_PRESTART, prestart_message, workspace_id=workspace_id)
+    set_template_text(db, TEMPLATE_START, start_message, workspace_id=workspace_id)
+    set_template_text(db, TEMPLATE_AFTER_PHONE, after_phone_message, workspace_id=workspace_id)
     db.commit()
 
-    replies = db.query(QuickReply).order_by(QuickReply.command.asc()).all()
-    chat_metrics = get_chat_metrics(db)
-    delivery_metrics = get_delivery_metrics(db)
+    replies = (
+        db.query(QuickReply)
+        .filter(QuickReply.workspace_id == workspace_id)
+        .order_by(QuickReply.command.asc())
+        .all()
+    )
+    chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
+    delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
     return templates.TemplateResponse(
         request,
         "admin.html",
         {
             "request": request,
             "settings": bot_settings,
-            "template_prestart": get_template_text(db, TEMPLATE_PRESTART),
-            "template_start": get_template_text(db, TEMPLATE_START),
-            "template_after_phone": get_template_text(db, TEMPLATE_AFTER_PHONE),
+            "template_prestart": get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id),
+            "template_start": get_template_text(db, TEMPLATE_START, workspace_id=workspace_id),
+            "template_after_phone": get_template_text(
+                db,
+                TEMPLATE_AFTER_PHONE,
+                workspace_id=workspace_id,
+            ),
             "quick_replies": replies,
             "webhook_path": webhook_path,
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
@@ -235,26 +293,43 @@ async def create_quick_reply(
 ) -> HTMLResponse:
     if _admin is None:
         return RedirectResponse(url="/admin/login", status_code=302)
+    workspace_id = DEFAULT_WORKSPACE_ID
 
     normalized = command.strip().lstrip("/")
     normalized = normalized.lower()
     if not normalized:
         raise HTTPException(status_code=400, detail="Команда не может быть пустой")
 
-    if db.query(QuickReply).filter(QuickReply.command == normalized).first():
-        bot_settings = get_or_create_settings(db)
-        replies = db.query(QuickReply).order_by(QuickReply.command.asc()).all()
-        chat_metrics = get_chat_metrics(db)
-        delivery_metrics = get_delivery_metrics(db)
+    if (
+        db.query(QuickReply)
+        .filter(
+            QuickReply.workspace_id == workspace_id,
+            QuickReply.command == normalized,
+        )
+        .first()
+    ):
+        bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
+        replies = (
+            db.query(QuickReply)
+            .filter(QuickReply.workspace_id == workspace_id)
+            .order_by(QuickReply.command.asc())
+            .all()
+        )
+        chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
+        delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
         return templates.TemplateResponse(
             request,
             "admin.html",
             {
                 "request": request,
                 "settings": bot_settings,
-                "template_prestart": get_template_text(db, TEMPLATE_PRESTART),
-                "template_start": get_template_text(db, TEMPLATE_START),
-                "template_after_phone": get_template_text(db, TEMPLATE_AFTER_PHONE),
+                "template_prestart": get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id),
+                "template_start": get_template_text(db, TEMPLATE_START, workspace_id=workspace_id),
+                "template_after_phone": get_template_text(
+                    db,
+                    TEMPLATE_AFTER_PHONE,
+                    workspace_id=workspace_id,
+                ),
                 "quick_replies": replies,
                 "webhook_path": webhook_path,
                 "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
@@ -279,6 +354,7 @@ async def create_quick_reply(
         image_path = f"/static/uploads/{safe_name}"
 
     reply = QuickReply(
+        workspace_id=workspace_id,
         command=normalized,
         title=title.strip(),
         text=text.strip(),
@@ -287,19 +363,28 @@ async def create_quick_reply(
     db.add(reply)
     db.commit()
 
-    bot_settings = get_or_create_settings(db)
-    replies = db.query(QuickReply).order_by(QuickReply.command.asc()).all()
-    chat_metrics = get_chat_metrics(db)
-    delivery_metrics = get_delivery_metrics(db)
+    bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
+    replies = (
+        db.query(QuickReply)
+        .filter(QuickReply.workspace_id == workspace_id)
+        .order_by(QuickReply.command.asc())
+        .all()
+    )
+    chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
+    delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
     return templates.TemplateResponse(
         request,
         "admin.html",
         {
             "request": request,
             "settings": bot_settings,
-            "template_prestart": get_template_text(db, TEMPLATE_PRESTART),
-            "template_start": get_template_text(db, TEMPLATE_START),
-            "template_after_phone": get_template_text(db, TEMPLATE_AFTER_PHONE),
+            "template_prestart": get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id),
+            "template_start": get_template_text(db, TEMPLATE_START, workspace_id=workspace_id),
+            "template_after_phone": get_template_text(
+                db,
+                TEMPLATE_AFTER_PHONE,
+                workspace_id=workspace_id,
+            ),
             "quick_replies": replies,
             "webhook_path": webhook_path,
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
@@ -317,7 +402,14 @@ def delete_quick_reply(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    reply = db.query(QuickReply).filter(QuickReply.id == reply_id).first()
+    reply = (
+        db.query(QuickReply)
+        .filter(
+            QuickReply.workspace_id == DEFAULT_WORKSPACE_ID,
+            QuickReply.id == reply_id,
+        )
+        .first()
+    )
     if reply:
         if reply.image_path:
             relative_static_path = reply.image_path.removeprefix("/static/")
@@ -339,6 +431,7 @@ async def admin_chats_page(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    workspace_id = DEFAULT_WORKSPACE_ID
     return await _render_chat_workspace(
         request=request,
         db=db,
@@ -348,6 +441,7 @@ async def admin_chats_page(
         folder_id=folder_id,
         ui=_admin_chats_ui(),
         include_removed=True,
+        workspace_id=workspace_id,
     )
 
 
@@ -361,14 +455,16 @@ def admin_chat_create_folder(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    workspace_id = DEFAULT_WORKSPACE_ID
     folder_name = name.strip()
     if folder_name:
-        created = create_chat_folder(db, folder_name=folder_name)
+        created = create_chat_folder(db, folder_name=folder_name, workspace_id=workspace_id)
         if conversation_id is not None:
             assign_conversation_to_folder(
                 db,
                 conversation_id=conversation_id,
                 folder_id=created.id,
+                workspace_id=workspace_id,
             )
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
     conv_qs = f"&conversation_id={conversation_id}" if conversation_id is not None else ""
@@ -388,7 +484,11 @@ def admin_chat_mark_unread(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    ok = mark_thread_unread(db, conversation_id=conversation_id)
+    ok = mark_thread_unread(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=DEFAULT_WORKSPACE_ID,
+    )
     suffix = "1" if ok else "0"
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
     return RedirectResponse(
@@ -411,6 +511,7 @@ def admin_chat_move_folder(
         db,
         conversation_id=conversation_id,
         folder_id=(folder_id if folder_id > 0 else None),
+        workspace_id=DEFAULT_WORKSPACE_ID,
     )
     suffix = "1" if ok else "0"
     folder_qs = f"&folder_id={current_folder_id}" if current_folder_id is not None else ""
@@ -597,6 +698,7 @@ async def admin_chats_send_message(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    workspace_id = DEFAULT_WORKSPACE_ID
     text_value = text.strip()
     view_value = view.strip().lower()
     image_path = None
@@ -618,6 +720,7 @@ async def admin_chats_send_message(
                 db=db,
                 chat_message_id=edit_message_id,
                 new_text=text_value,
+                workspace_id=workspace_id,
             )
         suffix = "1" if updated else "0"
         redirect_url = f"/admin/chats?conversation_id={conversation_id}&edited={suffix}"
@@ -632,6 +735,7 @@ async def admin_chats_send_message(
             db=db,
             conversation_id=conversation_id,
             command_text=text_value,
+            workspace_id=workspace_id,
         )
         suffix = "1" if sent_ok else "0"
         redirect_url = f"/admin/chats?conversation_id={conversation_id}&quick={suffix}"
@@ -646,6 +750,7 @@ async def admin_chats_send_message(
         conversation_id=conversation_id,
         text=text_value,
         image_path=image_path,
+        workspace_id=workspace_id,
     )
     suffix = "1" if sent_ok else "0"
     redirect_url = f"/admin/chats?conversation_id={conversation_id}&sent={suffix}"
@@ -663,10 +768,12 @@ async def admin_chats_send_quick_reply(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    workspace_id = DEFAULT_WORKSPACE_ID
     sent_ok = await send_admin_quick_reply(
         db=db,
         conversation_id=conversation_id,
         command_text=command,
+        workspace_id=workspace_id,
     )
     suffix = "1" if sent_ok else "0"
     return RedirectResponse(
@@ -682,9 +789,13 @@ def admin_chats_quick_options(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> dict:
+    workspace_id = DEFAULT_WORKSPACE_ID
     conversation = (
         db.query(QuickReply)
-        .filter(QuickReply.is_active.is_(True))
+        .filter(
+            QuickReply.workspace_id == workspace_id,
+            QuickReply.is_active.is_(True),
+        )
         .order_by(QuickReply.command.asc())
         .all()
     )
@@ -716,10 +827,12 @@ async def admin_chats_edit_message(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    workspace_id = DEFAULT_WORKSPACE_ID
     updated = await update_chat_message_text(
         db=db,
         chat_message_id=chat_message_id,
         new_text=text.strip(),
+        workspace_id=workspace_id,
     )
     suffix = "1" if updated else "0"
     return RedirectResponse(
@@ -737,7 +850,12 @@ async def admin_chats_delete_message(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    removed = await remove_chat_message(db=db, chat_message_id=chat_message_id)
+    workspace_id = DEFAULT_WORKSPACE_ID
+    removed = await remove_chat_message(
+        db=db,
+        chat_message_id=chat_message_id,
+        workspace_id=workspace_id,
+    )
     suffix = "1" if removed else "0"
     redirect_url = f"/admin/chats?conversation_id={conversation_id}&deleted={suffix}"
     if q.strip():
@@ -757,7 +875,12 @@ async def admin_chats_retry_message(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    retried = await retry_failed_outbox_message(db=db, chat_message_id=chat_message_id)
+    workspace_id = DEFAULT_WORKSPACE_ID
+    retried = await retry_failed_outbox_message(
+        db=db,
+        chat_message_id=chat_message_id,
+        workspace_id=workspace_id,
+    )
     suffix = "1" if retried else "0"
     return RedirectResponse(
         url=f"/admin/chats?conversation_id={conversation_id}&retried={suffix}",
@@ -771,20 +894,50 @@ async def admin_chats_delete_conversation(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    deleted = delete_conversation(db, conversation_id=conversation_id)
+    workspace_id = DEFAULT_WORKSPACE_ID
+    deleted = delete_conversation(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+    )
     suffix = "1" if deleted else "0"
     return RedirectResponse(url=f"/admin/chats?removed={suffix}", status_code=302)
 
 
-def _require_manager_mini_access(token: str, db: Session) -> str:
-    manager_id = verify_manager_mini_token(token)
+def _require_manager_mini_access(token: str, db: Session) -> dict:
+    claims = verify_manager_mini_claims(token)
+    if not claims:
+        raise HTTPException(status_code=403, detail="Недействительный токен mini-app")
+    manager_id = str(claims.get("manager_id", "")).strip()
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
     if not manager_id:
         raise HTTPException(status_code=403, detail="Недействительный токен mini-app")
-    settings_db = get_or_create_settings(db)
-    expected_manager_id = settings_db.manager_account_id.strip()
-    if not expected_manager_id or manager_id != expected_manager_id:
+
+    manager_user_id = claims.get("service_user_id")
+    if isinstance(manager_user_id, int):
+        manager_user = (
+            db.query(ServiceUser)
+            .filter(
+                ServiceUser.id == manager_user_id,
+                ServiceUser.workspace_id == workspace_id,
+                ServiceUser.role == "manager",
+                ServiceUser.is_active.is_(True),
+                ServiceUser.is_blocked.is_(False),
+            )
+            .first()
+        )
+        if manager_user is None:
+            raise HTTPException(status_code=403, detail="Доступ mini-app запрещен")
+        expected_id = (manager_user.max_account_id or manager_user.username or "").strip()
+        if expected_id and manager_id != expected_id:
+            raise HTTPException(status_code=403, detail="Доступ mini-app запрещен")
+        return claims
+
+    settings_db = get_or_create_settings(db, workspace_id=workspace_id)
+    expected_manager_id = (settings_db.manager_account_id or "").strip()
+    if expected_manager_id and manager_id != expected_manager_id:
         raise HTTPException(status_code=403, detail="Доступ mini-app запрещен")
-    return manager_id
+    return claims
 
 
 def _manager_mini_url(
@@ -864,6 +1017,840 @@ def _manager_mini_ui(token: str) -> dict[str, str | bool]:
     }
 
 
+def _resolve_workspace_for_token_or_user(
+    *,
+    db: Session,
+    request: Request | None = None,
+    token: str | None = None,
+) -> int:
+    if token:
+        claims = verify_manager_mini_claims(token)
+        if claims and isinstance(claims.get("workspace_id"), int):
+            return int(claims["workspace_id"])
+    if request is not None:
+        current_user = get_current_service_user(request=request, db=db)
+        if current_user and current_user.workspace_id:
+            return int(current_user.workspace_id)
+    return DEFAULT_WORKSPACE_ID
+
+
+def _render_app_landing(
+    request: Request,
+    *,
+    login_error: str | None = None,
+    register_error: str | None = None,
+    register_message: str | None = None,
+    default_workspace_name: str = "",
+    default_display_name: str = "",
+    default_username: str = "",
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "app_landing.html",
+        {
+            "request": request,
+            "login_error": login_error,
+            "register_error": register_error,
+            "register_message": register_message,
+            "default_workspace_name": default_workspace_name,
+            "default_display_name": default_display_name,
+            "default_username": default_username,
+        },
+    )
+
+
+def _build_manager_invite_links(
+    *,
+    db: Session,
+    manager: ServiceUser,
+    workspace_id: int,
+    base_url: str,
+) -> dict[str, str]:
+    manager_identifier = (manager.max_account_id or manager.username or "").strip()
+    if not manager_identifier:
+        manager_identifier = manager.username
+    raw_token = create_manager_invite_token(
+        invite_id=manager.id,
+        workspace_id=workspace_id,
+        max_account_id=manager_identifier,
+        manager_user_id=manager.id,
+    )
+    token_hash = _sha256(raw_token)
+    invite_row = (
+        db.query(ManagerInvite)
+        .filter(
+            ManagerInvite.workspace_id == workspace_id,
+            ManagerInvite.used_by_user_id == manager.id,
+        )
+        .first()
+    )
+    now = datetime.now(UTC).replace(tzinfo=None)
+    if invite_row is None:
+        invite_row = ManagerInvite(
+            workspace_id=workspace_id,
+            max_account_id=manager_identifier,
+            invite_token_hash=token_hash,
+            display_name=manager.display_name or manager.username,
+            expires_at=now + timedelta(days=7),
+            is_used=False,
+            used_by_user_id=manager.id,
+        )
+    else:
+        invite_row.max_account_id = manager_identifier
+        invite_row.invite_token_hash = token_hash
+        invite_row.display_name = manager.display_name or manager.username
+        invite_row.expires_at = now + timedelta(days=7)
+        invite_row.is_used = False
+        invite_row.used_at = None
+    db.add(invite_row)
+    db.commit()
+
+    encoded = quote_plus(raw_token)
+    return {
+        "invite_link": f"{base_url}/app/invite/{encoded}",
+        "mini_link": f"{base_url}/mini/manager?token={quote_plus(create_manager_mini_token(manager_identifier, workspace_id=workspace_id, service_user_id=manager.id))}",
+        "web_link": f"{base_url}/app/chats",
+    }
+
+
+def _manager_invite_context(
+    *,
+    db: Session,
+    token: str,
+) -> tuple[dict, ManagerInvite | None, ServiceUser | None, Workspace | None]:
+    claims = verify_manager_invite_token(token)
+    if not claims:
+        raise HTTPException(status_code=400, detail="Недействительная или просроченная ссылка приглашения")
+    invite_hash = _sha256(token)
+    invite_row = (
+        db.query(ManagerInvite)
+        .filter(ManagerInvite.invite_token_hash == invite_hash)
+        .first()
+    )
+    if invite_row is None:
+        raise HTTPException(status_code=404, detail="Приглашение не найдено")
+    now = datetime.now(UTC).replace(tzinfo=None)
+    if invite_row.is_used:
+        raise HTTPException(status_code=410, detail="Ссылка уже использована")
+    if invite_row.expires_at and invite_row.expires_at < now:
+        raise HTTPException(status_code=410, detail="Срок действия ссылки истек")
+    manager_user_id = claims.get("manager_user_id")
+    manager_user = None
+    if isinstance(manager_user_id, int):
+        manager_user = (
+            db.query(ServiceUser)
+            .filter(ServiceUser.id == manager_user_id)
+            .first()
+        )
+    workspace = db.query(Workspace).filter(Workspace.id == int(claims["workspace_id"])).first()
+    if workspace is None or not workspace.is_active or workspace.is_suspended:
+        raise HTTPException(status_code=403, detail="Workspace недоступен")
+    return claims, invite_row, manager_user, workspace
+
+
+@app.get("/app", response_class=HTMLResponse)
+def app_landing(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    current_user = get_current_service_user(request=request, db=db)
+    if current_user is not None:
+        return RedirectResponse(url="/app/chats", status_code=302)
+    return _render_app_landing(request)
+
+
+@app.post("/app/register", response_class=HTMLResponse)
+def app_register(
+    request: Request,
+    workspace_name: str = Form(""),
+    display_name: str = Form(""),
+    username: str = Form(""),
+    password: str = Form(""),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    workspace_name_clean = workspace_name.strip() or "Новый клиент"
+    display_name_clean = display_name.strip()
+    username_clean = username.strip().lower()
+    password_clean = password.strip()
+    if not username_clean or not password_clean:
+        return _render_app_landing(
+            request,
+            register_error="Введите логин и пароль.",
+            default_workspace_name=workspace_name_clean,
+            default_display_name=display_name_clean,
+            default_username=username_clean,
+        )
+    try:
+        workspace, owner = create_workspace_with_owner(
+            db,
+            workspace_name=workspace_name_clean,
+            username=username_clean,
+            password=password_clean,
+            display_name=display_name_clean,
+        )
+    except ValueError as exc:
+        code = str(exc)
+        msg = "Не удалось зарегистрироваться."
+        if code == "username_exists":
+            msg = "Пользователь с таким логином уже существует."
+        elif code == "invalid_username":
+            msg = "Логин: 3-64 символа [a-z0-9_.-]."
+        elif code == "password_too_short":
+            msg = "Пароль должен содержать минимум 8 символов."
+        return _render_app_landing(
+            request,
+            register_error=msg,
+            default_workspace_name=workspace_name_clean,
+            default_display_name=display_name_clean,
+            default_username=username_clean,
+        )
+
+    token = create_service_session(
+        db,
+        user_id=owner.id,
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", ""),
+    )
+    response = RedirectResponse(url="/app/chats", status_code=302)
+    set_service_session_cookie(response, token)
+    db.add(
+        AuditLog(
+            workspace_id=workspace.id,
+            actor_user_id=owner.id,
+            action="workspace_registered",
+            object_type="workspace",
+            object_id=str(workspace.id),
+            details_json='{"source":"landing"}',
+        )
+    )
+    db.commit()
+    return response
+
+
+@app.post("/app/login", response_class=HTMLResponse)
+def app_login(
+    request: Request,
+    username: str = Form(""),
+    password: str = Form(""),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    user = sign_in_service_user(db, username=username, password=password)
+    if user is None:
+        return _render_app_landing(
+            request,
+            login_error="Неверный логин или пароль.",
+            default_username=username.strip().lower(),
+        )
+    token = create_service_session(
+        db,
+        user_id=user.id,
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", ""),
+    )
+    response = RedirectResponse(url="/app/chats", status_code=302)
+    set_service_session_cookie(response, token)
+    return response
+
+
+@app.post("/app/logout")
+def app_logout(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    current_user = get_current_service_user(request=request, db=db)
+    if current_user is not None:
+        revoke_workspace_sessions(db, workspace_id=current_user.workspace_id or DEFAULT_WORKSPACE_ID)
+    response = RedirectResponse(url="/app", status_code=302)
+    clear_service_session_cookie(response)
+    return response
+
+
+@app.post("/app/logout-all")
+def app_logout_all(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if current_user.role == "superadmin":
+        revoke_all_service_sessions(db)
+    else:
+        revoke_workspace_sessions(db, workspace_id=current_user.workspace_id or DEFAULT_WORKSPACE_ID)
+    response = RedirectResponse(url="/app", status_code=302)
+    clear_service_session_cookie(response)
+    return response
+
+
+@app.get("/app/chats", response_class=HTMLResponse)
+async def app_chats_page(
+    request: Request,
+    conversation_id: int | None = None,
+    q: str = "",
+    view: str = "",
+    folder_id: int | None = None,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    ui = _admin_chats_ui()
+    ui.update(
+        {
+            "page_title": f"Чаты клиента · {current_user.username}",
+            "page_path": "/app/chats",
+            "page_query_prefix": "/app/chats?",
+            "create_folder_action": "/app/chats/folders",
+            "show_admin_nav": True,
+            "settings_href": "/app/settings",
+            "logout_action": "/app/logout",
+            "send_action_prefix": "/app/chats/",
+            "delete_user_action_prefix": "/app/chats/",
+            "profile_href_prefix": "/app/chats/",
+            "mark_unread_prefix": "/app/chats/",
+            "move_folder_prefix": "/app/chats/",
+            "create_folder_endpoint": "/app/chats/folders",
+            "delete_message_prefix": "/app/chats/",
+        }
+    )
+    return await _render_chat_workspace(
+        request=request,
+        db=db,
+        conversation_id=conversation_id,
+        q=q,
+        view=view,
+        folder_id=folder_id,
+        ui=ui,
+        include_removed=True,
+        workspace_id=workspace_id,
+    )
+
+
+@app.get("/app/settings", response_class=HTMLResponse)
+def app_settings_page(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
+    quick_replies = (
+        db.query(QuickReply)
+        .filter(QuickReply.workspace_id == workspace_id)
+        .order_by(QuickReply.command.asc())
+        .all()
+    )
+    chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
+    delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
+    managers = list_workspace_managers(db, workspace_id=workspace_id)
+    return templates.TemplateResponse(
+        request,
+        "admin.html",
+        {
+            "request": request,
+            "settings": bot_settings,
+            "template_prestart": get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id),
+            "template_start": get_template_text(db, TEMPLATE_START, workspace_id=workspace_id),
+            "template_after_phone": get_template_text(
+                db,
+                TEMPLATE_AFTER_PHONE,
+                workspace_id=workspace_id,
+            ),
+            "quick_replies": quick_replies,
+            "webhook_path": webhook_path,
+            "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+            "chat_metrics": chat_metrics,
+            "delivery_metrics": delivery_metrics,
+            "message": f"Workspace: {workspace_id}. Менеджеров: {len(managers)}",
+            "error": None,
+        },
+    )
+
+
+@app.get("/app/managers", response_class=HTMLResponse)
+def app_managers_page(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    managers = list_workspace_managers(db, workspace_id=workspace_id)
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if current_user.role not in {"owner", "admin", "superadmin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+
+    links: list[dict[str, str]] = []
+    base_url = settings.public_base_url.rstrip("/")
+    for manager in managers:
+        built = _build_manager_invite_links(
+            db=db,
+            manager=manager,
+            workspace_id=workspace_id,
+            base_url=base_url,
+        )
+        links.append(
+            {
+                "username": manager.username,
+                "display": manager.display_name or manager.username,
+                "max_account_id": manager.max_account_id,
+                "invite_link": built["invite_link"],
+                "mini_link": built["mini_link"],
+                "web_link": built["web_link"],
+            }
+        )
+
+    return templates.TemplateResponse(
+        request,
+        "app_landing.html",
+        {
+            "request": request,
+            "current_user": current_user,
+            "current_workspace": workspace,
+            "message": "Ссылки для менеджеров сформированы.",
+            "error": None,
+            "manager_links": links,
+        },
+    )
+
+
+@app.post("/app/managers", response_class=HTMLResponse)
+def app_create_manager(
+    request: Request,
+    username: str = Form(""),
+    password: str = Form(""),
+    display_name: str = Form(""),
+    max_account_id: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    if current_user.role not in {"owner", "admin", "superadmin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    max_account_clean = max_account_id.strip()
+    if not max_account_clean:
+        return templates.TemplateResponse(
+            request,
+            "app_landing.html",
+            {
+                "request": request,
+                "current_user": current_user,
+                "current_workspace": db.query(Workspace).filter(Workspace.id == workspace_id).first(),
+                "message": None,
+                "error": "Укажите Max account ID для менеджера.",
+            },
+            status_code=400,
+        )
+
+    try:
+        manager_user = create_service_user(
+            db,
+            username=username,
+            password=password,
+            role="manager",
+            workspace_id=workspace_id,
+            display_name=display_name,
+            max_account_id=max_account_clean,
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            request,
+            "app_landing.html",
+            {
+                "request": request,
+                "current_user": current_user,
+                "current_workspace": db.query(Workspace).filter(Workspace.id == workspace_id).first(),
+                "message": None,
+                "error": f"Не удалось добавить менеджера: {exc}",
+            },
+            status_code=400,
+        )
+
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=current_user.id,
+            action="manager_created",
+            object_type="service_user",
+            object_id=str(manager_user.id),
+            details_json=f'{{"username":"{manager_user.username}","max_account_id":"{max_account_clean}"}}',
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/managers", status_code=302)
+
+
+@app.get("/app/invite/{invite_token}", response_class=HTMLResponse)
+def app_accept_manager_invite(
+    invite_token: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    claims = verify_manager_invite_token(invite_token)
+    if not claims:
+        return _render_app_landing(request, login_error="Ссылка приглашения недействительна.")
+
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    manager_user_id = claims.get("manager_user_id")
+    max_account_id = str(claims.get("max_account_id", "")).strip()
+    token_hash = _sha256(invite_token)
+    now = datetime.now(UTC).replace(tzinfo=None)
+
+    invite_row = (
+        db.query(ManagerInvite)
+        .filter(
+            ManagerInvite.workspace_id == workspace_id,
+            ManagerInvite.invite_token_hash == token_hash,
+        )
+        .first()
+    )
+    if invite_row is None:
+        return _render_app_landing(request, login_error="Приглашение не найдено.")
+    if invite_row.is_used:
+        return _render_app_landing(request, login_error="Эта ссылка уже использована.")
+    if invite_row.expires_at and invite_row.expires_at < now:
+        return _render_app_landing(request, login_error="Срок действия приглашения истек.")
+
+    manager_user = None
+    if isinstance(manager_user_id, int):
+        manager_user = (
+            db.query(ServiceUser)
+            .filter(
+                ServiceUser.id == manager_user_id,
+                ServiceUser.workspace_id == workspace_id,
+                ServiceUser.role == "manager",
+            )
+            .first()
+        )
+    if manager_user is None and max_account_id:
+        manager_user = (
+            db.query(ServiceUser)
+            .filter(
+                ServiceUser.workspace_id == workspace_id,
+                ServiceUser.role == "manager",
+                ServiceUser.max_account_id == max_account_id,
+            )
+            .first()
+        )
+    if manager_user is None or not manager_user.is_active or manager_user.is_blocked:
+        return _render_app_landing(request, login_error="Менеджер не активен или не найден.")
+
+    invite_row.is_used = True
+    invite_row.used_by_user_id = manager_user.id
+    invite_row.used_at = now
+    db.add(invite_row)
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=manager_user.id,
+            action="manager_invite_consumed",
+            object_type="manager_invite",
+            object_id=str(invite_row.id),
+            details_json=f'{{"manager_id":{manager_user.id}}}',
+        )
+    )
+    db.commit()
+
+    raw_session = create_service_session(
+        db,
+        user_id=manager_user.id,
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", ""),
+    )
+    response = RedirectResponse(url="/app/chats", status_code=302)
+    set_service_session_cookie(response, raw_session)
+    return response
+
+
+@app.get("/app/superadmin", response_class=HTMLResponse)
+def app_superadmin_page(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+
+    workspaces = db.query(Workspace).order_by(Workspace.id.asc()).all()
+    users = db.query(ServiceUser).order_by(ServiceUser.id.asc()).all()
+    sessions = (
+        db.query(UserSession)
+        .order_by(UserSession.id.desc())
+        .limit(100)
+        .all()
+    )
+    audits = (
+        db.query(AuditLog)
+        .order_by(AuditLog.id.desc())
+        .limit(100)
+        .all()
+    )
+    subs = db.query(Subscription).order_by(Subscription.id.desc()).limit(100).all()
+    billing = db.query(BillingEvent).order_by(BillingEvent.id.desc()).limit(100).all()
+
+    return templates.TemplateResponse(
+        request,
+        "app_landing.html",
+        {
+            "request": request,
+            "current_user": current_user,
+            "current_workspace": None,
+            "message": "SaaS обзор загружен",
+            "error": None,
+            "superadmin_stats": {
+                "workspaces": workspaces,
+                "users": users,
+                "sessions": sessions,
+                "audits": audits,
+                "subscriptions": subs,
+                "billing_events": billing,
+            },
+        },
+    )
+
+
+@app.post("/app/chats/folders", response_class=RedirectResponse)
+def app_chat_create_folder(
+    name: str = Form(""),
+    conversation_id: int | None = Form(default=None),
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    folder_name = name.strip()
+    if folder_name:
+        created = create_chat_folder(db, folder_name=folder_name, workspace_id=workspace_id)
+        if conversation_id is not None:
+            assign_conversation_to_folder(
+                db,
+                conversation_id=conversation_id,
+                folder_id=created.id,
+                workspace_id=workspace_id,
+            )
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    conv_qs = f"&conversation_id={conversation_id}" if conversation_id is not None else ""
+    view_qs = f"&view={view}" if view else ""
+    return RedirectResponse(
+        url=f"/app/chats?q={q}{folder_qs}{conv_qs}{view_qs}",
+        status_code=302,
+    )
+
+
+@app.post("/app/chats/{conversation_id}/mark-unread", response_class=RedirectResponse)
+def app_chat_mark_unread(
+    conversation_id: int,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    ok = mark_thread_unread(db, conversation_id=conversation_id, workspace_id=workspace_id)
+    suffix = "1" if ok else "0"
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    return RedirectResponse(
+        url=f"/app/chats?conversation_id={conversation_id}&q={q}&view={view}&unread={suffix}{folder_qs}",
+        status_code=302,
+    )
+
+
+@app.post("/app/chats/{conversation_id}/move-folder", response_class=RedirectResponse)
+def app_chat_move_folder(
+    conversation_id: int,
+    folder_id: int = Form(0),
+    q: str = Form(""),
+    view: str = Form(""),
+    current_folder_id: int | None = Form(default=None),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    ok = assign_conversation_to_folder(
+        db,
+        conversation_id=conversation_id,
+        folder_id=(folder_id if folder_id > 0 else None),
+        workspace_id=workspace_id,
+    )
+    suffix = "1" if ok else "0"
+    folder_qs = f"&folder_id={current_folder_id}" if current_folder_id is not None else ""
+    return RedirectResponse(
+        url=f"/app/chats?conversation_id={conversation_id}&q={q}&view={view}&foldered={suffix}{folder_qs}",
+        status_code=302,
+    )
+
+
+@app.post("/app/chats/{conversation_id}/send", response_class=RedirectResponse)
+async def app_chats_send_message(
+    conversation_id: int,
+    text: str = Form(""),
+    edit_message_id: int | None = Form(default=None),
+    photo: UploadFile | None = File(default=None),
+    q: str = Form(""),
+    view: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    text_value = text.strip()
+    view_value = view.strip().lower()
+    image_path = None
+    if photo and photo.filename:
+        ext = Path(photo.filename).suffix.lower()
+        allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+        if ext not in allowed:
+            raise HTTPException(status_code=400, detail="Неподдерживаемый формат фото")
+        safe_name = f"{uuid4().hex}{ext}"
+        target = Path("app/static/uploads") / safe_name
+        content = await photo.read()
+        target.write_bytes(content)
+        image_path = f"/static/uploads/{safe_name}"
+
+    if edit_message_id is not None:
+        updated = None
+        if text_value and not image_path:
+            updated = await update_chat_message_text(
+                db=db,
+                chat_message_id=edit_message_id,
+                new_text=text_value,
+                workspace_id=workspace_id,
+            )
+        suffix = "1" if updated else "0"
+        redirect_url = f"/app/chats?conversation_id={conversation_id}&edited={suffix}"
+        if q.strip():
+            redirect_url += f"&q={quote_plus(q.strip())}"
+        if view_value == "chat":
+            redirect_url += "&view=chat"
+        return RedirectResponse(url=redirect_url, status_code=302)
+
+    if text_value.startswith("/") and not image_path:
+        sent_ok = await send_admin_quick_reply(
+            db=db,
+            conversation_id=conversation_id,
+            command_text=text_value,
+            workspace_id=workspace_id,
+        )
+        suffix = "1" if sent_ok else "0"
+        redirect_url = f"/app/chats?conversation_id={conversation_id}&quick={suffix}"
+        if q.strip():
+            redirect_url += f"&q={quote_plus(q.strip())}"
+        if view_value == "chat":
+            redirect_url += "&view=chat"
+        return RedirectResponse(url=redirect_url, status_code=302)
+
+    sent_ok = await send_admin_chat_message(
+        db=db,
+        conversation_id=conversation_id,
+        text=text_value,
+        image_path=image_path,
+        workspace_id=workspace_id,
+    )
+    suffix = "1" if sent_ok else "0"
+    redirect_url = f"/app/chats?conversation_id={conversation_id}&sent={suffix}"
+    if q.strip():
+        redirect_url += f"&q={quote_plus(q.strip())}"
+    if view_value == "chat":
+        redirect_url += "&view=chat"
+    return RedirectResponse(url=redirect_url, status_code=302)
+
+
+@app.post("/app/chats/{conversation_id}/quick-reply", response_class=RedirectResponse)
+async def app_chats_send_quick_reply(
+    conversation_id: int,
+    command: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    sent_ok = await send_admin_quick_reply(
+        db=db,
+        conversation_id=conversation_id,
+        command_text=command,
+        workspace_id=workspace_id,
+    )
+    suffix = "1" if sent_ok else "0"
+    return RedirectResponse(
+        url=f"/app/chats?conversation_id={conversation_id}&quick={suffix}",
+        status_code=302,
+    )
+
+
+@app.post("/app/chats/{conversation_id}/messages/{chat_message_id}/edit", response_class=RedirectResponse)
+async def app_chats_edit_message(
+    conversation_id: int,
+    chat_message_id: int,
+    text: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    updated = await update_chat_message_text(
+        db=db,
+        chat_message_id=chat_message_id,
+        new_text=text.strip(),
+        workspace_id=workspace_id,
+    )
+    suffix = "1" if updated else "0"
+    return RedirectResponse(
+        url=f"/app/chats?conversation_id={conversation_id}&edited={suffix}",
+        status_code=302,
+    )
+
+
+@app.post("/app/chats/{conversation_id}/messages/{chat_message_id}/delete", response_class=RedirectResponse)
+async def app_chats_delete_message(
+    conversation_id: int,
+    chat_message_id: int,
+    q: str = Form(""),
+    view: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    removed = await remove_chat_message(db=db, chat_message_id=chat_message_id, workspace_id=workspace_id)
+    suffix = "1" if removed else "0"
+    redirect_url = f"/app/chats?conversation_id={conversation_id}&deleted={suffix}"
+    if q.strip():
+        redirect_url += f"&q={quote_plus(q.strip())}"
+    if view.strip().lower() == "chat":
+        redirect_url += "&view=chat"
+    return RedirectResponse(url=redirect_url, status_code=302)
+
+
+@app.post(
+    "/app/chats/{conversation_id}/messages/{chat_message_id}/retry",
+    response_class=RedirectResponse,
+)
+async def app_chats_retry_message(
+    conversation_id: int,
+    chat_message_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    retried = await retry_failed_outbox_message(
+        db=db,
+        chat_message_id=chat_message_id,
+        workspace_id=workspace_id,
+    )
+    suffix = "1" if retried else "0"
+    return RedirectResponse(
+        url=f"/app/chats?conversation_id={conversation_id}&retried={suffix}",
+        status_code=302,
+    )
+
+
+@app.post("/app/chats/{conversation_id}/delete-user", response_class=RedirectResponse)
+async def app_chats_delete_conversation(
+    conversation_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    deleted = delete_conversation(db, conversation_id=conversation_id, workspace_id=workspace_id)
+    suffix = "1" if deleted else "0"
+    return RedirectResponse(url=f"/app/chats?removed={suffix}", status_code=302)
+
+
 def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
     sent_flag = request.query_params.get("sent")
     quick_flag = request.query_params.get("quick")
@@ -913,12 +1900,13 @@ async def _render_chat_workspace(
     folder_id: int | None,
     ui: dict[str, str | bool],
     include_removed: bool,
+    workspace_id: int,
 ) -> HTMLResponse:
     # Opportunistically drain due queue items on every workspace open.
     await process_outbox_queue(db, limit=30)
     op_message, op_error = _chat_op_messages(request)
 
-    threads = load_chat_threads(db, query=q)
+    threads = load_chat_threads(db, query=q, workspace_id=workspace_id)
     if folder_id is not None:
         if folder_id > 0:
             threads = [item for item in threads if item.folder_id == folder_id]
@@ -937,8 +1925,8 @@ async def _render_chat_workspace(
 
     messages = []
     if active_thread:
-        mark_thread_read(db, active_thread.conversation_id)
-        messages = load_chat_messages(db, active_thread.conversation_id)
+        mark_thread_read(db, active_thread.conversation_id, workspace_id=workspace_id)
+        messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
     mobile_chat_view = view.strip().lower() == "chat"
 
     context: dict = {
@@ -953,11 +1941,11 @@ async def _render_chat_workspace(
         "mobile_chat_view": mobile_chat_view,
         "admin_quick_options": [
             {"command": item.command, "title": item.title}
-            for item in list_active_quick_replies(db)
+            for item in list_active_quick_replies(db, workspace_id=workspace_id)
         ],
         "chat_folders": [
             {"id": folder.id, "name": folder.name}
-            for folder in list_chat_folders(db)
+            for folder in list_chat_folders(db, workspace_id=workspace_id)
         ],
         "ui": ui,
     }
@@ -976,7 +1964,8 @@ async def manager_mini_page(
     folder_id: int | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    _require_manager_mini_access(token=token, db=db)
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
     return await _render_chat_workspace(
         request=request,
         db=db,
@@ -986,6 +1975,7 @@ async def manager_mini_page(
         folder_id=folder_id,
         ui=_manager_mini_ui(token),
         include_removed=False,
+        workspace_id=workspace_id,
     )
 
 
@@ -999,15 +1989,17 @@ def manager_mini_create_folder(
     folder_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    _require_manager_mini_access(token=token, db=db)
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
     folder_name = name.strip()
     if folder_name:
-        created = create_chat_folder(db, folder_name=folder_name)
+        created = create_chat_folder(db, folder_name=folder_name, workspace_id=workspace_id)
         if conversation_id is not None:
             assign_conversation_to_folder(
                 db,
                 conversation_id=conversation_id,
                 folder_id=created.id,
+                workspace_id=workspace_id,
             )
     return RedirectResponse(
         url=_manager_mini_url(
@@ -1030,8 +2022,9 @@ def manager_mini_mark_unread(
     folder_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    _require_manager_mini_access(token=token, db=db)
-    ok = mark_thread_unread(db, conversation_id=conversation_id)
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    ok = mark_thread_unread(db, conversation_id=conversation_id, workspace_id=workspace_id)
     suffix = "1" if ok else "0"
     return RedirectResponse(
         url=_manager_mini_url(
@@ -1056,11 +2049,13 @@ def manager_mini_move_folder(
     current_folder_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    _require_manager_mini_access(token=token, db=db)
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
     ok = assign_conversation_to_folder(
         db,
         conversation_id=conversation_id,
         folder_id=(folder_id if folder_id > 0 else None),
+        workspace_id=workspace_id,
     )
     suffix = "1" if ok else "0"
     return RedirectResponse(
@@ -1087,7 +2082,8 @@ async def manager_mini_send_message(
     folder_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    _require_manager_mini_access(token=token, db=db)
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
     text_value = text.strip()
     view_value = view.strip().lower()
     image_path = None
@@ -1107,6 +2103,7 @@ async def manager_mini_send_message(
             db=db,
             conversation_id=conversation_id,
             command_text=text_value,
+            workspace_id=workspace_id,
         )
         suffix = "1" if sent_ok else "0"
         return RedirectResponse(
@@ -1126,6 +2123,7 @@ async def manager_mini_send_message(
         conversation_id=conversation_id,
         text=text_value,
         image_path=image_path,
+        workspace_id=workspace_id,
     )
     suffix = "1" if sent_ok else "0"
     return RedirectResponse(

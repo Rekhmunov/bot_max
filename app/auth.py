@@ -290,14 +290,21 @@ def verify_manager_mini_claims(token: str, *, max_age_seconds: int = 60 * 60 * 2
     return payload
 
 
-def create_manager_invite_token(*, invite_id: int, workspace_id: int, max_account_id: str) -> str:
-    return _manager_invite_serializer().dumps(
-        {
-            "invite_id": int(invite_id),
-            "workspace_id": int(workspace_id),
-            "max_account_id": (max_account_id or "").strip(),
-        }
-    )
+def create_manager_invite_token(
+    *,
+    invite_id: int,
+    workspace_id: int,
+    max_account_id: str,
+    manager_user_id: int | None = None,
+) -> str:
+    payload: dict[str, Any] = {
+        "invite_id": int(invite_id),
+        "workspace_id": int(workspace_id),
+        "max_account_id": (max_account_id or "").strip(),
+    }
+    if manager_user_id is not None:
+        payload["manager_user_id"] = int(manager_user_id)
+    return _manager_invite_serializer().dumps(payload)
 
 
 def verify_manager_invite_token(token: str, *, max_age_seconds: int = 60 * 60 * 24 * 7) -> dict[str, Any] | None:
@@ -313,8 +320,12 @@ def verify_manager_invite_token(token: str, *, max_age_seconds: int = 60 * 60 * 
     workspace_id = payload.get("workspace_id")
     if not isinstance(invite_id, int) or not isinstance(workspace_id, int):
         return None
-    return {
+    result: dict[str, Any] = {
         "invite_id": invite_id,
         "workspace_id": workspace_id,
         "max_account_id": str(payload.get("max_account_id", "")).strip(),
     }
+    manager_user_id = payload.get("manager_user_id")
+    if isinstance(manager_user_id, int):
+        result["manager_user_id"] = manager_user_id
+    return result

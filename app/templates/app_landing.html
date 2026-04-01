@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FeedPilot SaaS</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --text: #1f2430;
+      --muted: #677084;
+      --line: #dde3ee;
+      --primary: #2459f2;
+      --danger: #b42323;
+      --ok-bg: #e9f9ef;
+      --ok-border: #bde6ca;
+      --err-bg: #fde9e9;
+      --err-border: #f1c7c7;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; color: var(--text); background: var(--bg); }
+    .wrap { max-width: 1180px; margin: 24px auto; padding: 0 16px 40px; }
+    .top { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; }
+    .brand { margin: 0; font-size: 26px; font-weight: 800; }
+    .top-right { display: flex; align-items: center; gap: 10px; }
+    .top-link { text-decoration: none; color: #2459f2; font-weight: 700; }
+    .logout-btn { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
+    .notice { margin: 10px 0 16px; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
+    .notice.ok { background: var(--ok-bg); border: 1px solid var(--ok-border); }
+    .notice.err { background: var(--err-bg); border: 1px solid var(--err-border); color: var(--danger); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; box-shadow: 0 4px 16px rgba(0,0,0,.04); }
+    h2 { margin: 0 0 10px 0; font-size: 22px; }
+    h3 { margin: 0 0 8px 0; font-size: 19px; }
+    .muted { color: var(--muted); font-size: 14px; margin: 0 0 10px 0; }
+    label { display: block; margin: 10px 0 6px; font-weight: 600; font-size: 14px; }
+    input { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 10px; font: inherit; background: #fff; }
+    .btn { margin-top: 12px; border: 0; border-radius: 8px; background: var(--primary); color: #fff; font-weight: 700; padding: 10px 14px; cursor: pointer; }
+    .workspace-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .chip { background: #eef3ff; color: #1f4bc2; border: 1px solid #d6e1ff; border-radius: 999px; padding: 5px 10px; font-size: 12px; font-weight: 700; }
+    .links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+    .link-btn { text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: #1f2430; background: #fff; font-weight: 700; font-size: 14px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+    th, td { border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; padding: 8px; word-break: break-word; }
+    .small { font-size: 12px; color: var(--muted); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .brand { font-size: 23px; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <h1 class="brand">FeedPilot SaaS</h1>
+      <div class="top-right">
+        <a href="/admin/login" class="top-link">Суперадмин</a>
+        {% if current_user %}
+          <form method="post" action="/app/logout"><button type="submit" class="logout-btn">Выйти</button></form>
+        {% endif %}
+      </div>
+    </div>
+
+    {% if message %}<div class="notice ok">{{ message }}</div>{% endif %}
+    {% if register_message %}<div class="notice ok">{{ register_message }}</div>{% endif %}
+    {% if error %}<div class="notice err">{{ error }}</div>{% endif %}
+    {% if login_error %}<div class="notice err">{{ login_error }}</div>{% endif %}
+    {% if register_error %}<div class="notice err">{{ register_error }}</div>{% endif %}
+
+    {% if current_user %}
+      <section class="card" style="margin-bottom:16px;">
+        <h2>Личный кабинет</h2>
+        <p class="muted">Вы вошли как <b>{{ current_user.username }}</b> ({{ current_user.role }}).</p>
+        {% if current_workspace %}
+          <div class="workspace-meta">
+            <div class="chip">Workspace: {{ current_workspace.name }}</div>
+            <div class="chip">Tenant: {{ current_workspace.tenant_code }}</div>
+            <div class="chip">ID: {{ current_workspace.id }}</div>
+          </div>
+        {% endif %}
+        <div class="links">
+          <a class="link-btn" href="/app/settings">Настройки</a>
+          <a class="link-btn" href="/app/chats">Чаты</a>
+          {% if current_user.role in ["owner", "admin", "superadmin"] %}
+            <a class="link-btn" href="/app/managers">Менеджеры</a>
+          {% endif %}
+          {% if current_user.role == "superadmin" %}
+            <a class="link-btn" href="/app/superadmin">Управление SaaS</a>
+          {% endif %}
+        </div>
+      </section>
+    {% endif %}
+
+    {% if manager_links %}
+      <section class="card" style="margin-bottom:16px;">
+        <h3>Менеджеры и onboarding-ссылки</h3>
+        <p class="muted">Ссылка onboarding одноразовая: после первого открытия менеджер автоматически авторизуется в веб-чат (ПК), mini-app доступна отдельно.</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Менеджер</th>
+              <th>Max ID</th>
+              <th>Onboarding</th>
+              <th>Mini-app</th>
+              <th>Web чат</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in manager_links %}
+              <tr>
+                <td>{{ item.display }}<br/><span class="small">@{{ item.username }}</span></td>
+                <td class="mono">{{ item.max_account_id }}</td>
+                <td><a class="mono" href="{{ item.invite_link }}" target="_blank">{{ item.invite_link }}</a></td>
+                <td><a class="mono" href="{{ item.mini_link }}" target="_blank">{{ item.mini_link }}</a></td>
+                <td><a class="mono" href="{{ item.web_link }}" target="_blank">{{ item.web_link }}</a></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    {% endif %}
+
+    {% if superadmin_stats %}
+      <section class="card" style="margin-bottom:16px;">
+        <h3>Суперадмин обзор</h3>
+        <div class="links">
+          <div class="chip">Workspaces: {{ superadmin_stats.workspaces|length }}</div>
+          <div class="chip">Users: {{ superadmin_stats.users|length }}</div>
+          <div class="chip">Sessions: {{ superadmin_stats.sessions|length }}</div>
+          <div class="chip">Audit: {{ superadmin_stats.audits|length }}</div>
+          <div class="chip">Subscriptions: {{ superadmin_stats.subscriptions|length }}</div>
+          <div class="chip">Billing events: {{ superadmin_stats.billing_events|length }}</div>
+        </div>
+      </section>
+    {% endif %}
+
+    <div class="grid">
+      {% if not current_user %}
+        <section class="card">
+          <h3>Вход клиента / менеджера</h3>
+          <p class="muted">Для владельцев workspace и менеджеров (включая вход по onboarding-ссылке).</p>
+          <form method="post" action="/app/login">
+            <label for="login_username">Логин</label>
+            <input id="login_username" name="username" value="{{ default_username or '' }}" required />
+            <label for="login_password">Пароль</label>
+            <input id="login_password" type="password" name="password" required />
+            <button class="btn" type="submit">Войти</button>
+          </form>
+          <div class="small" style="margin-top:8px;">Если вас добавил владелец workspace, используйте выданные данные или onboarding-ссылку.</div>
+        </section>
+
+        <section class="card">
+          <h3>Регистрация клиента</h3>
+          <p class="muted">Создает отдельный workspace (tenant) для вашей компании.</p>
+          <form method="post" action="/app/register">
+            <label for="workspace_name">Название workspace</label>
+            <input id="workspace_name" name="workspace_name" value="{{ default_workspace_name or '' }}" placeholder="Мой магазин" required />
+            <label for="display_name">Ваше имя</label>
+            <input id="display_name" name="display_name" value="{{ default_display_name or '' }}" placeholder="Иван" />
+            <label for="register_username">Логин (латиница, 3+)</label>
+            <input id="register_username" name="username" value="{{ default_username or '' }}" placeholder="myshop_owner" required />
+            <label for="register_password">Пароль (минимум 8)</label>
+            <input id="register_password" type="password" name="password" required />
+            <button class="btn" type="submit">Создать workspace</button>
+          </form>
+        </section>
+      {% else %}
+        <section class="card">
+          <h3>Доступные разделы</h3>
+          <table>
+            <thead><tr><th>Раздел</th><th>Описание</th><th>Ссылка</th></tr></thead>
+            <tbody>
+              <tr><td>Настройки</td><td>Шаблоны и параметры бота.</td><td><a href="/app/settings">/app/settings</a></td></tr>
+              <tr><td>Чаты</td><td>Рабочее место чатов (веб + mobile layout).</td><td><a href="/app/chats">/app/chats</a></td></tr>
+              {% if current_user.role in ["owner", "admin", "superadmin"] %}
+                <tr><td>Менеджеры</td><td>Добавление менеджеров и onboarding-ссылки.</td><td><a href="/app/managers">/app/managers</a></td></tr>
+              {% endif %}
+              {% if current_user.role == "superadmin" %}
+                <tr><td>SaaS контроль</td><td>Клиенты, сессии, аудит, billing hooks.</td><td><a href="/app/superadmin">/app/superadmin</a></td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+        </section>
+        <section class="card">
+          <h3>Состояние доступа</h3>
+          <table>
+            <tbody>
+              <tr><th>Пользователь</th><td>{{ current_user.username }}</td></tr>
+              <tr><th>Роль</th><td>{{ current_user.role }}</td></tr>
+              <tr><th>Workspace ID</th><td>{{ current_user.workspace_id or "—" }}</td></tr>
+              <tr><th>Активен</th><td>{{ "да" if current_user.is_active else "нет" }}</td></tr>
+              <tr><th>Блокировка</th><td>{{ "да" if current_user.is_blocked else "нет" }}</td></tr>
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>
