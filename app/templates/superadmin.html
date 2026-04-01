@@ -1,0 +1,550 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Superadmin · FeedPilot</title>
+  <style>
+    :root {
+      --bg: #f3f5fb;
+      --card: #ffffff;
+      --line: #dce3ef;
+      --text: #1f2532;
+      --muted: #60708b;
+      --primary: #2f64ff;
+      --danger: #d53b3b;
+      --ok: #1d9b61;
+      --warn: #9b6a1d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .layout {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+    }
+    .sidebar {
+      background: #101a33;
+      color: #dce7ff;
+      padding: 16px 12px;
+      border-right: 1px solid rgba(255,255,255,.08);
+    }
+    .brand {
+      font-weight: 800;
+      font-size: 18px;
+      margin: 4px 8px 14px;
+    }
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+    .nav a {
+      text-decoration: none;
+      color: #dce7ff;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .nav a:hover {
+      border-color: rgba(255,255,255,.18);
+      background: rgba(255,255,255,.08);
+    }
+    .nav a.active {
+      background: rgba(47, 100, 255, .32);
+      border-color: rgba(124, 158, 255, .65);
+    }
+    .content {
+      padding: 18px 18px 24px;
+      min-width: 0;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 24px;
+    }
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn, .btn-link {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #2a3955;
+      padding: 8px 11px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 13px;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .btn.primary {
+      border-color: #2f64ff;
+      background: #2f64ff;
+      color: #fff;
+    }
+    .btn.danger {
+      border-color: #f0c9c9;
+      background: #fff3f3;
+      color: var(--danger);
+    }
+    .notice {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      background: #fff;
+      font-size: 14px;
+    }
+    .notice.error {
+      border-color: #f2caca;
+      background: #fde9e9;
+      color: #8d2222;
+    }
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .kpi {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--card);
+      padding: 11px 12px;
+    }
+    .kpi .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 5px;
+    }
+    .kpi .value {
+      font-size: 22px;
+      font-weight: 800;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--card);
+      padding: 14px;
+      margin-bottom: 12px;
+      overflow: auto;
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      min-width: 700px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 6px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { color: #445571; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+    .row-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .row-actions form { display: inline-block; margin: 0; }
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .badge.ok { color: var(--ok); border-color: #bfe7d3; background: #eefaf4; }
+    .badge.warn { color: var(--warn); border-color: #edd6b1; background: #fff7ea; }
+    .badge.danger { color: var(--danger); border-color: #f1c4c4; background: #fff0f0; }
+    .inline-form {
+      display: flex;
+      gap: 8px;
+      align-items: end;
+      flex-wrap: wrap;
+    }
+    .inline-form label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      font-weight: 700;
+    }
+    .inline-form input, .inline-form select {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      min-width: 120px;
+      font: inherit;
+      background: #fff;
+    }
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        border-right: 0;
+        border-bottom: 1px solid rgba(255,255,255,.12);
+      }
+      .nav {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      }
+      table { min-width: 620px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">Superadmin</div>
+      <nav class="nav">
+        <a class="{% if section == 'dashboard' %}active{% endif %}" href="/app/superadmin">Дашборд</a>
+        <a class="{% if section == 'workspaces' %}active{% endif %}" href="/app/superadmin/workspaces">Клиенты</a>
+        <a class="{% if section == 'users' %}active{% endif %}" href="/app/superadmin/users">Пользователи и роли</a>
+        <a class="{% if section == 'plans' %}active{% endif %}" href="/app/superadmin/plans">Тарифы и лимиты</a>
+        <a class="{% if section == 'security' %}active{% endif %}" href="/app/superadmin/security">Безопасность</a>
+        <a class="{% if section == 'monitoring' %}active{% endif %}" href="/app/superadmin/monitoring">Мониторинг</a>
+        <a class="{% if section == 'backups' %}active{% endif %}" href="/app/superadmin/backups">Бэкапы</a>
+        <a class="{% if section == 'audit' %}active{% endif %}" href="/app/superadmin/audit">Аудит-лог</a>
+        <a class="{% if section == 'system' %}active{% endif %}" href="/app/superadmin/system">Системные настройки</a>
+      </nav>
+    </aside>
+    <main class="content">
+      <div class="topbar">
+        <div>
+          <h1>{{ page_title or "Superadmin" }}</h1>
+          <div class="muted">Платформа FeedPilot · логин: {{ current_user.username }}</div>
+        </div>
+        <div class="top-actions">
+          <form method="post" action="/app/superadmin/backup">
+            <button class="btn primary" type="submit">Создать backup</button>
+          </form>
+          <form method="post" action="/app/logout">
+            <button class="btn" type="submit">Выйти</button>
+          </form>
+        </div>
+      </div>
+
+      {% if message %}<div class="notice">{{ message }}</div>{% endif %}
+      {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+
+      {% if section == "dashboard" %}
+        <section class="kpis">
+          <div class="kpi"><div class="label">Клиенты</div><div class="value">{{ stats.workspaces_total }}</div></div>
+          <div class="kpi"><div class="label">Пользователи</div><div class="value">{{ stats.users_total }}</div></div>
+          <div class="kpi"><div class="label">Активные сессии</div><div class="value">{{ stats.sessions_active }}</div></div>
+          <div class="kpi"><div class="label">Открытые алерты</div><div class="value">{{ stats.alerts_open }}</div></div>
+        </section>
+        <section class="card">
+          <h2>Последние критичные события</h2>
+          <table>
+            <thead><tr><th>Время</th><th>Workspace</th><th>Действие</th><th>Объект</th><th>Details</th></tr></thead>
+            <tbody>
+              {% for item in audit_items %}
+                <tr>
+                  <td>{{ item.created_at }}</td>
+                  <td>{{ item.workspace_id or "-" }}</td>
+                  <td>{{ item.action }}</td>
+                  <td>{{ item.object_type }}#{{ item.object_id }}</td>
+                  <td>{{ item.details_json }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "workspaces" %}
+        <section class="card">
+          <h2>Клиенты (workspaces)</h2>
+          <table>
+            <thead><tr><th>ID</th><th>Название</th><th>Tenant</th><th>Статус</th><th>План</th><th>Менеджеры/Диалоги/Сообщения</th><th>Действия</th></tr></thead>
+            <tbody>
+              {% for row in workspace_rows %}
+                <tr>
+                  <td>{{ row.workspace.id }}</td>
+                  <td>{{ row.workspace.name }}</td>
+                  <td>{{ row.workspace.tenant_code }}</td>
+                  <td>
+                    {% if row.workspace.is_suspended %}
+                      <span class="badge danger">suspended</span>
+                    {% elif row.workspace.is_active %}
+                      <span class="badge ok">active</span>
+                    {% else %}
+                      <span class="badge warn">inactive</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ row.subscription.plan_code }} / {{ row.subscription.status }}</td>
+                  <td>{{ row.metrics.managers_active }} / {{ row.metrics.dialogs_total }} / {{ row.metrics.messages_month }}</td>
+                  <td>
+                    <div class="row-actions">
+                      {% if row.workspace.is_suspended %}
+                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/resume"><button class="btn" type="submit">Resume</button></form>
+                      {% else %}
+                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/suspend"><button class="btn danger" type="submit">Suspend</button></form>
+                      {% endif %}
+                      <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/revoke-sessions"><button class="btn" type="submit">Revoke sessions</button></form>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "users" %}
+        <section class="card">
+          <h2>Пользователи и роли</h2>
+          <table>
+            <thead><tr><th>ID</th><th>Workspace</th><th>Логин</th><th>Роль</th><th>Статус</th><th>Email</th><th>Последний вход</th><th>Действия</th></tr></thead>
+            <tbody>
+              {% for user in users %}
+                <tr>
+                  <td>{{ user.id }}</td>
+                  <td>{{ user.workspace_id or "-" }}</td>
+                  <td>{{ user.username }}</td>
+                  <td>{{ user.role }}</td>
+                  <td>
+                    {% if user.is_blocked %}
+                      <span class="badge danger">blocked</span>
+                    {% elif user.is_active %}
+                      <span class="badge ok">active</span>
+                    {% else %}
+                      <span class="badge warn">inactive</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if user.email_verified %}
+                      <span class="badge ok">verified</span>
+                    {% else %}
+                      <span class="badge warn">not verified</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ user.last_login_at or "-" }}</td>
+                  <td>
+                    <div class="row-actions">
+                      <form method="post" action="/app/superadmin/users/{{ user.id }}/role">
+                        <input name="role" value="{{ user.role }}" />
+                        <button class="btn" type="submit">Сменить роль</button>
+                      </form>
+                      <form method="post" action="/app/superadmin/users/{{ user.id }}/toggle-block">
+                        <button class="btn {% if user.is_blocked %}primary{% else %}danger{% endif %}" type="submit">
+                          {% if user.is_blocked %}Разблокировать{% else %}Заблокировать{% endif %}
+                        </button>
+                      </form>
+                      <form method="post" action="/app/superadmin/users/{{ user.id }}/revoke-sessions">
+                        <button class="btn" type="submit">Сбросить сессии</button>
+                      </form>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "plans" %}
+        <section class="card">
+          <h2>Тарифы и лимиты</h2>
+          <table>
+            <thead><tr><th>Workspace</th><th>План</th><th>Статус</th><th>Менеджеры</th><th>Диалоги</th><th>Сообщения/мес</th><th>Изменить</th></tr></thead>
+            <tbody>
+              {% for row in workspace_rows %}
+                <tr>
+                  <td>{{ row.workspace.id }} · {{ row.workspace.name }}</td>
+                  <td>{{ row.subscription.plan_code }}</td>
+                  <td>{{ row.subscription.status }}</td>
+                  <td>{{ row.subscription.manager_limit }}</td>
+                  <td>{{ row.subscription.dialogs_limit }}</td>
+                  <td>{{ row.subscription.messages_per_month_limit }}</td>
+                  <td>
+                    <form class="inline-form" method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/plan">
+                      <div><label>Managers</label><input type="number" min="1" name="manager_limit" value="{{ row.subscription.manager_limit }}" /></div>
+                      <div><label>Dialogs</label><input type="number" min="1" name="dialogs_limit" value="{{ row.subscription.dialogs_limit }}" /></div>
+                      <div><label>Messages</label><input type="number" min="1" name="messages_per_month_limit" value="{{ row.subscription.messages_per_month_limit }}" /></div>
+                      <div>
+                        <label>Status</label>
+                        <select name="status">
+                          {% for option in ["active","trial","past_due","paused","cancelled"] %}
+                            <option value="{{ option }}" {% if row.subscription.status == option %}selected{% endif %}>{{ option }}</option>
+                          {% endfor %}
+                        </select>
+                      </div>
+                      <div><button class="btn primary" type="submit">Сохранить</button></div>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "security" %}
+        <section class="card">
+          <h2>Безопасность</h2>
+          <div class="muted">2FA и управление сессиями на уровне платформы.</div>
+          <div class="row-actions" style="margin-top:10px;">
+            <form method="post" action="/app/logout-all">
+              <button class="btn danger" type="submit">Logout всех сессий платформы</button>
+            </form>
+          </div>
+          <form class="inline-form" method="post" action="/app/superadmin/2fa" style="margin-top:12px;">
+            <div>
+              <label>Новый TOTP secret (Base32)</label>
+              <input name="secret_b32" placeholder="JBSWY3DPEHPK3PXP" />
+            </div>
+            <div><button class="btn primary" type="submit">Обновить 2FA</button></div>
+          </form>
+          <div class="muted" style="margin-top:10px;">
+            Fallback 2FA код: {% if superadmin_static_2fa_code_enabled %}<span class="badge warn">включен</span>{% else %}<span class="badge">выключен</span>{% endif %}
+          </div>
+        </section>
+      {% endif %}
+
+      {% if section == "monitoring" %}
+        <section class="card">
+          <h2>Мониторинг по tenant</h2>
+          <table>
+            <thead><tr><th>Workspace</th><th>Tenant</th><th>Suspended</th><th>Managers</th><th>Dialogs</th><th>Messages month</th><th>Open alerts</th></tr></thead>
+            <tbody>
+              {% for row in workspace_rows %}
+                <tr>
+                  <td>{{ row.workspace.id }}</td>
+                  <td>{{ row.workspace.tenant_code }}</td>
+                  <td>{{ "yes" if row.workspace.is_suspended else "no" }}</td>
+                  <td>{{ row.metrics.managers_active }}</td>
+                  <td>{{ row.metrics.dialogs_total }}</td>
+                  <td>{{ row.metrics.messages_month }}</td>
+                  <td>{{ row.open_alerts_count }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "backups" %}
+        <section class="card">
+          <h2>Бэкапы</h2>
+          <form class="inline-form" method="post" action="/app/superadmin/restore">
+            <div>
+              <label>Backup filename</label>
+              <input name="backup_name" placeholder="backup-20260101-010203.sqlite3" required />
+            </div>
+            <div><button class="btn danger" type="submit">Восстановить</button></div>
+          </form>
+          <table style="margin-top:12px;">
+            <thead><tr><th>Имя</th></tr></thead>
+            <tbody>
+              {% for item in backups %}
+                <tr><td>{{ item }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "audit" %}
+        <section class="card">
+          <h2>Аудит-лог</h2>
+          <table>
+            <thead><tr><th>Время</th><th>Workspace</th><th>Actor</th><th>Action</th><th>Object</th><th>Details</th></tr></thead>
+            <tbody>
+              {% for item in audit_items %}
+                <tr>
+                  <td>{{ item.created_at }}</td>
+                  <td>{{ item.workspace_id or "-" }}</td>
+                  <td>{{ item.actor_user_id or "-" }}</td>
+                  <td>{{ item.action }}</td>
+                  <td>{{ item.object_type }}#{{ item.object_id }}</td>
+                  <td>{{ item.details_json }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "system" %}
+        <section class="card">
+          <h2>Системные настройки</h2>
+          <div class="muted">Базовые runtime параметры платформы.</div>
+          <table style="min-width: 0; width:auto; margin-top:10px;">
+            <tbody>
+              <tr><th>SMTP host</th><td>{{ smtp.host }}</td></tr>
+              <tr><th>SMTP port</th><td>{{ smtp.port }}</td></tr>
+              <tr><th>SMTP sender</th><td>{{ smtp.sender }}</td></tr>
+              <tr><th>TLS</th><td>{{ smtp.tls }}</td></tr>
+              <tr><th>SSL</th><td>{{ smtp.ssl }}</td></tr>
+              <tr><th>Email verify TTL</th><td>{{ smtp.email_verify_ttl }}</td></tr>
+              <tr><th>Resend cooldown</th><td>{{ smtp.email_verify_resend_cooldown }}</td></tr>
+              <tr><th>Rate login/min</th><td>{{ security.rate_login }}</td></tr>
+              <tr><th>Rate webhook/min</th><td>{{ security.rate_webhook }}</td></tr>
+              <tr><th>Rate billing/min</th><td>{{ security.rate_billing }}</td></tr>
+              <tr><th>Force HTTPS</th><td>{{ security.force_https }}</td></tr>
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "raw_backups" %}
+        <section class="card">
+          <h2>Backups JSON</h2>
+          <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
+        </section>
+      {% endif %}
+
+      {% if section == "raw_backup_check" %}
+        <section class="card">
+          <h2>Backup check JSON</h2>
+          <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
+        </section>
+      {% endif %}
+
+      {% if section == "raw_metrics" %}
+        <section class="card">
+          <h2>Metrics JSON</h2>
+          <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
+        </section>
+      {% endif %}
+
+      {% if section == "raw_alerts" %}
+        <section class="card">
+          <h2>Alerts JSON</h2>
+          <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
+        </section>
+      {% endif %}
+    </main>
+  </div>
+</body>
+</html>

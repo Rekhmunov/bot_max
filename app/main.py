@@ -17,6 +17,7 @@ from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, 
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from itsdangerous import URLSafeTimedSerializer, BadData, SignatureExpired
 
@@ -33,6 +34,7 @@ from app.auth import (
     require_admin,
     require_service_user,
     revoke_all_service_sessions,
+    revoke_user_sessions,
     revoke_workspace_sessions,
     set_service_session_cookie,
     sign_in_admin,
@@ -118,6 +120,260 @@ from app.services import (
 )
 from fastapi.templating import Jinja2Templates
 from app.database import SessionLocal
+
+
+_SUPERADMIN_TABS = (
+    "dashboard",
+    "workspaces",
+    "users",
+    "plans",
+    "security",
+    "monitoring",
+    "backups",
+    "audit",
+    "system",
+)
+
+
+def _require_superadmin(user: ServiceUser) -> None:
+    if user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+
+
+def _to_iso(dt: datetime | None) -> str:
+    if dt is None:
+        return "—"
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _safe_int(value: int | str | None, default: int, min_value: int = 0) -> int:
+    try:
+        parsed = int(value if value is not None else default)
+    except (TypeError, ValueError):
+        parsed = int(default)
+    return max(min_value, parsed)
+
+
+def _superadmin_dashboard_snapshot(db: Session) -> dict:
+    workspaces = db.query(Workspace).order_by(Workspace.id.asc()).all()
+    users = db.query(ServiceUser).order_by(ServiceUser.id.asc()).all()
+    sessions = db.query(UserSession).filter(UserSession.is_revoked.is_(False)).count()
+    alerts_total = db.query(TenantAlert).filter(TenantAlert.is_resolved.is_(False)).count()
+    suspended = sum(1 for ws in workspaces if ws.is_suspended)
+    inactive = sum(1 for ws in workspaces if not ws.is_active)
+    roles = {
+        "superadmin": sum(1 for u in users if u.role == "superadmin"),
+        "owner": sum(1 for u in users if u.role == "owner"),
+        "admin": sum(1 for u in users if u.role == "admin"),
+        "manager": sum(1 for u in users if u.role == "manager"),
+    }
+    return {
+        "workspaces_total": len(workspaces),
+        "workspaces_active": len(workspaces) - suspended - inactive,
+        "workspaces_suspended": suspended,
+        "workspaces_inactive": inactive,
+        "users_total": len(users),
+        "sessions_active": sessions,
+        "alerts_active": alerts_total,
+        "roles": roles,
+    }
+
+
+def _build_superadmin_context(
+    *,
+    request: Request,
+    current_user: ServiceUser,
+    db: Session,
+    tab: str,
+    message: str | None = None,
+    error: str | None = None,
+) -> dict:
+    active_tab = tab if tab in _SUPERADMIN_TABS else "dashboard"
+    dashboard = _superadmin_dashboard_snapshot(db)
+    workspaces = db.query(Workspace).order_by(Workspace.id.asc()).all()
+    users = db.query(ServiceUser).order_by(ServiceUser.id.asc()).all()
+    subs = {
+        row.workspace_id: row
+        for row in db.query(Subscription).order_by(Subscription.id.asc()).all()
+    }
+    latest_alerts = (
+        db.query(TenantAlert)
+        .order_by(TenantAlert.id.desc())
+        .limit(200)
+        .all()
+    )
+    latest_audits = (
+        db.query(AuditLog)
+        .order_by(AuditLog.id.desc())
+        .limit(200)
+        .all()
+    )
+    latest_sessions = (
+        db.query(UserSession)
+        .order_by(UserSession.id.desc())
+        .limit(200)
+        .all()
+    )
+    backups = list_backups(limit=100)
+    workspace_metrics: dict[int, dict[str, int]] = {}
+    for ws in workspaces:
+        workspace_metrics[ws.id] = collect_tenant_metrics(db, workspace_id=ws.id)
+
+    workspace_rows: list[dict] = []
+    for ws in workspaces:
+        owner = next(
+            (u for u in users if u.workspace_id == ws.id and u.role in {"owner", "admin"}),
+            None,
+        )
+        sub = subs.get(ws.id) or get_or_create_subscription(db, workspace_id=ws.id)
+        m = workspace_metrics.get(ws.id, {})
+        status = "suspended" if ws.is_suspended else ("inactive" if not ws.is_active else "active")
+        workspace_rows.append(
+            {
+                "id": ws.id,
+                "name": ws.name,
+                "tenant_code": ws.tenant_code,
+                "status": status,
+                "plan_code": sub.plan_code,
+                "sub_status": sub.status,
+                "owner_username": (owner.username if owner else "—"),
+                "managers_active": int(m.get("managers_active", 0)),
+                "dialogs_total": int(m.get("dialogs_total", 0)),
+                "messages_month": int(m.get("messages_month", 0)),
+            }
+        )
+
+    user_rows: list[dict] = []
+    user_by_id: dict[int, ServiceUser] = {u.id: u for u in users}
+    for u in users:
+        user_rows.append(
+            {
+                "id": u.id,
+                "workspace_id": u.workspace_id,
+                "username": u.username,
+                "role": u.role,
+                "is_active": bool(u.is_active),
+                "is_blocked": bool(u.is_blocked),
+                "email_verified": bool(getattr(u, "email_verified", False)),
+                "last_login_at": _to_iso(u.last_login_at),
+            }
+        )
+
+    audits_rows = [
+        {
+            "id": row.id,
+            "workspace_id": row.workspace_id,
+            "actor_user_id": row.actor_user_id,
+            "actor_username": user_by_id[row.actor_user_id].username
+            if row.actor_user_id in user_by_id
+            else "—",
+            "action": row.action,
+            "object_type": row.object_type,
+            "object_id": row.object_id,
+            "created_at": _to_iso(row.created_at),
+            "details_json": row.details_json,
+        }
+        for row in latest_audits
+    ]
+
+    alert_rows = [
+        {
+            "id": row.id,
+            "workspace_id": row.workspace_id,
+            "severity": row.severity,
+            "alert_key": row.alert_key,
+            "message": row.message,
+            "metric_value": row.metric_value,
+            "is_resolved": bool(row.is_resolved),
+            "created_at": _to_iso(row.created_at),
+        }
+        for row in latest_alerts
+    ]
+
+    session_rows = [
+        {
+            "id": row.id,
+            "user_id": row.user_id,
+            "username": user_by_id[row.user_id].username if row.user_id in user_by_id else "—",
+            "is_revoked": bool(row.is_revoked),
+            "ip_address": row.ip_address,
+            "user_agent": row.user_agent,
+            "created_at": _to_iso(row.created_at),
+            "last_seen_at": _to_iso(row.last_seen_at),
+            "expires_at": _to_iso(row.expires_at),
+        }
+        for row in latest_sessions
+    ]
+
+    plan_rows: list[dict] = []
+    for ws in workspaces:
+        sub = subs.get(ws.id) or get_or_create_subscription(db, workspace_id=ws.id)
+        plan_rows.append(
+            {
+                "workspace_id": ws.id,
+                "workspace_name": ws.name,
+                "plan_code": sub.plan_code,
+                "status": sub.status,
+                "manager_limit": sub.manager_limit,
+                "dialogs_limit": sub.dialogs_limit,
+                "messages_per_month_limit": sub.messages_per_month_limit,
+                "folders_limit": getattr(sub, "folders_limit", 30),
+                "quick_replies_limit": getattr(sub, "quick_replies_limit", 100),
+                "grace_until": _to_iso(sub.grace_until),
+            }
+        )
+
+    return {
+        "request": request,
+        "current_user": current_user,
+        "active_tab": active_tab,
+        "message": message,
+        "error": error,
+        "dashboard": dashboard,
+        "workspace_rows": workspace_rows,
+        "user_rows": user_rows,
+        "plan_rows": plan_rows,
+        "alert_rows": alert_rows,
+        "audit_rows": audits_rows,
+        "session_rows": session_rows,
+        "monitor_rows": [
+            {
+                "workspace_id": ws.id,
+                "tenant_code": ws.tenant_code,
+                "is_suspended": ws.is_suspended,
+                "metrics": workspace_metrics.get(ws.id, {}),
+            }
+            for ws in workspaces
+        ],
+        "backup_rows": backups,
+        "system_flags": {
+            "smtp_enabled": bool((settings.smtp_host or "").strip()),
+            "webhook_secret_set": bool((settings.webhook_secret or "").strip()),
+            "billing_secret_set": bool((settings.billing_hook_secret or "").strip()),
+            "admin_totp_set": bool((settings.admin_totp_secret or "").strip()),
+        },
+    }
+
+
+def _render_superadmin_page(
+    *,
+    request: Request,
+    current_user: ServiceUser,
+    db: Session,
+    tab: str,
+    message: str | None = None,
+    error: str | None = None,
+) -> HTMLResponse:
+    _require_superadmin(current_user)
+    context = _build_superadmin_context(
+        request=request,
+        current_user=current_user,
+        db=db,
+        tab=tab,
+        message=message,
+        error=error,
+    )
+    return templates.TemplateResponse(request, "superadmin.html", context)
 
 app = FastAPI(title=settings.app_name)
 templates = Jinja2Templates(directory="app/templates")
@@ -1622,6 +1878,8 @@ def app_landing(
 ) -> HTMLResponse:
     current_user = get_current_service_user(request=request, db=db)
     if current_user is not None:
+        if current_user.role == "superadmin":
+            return RedirectResponse(url="/app/superadmin", status_code=302)
         return RedirectResponse(url="/app/chats", status_code=302)
     return _render_app_landing(request)
 
@@ -1633,6 +1891,8 @@ def app_login_page(
 ) -> HTMLResponse:
     current_user = get_current_service_user(request=request, db=db)
     if current_user is not None:
+        if current_user.role == "superadmin":
+            return RedirectResponse(url="/app/superadmin", status_code=302)
         return RedirectResponse(url="/app/chats", status_code=302)
     return _render_app_landing(request, view="login")
 
@@ -1772,7 +2032,8 @@ def app_login(
         ip_address=request.client.host if request.client else "",
         user_agent=request.headers.get("user-agent", ""),
     )
-    response = RedirectResponse(url="/app/chats", status_code=302)
+    target_url = "/app/superadmin" if user.role == "superadmin" else "/app/chats"
+    response = RedirectResponse(url=target_url, status_code=302)
     set_service_session_cookie(response, token)
     return response
 
@@ -2498,45 +2759,230 @@ def app_superadmin_page(
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    if current_user.role != "superadmin":
-        raise HTTPException(status_code=403, detail="Только для superadmin")
-
-    workspaces = db.query(Workspace).order_by(Workspace.id.asc()).all()
-    users = db.query(ServiceUser).order_by(ServiceUser.id.asc()).all()
-    sessions = (
-        db.query(UserSession)
-        .order_by(UserSession.id.desc())
-        .limit(100)
-        .all()
+    return _render_superadmin_page(
+        request=request,
+        current_user=current_user,
+        db=db,
+        tab="dashboard",
+        message="SaaS обзор загружен",
     )
-    audits = (
-        db.query(AuditLog)
-        .order_by(AuditLog.id.desc())
-        .limit(100)
-        .all()
-    )
-    subs = db.query(Subscription).order_by(Subscription.id.desc()).limit(100).all()
-    billing = db.query(BillingEvent).order_by(BillingEvent.id.desc()).limit(100).all()
 
-    return templates.TemplateResponse(
+
+@app.get("/app/superadmin/workspaces", response_class=HTMLResponse)
+def app_superadmin_workspaces_page(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return _render_superadmin_page(
+        request=request,
+        current_user=current_user,
+        db=db,
+        tab="workspaces",
+    )
+
+
+@app.get("/app/superadmin/users", response_class=HTMLResponse)
+def app_superadmin_users_page(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return _render_superadmin_page(
+        request=request,
+        current_user=current_user,
+        db=db,
+        tab="users",
+    )
+
+
+@app.get("/app/superadmin/plans", response_class=HTMLResponse)
+def app_superadmin_plans_page(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return _render_superadmin_page(
+        request=request,
+        current_user=current_user,
+        db=db,
+        tab="plans",
+    )
+
+
+@app.get("/app/superadmin/security", response_class=HTMLResponse)
+def app_superadmin_security_page(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return _render_superadmin_page(
+        request=request,
+        current_user=current_user,
+        db=db,
+        tab="security",
+    )
+
+
+@app.get("/app/superadmin/monitoring", response_class=HTMLResponse)
+def app_superadmin_monitoring_page(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return _render_superadmin_page(
+        request=request,
+        current_user=current_user,
+        db=db,
+        tab="monitoring",
+    )
+
+
+@app.get("/app/superadmin/backups/view", response_class=HTMLResponse)
+def app_superadmin_backups_page(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return _render_superadmin_page(
+        request=request,
+        current_user=current_user,
+        db=db,
+        tab="backups",
+    )
+
+
+@app.get("/app/superadmin/audit", response_class=HTMLResponse)
+def app_superadmin_audit_page(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return _render_superadmin_page(
+        request=request,
+        current_user=current_user,
+        db=db,
+        tab="audit",
+    )
+
+
+@app.get("/app/superadmin/system", response_class=HTMLResponse)
+def app_superadmin_system_page(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return _render_superadmin_page(
+        request=request,
+        current_user=current_user,
+        db=db,
+        tab="system",
+    )
+
+
+@app.post("/app/superadmin/users/{user_id}/role")
+def app_superadmin_update_user_role(
+    request: Request,
+    user_id: int,
+    role: str = Form("manager"),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
         request,
-        "app_landing.html",
-        {
-            "request": request,
-            "current_user": current_user,
-            "current_workspace": None,
-            "message": "SaaS обзор загружен",
-            "error": None,
-            "superadmin_stats": {
-                "workspaces": workspaces,
-                "users": users,
-                "sessions": sessions,
-                "audits": audits,
-                "subscriptions": subs,
-                "billing_events": billing,
-            },
-        },
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
+    _require_superadmin(current_user)
+    user = db.query(ServiceUser).filter(ServiceUser.id == user_id).first()
+    if user is None:
+        return RedirectResponse(url="/app/superadmin/users", status_code=302)
+    allowed = {"owner", "admin", "manager"}
+    normalized = (role or "").strip().lower()
+    if normalized not in allowed:
+        normalized = "manager"
+    user.role = normalized
+    db.add(user)
+    db.add(
+        AuditLog(
+            workspace_id=user.workspace_id,
+            actor_user_id=current_user.id,
+            action="user_role_updated",
+            object_type="service_user",
+            object_id=str(user.id),
+            details_json=f'{{"role":"{normalized}"}}',
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/superadmin/users", status_code=302)
+
+
+@app.post("/app/superadmin/users/{user_id}/toggle-block")
+def app_superadmin_toggle_user_block(
+    request: Request,
+    user_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    _require_superadmin(current_user)
+    user = db.query(ServiceUser).filter(ServiceUser.id == user_id).first()
+    if user is None:
+        return RedirectResponse(url="/app/superadmin/users", status_code=302)
+    user.is_blocked = not bool(user.is_blocked)
+    if user.is_blocked:
+        user.is_active = False
+    db.add(user)
+    db.add(
+        AuditLog(
+            workspace_id=user.workspace_id,
+            actor_user_id=current_user.id,
+            action="user_block_toggled",
+            object_type="service_user",
+            object_id=str(user.id),
+            details_json='{"is_blocked":' + ("true" if user.is_blocked else "false") + "}",
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/superadmin/users", status_code=302)
+
+
+@app.post("/app/superadmin/users/{user_id}/revoke-sessions")
+def app_superadmin_revoke_user_sessions(
+    request: Request,
+    user_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    _require_superadmin(current_user)
+    user = db.query(ServiceUser).filter(ServiceUser.id == user_id).first()
+    if user is None:
+        return RedirectResponse(url="/app/superadmin/users", status_code=302)
+    revoked = revoke_user_sessions(db, user_id=user_id)
+    db.add(
+        AuditLog(
+            workspace_id=user.workspace_id,
+            actor_user_id=current_user.id,
+            action="user_sessions_revoked",
+            object_type="service_user",
+            object_id=str(user.id),
+            details_json=f'{{"revoked":{revoked}}}',
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/superadmin/users", status_code=302)
 
 
 @app.post("/app/billing/hook")
@@ -2603,7 +3049,7 @@ def app_superadmin_suspend_workspace(
             )
         )
         db.commit()
-    return RedirectResponse(url="/app/superadmin", status_code=302)
+    return RedirectResponse(url="/app/superadmin/workspaces", status_code=302)
 
 
 @app.post("/app/superadmin/workspaces/{workspace_id}/resume")
@@ -2636,7 +3082,7 @@ def app_superadmin_resume_workspace(
             )
         )
         db.commit()
-    return RedirectResponse(url="/app/superadmin", status_code=302)
+    return RedirectResponse(url="/app/superadmin/workspaces", status_code=302)
 
 
 @app.post("/app/superadmin/workspaces/{workspace_id}/revoke-sessions")
@@ -2666,7 +3112,7 @@ def app_superadmin_revoke_workspace_sessions(
         )
     )
     db.commit()
-    return RedirectResponse(url="/app/superadmin", status_code=302)
+    return RedirectResponse(url="/app/superadmin/workspaces", status_code=302)
 
 
 @app.post("/app/superadmin/workspaces/{workspace_id}/plan")
@@ -2676,6 +3122,7 @@ def app_superadmin_update_workspace_plan(
     manager_limit: int = Form(3),
     dialogs_limit: int = Form(500),
     messages_per_month_limit: int = Form(5000),
+    plan_code: str = Form("trial"),
     status: str = Form("active"),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
@@ -2689,6 +3136,7 @@ def app_superadmin_update_workspace_plan(
     if current_user.role != "superadmin":
         raise HTTPException(status_code=403, detail="Только для superadmin")
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    sub.plan_code = (plan_code or "trial").strip().lower()[:64] or "trial"
     sub.manager_limit = max(1, int(manager_limit))
     sub.dialogs_limit = max(1, int(dialogs_limit))
     sub.messages_per_month_limit = max(1, int(messages_per_month_limit))
@@ -2702,14 +3150,14 @@ def app_superadmin_update_workspace_plan(
             object_type="subscription",
             object_id=str(sub.id),
             details_json=(
-                f'{{"manager_limit":{sub.manager_limit},"dialogs_limit":{sub.dialogs_limit},'
+                f'{{"plan_code":"{sub.plan_code}","manager_limit":{sub.manager_limit},"dialogs_limit":{sub.dialogs_limit},'
                 f'"messages_per_month_limit":{sub.messages_per_month_limit},"status":"{sub.status}"}}'
             ),
         )
     )
     db.commit()
     ensure_workspace_active_by_billing(db, workspace_id=workspace_id)
-    return RedirectResponse(url="/app/superadmin", status_code=302)
+    return RedirectResponse(url="/app/superadmin/plans", status_code=302)
 
 
 @app.post("/app/superadmin/backup")
@@ -2738,7 +3186,7 @@ def app_superadmin_create_backup(
             )
         )
         db.commit()
-    return RedirectResponse(url="/app/superadmin", status_code=302)
+    return RedirectResponse(url="/app/superadmin/backups/view", status_code=302)
 
 
 @app.post("/app/superadmin/restore")
@@ -2769,7 +3217,7 @@ def app_superadmin_restore_backup(
             )
         )
         db.commit()
-    return RedirectResponse(url="/app/superadmin", status_code=302)
+    return RedirectResponse(url="/app/superadmin/backups/view", status_code=302)
 
 
 @app.get("/app/superadmin/backups")
@@ -2859,8 +3307,7 @@ def app_superadmin_set_2fa_secret(
         scope="superadmin_ops",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role != "superadmin":
-        raise HTTPException(status_code=403, detail="Только для superadmin")
+    _require_superadmin(current_user)
     normalized = (secret_b32 or "").strip().replace(" ", "").upper()
     if normalized and (len(normalized) < 16 or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=" for ch in normalized)):
         raise HTTPException(status_code=400, detail="invalid_totp_secret")
@@ -2876,7 +3323,7 @@ def app_superadmin_set_2fa_secret(
         )
     )
     db.commit()
-    return RedirectResponse(url="/app/superadmin", status_code=302)
+    return RedirectResponse(url="/app/superadmin/security", status_code=302)
 
 
 @app.post("/app/chats/folders", response_class=RedirectResponse)
