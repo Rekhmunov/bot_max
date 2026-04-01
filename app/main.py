@@ -1137,6 +1137,38 @@ async def admin_chats_delete_conversation(
     return RedirectResponse(url=f"/admin/chats?removed={suffix}", status_code=302)
 
 
+@app.post("/admin/chats/{conversation_id}/rename-user", response_class=RedirectResponse)
+def admin_chats_rename_user(
+    request: Request,
+    conversation_id: int,
+    customer_name: str = Form(""),
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    workspace_id = DEFAULT_WORKSPACE_ID
+    updated = _rename_conversation_customer(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+        new_name=customer_name,
+    )
+    suffix = "1" if updated else "0"
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    return RedirectResponse(
+        url=f"/admin/chats?conversation_id={conversation_id}&q={quote_plus(q.strip())}&view={view}&renamed={suffix}{folder_qs}",
+        status_code=302,
+    )
+
+
 def _require_manager_mini_access(token: str, db: Session) -> dict:
     claims = verify_manager_mini_claims(token)
     if not claims:
@@ -1210,10 +1242,12 @@ def _admin_chats_ui() -> dict[str, str | bool]:
         "logout_action": "/admin/logout",
         "show_profile_links": True,
         "show_delete_user": True,
+        "show_rename_user": True,
         "allow_message_edit_actions": True,
         "send_action_prefix": "/admin/chats/",
         "send_action_suffix": "",
         "delete_user_action_prefix": "/admin/chats/",
+        "rename_user_action_prefix": "/admin/chats/",
         "profile_href_prefix": "/admin/chats/",
         "mark_unread_prefix": "/admin/chats/",
         "move_folder_prefix": "/admin/chats/",
@@ -1237,10 +1271,12 @@ def _manager_mini_ui(token: str) -> dict[str, str | bool]:
         "logout_action": "",
         "show_profile_links": False,
         "show_delete_user": False,
+        "show_rename_user": True,
         "allow_message_edit_actions": False,
         "send_action_prefix": "/mini/manager/chats/",
         "send_action_suffix": query_suffix,
         "delete_user_action_prefix": "",
+        "rename_user_action_prefix": "/mini/manager/chats/",
         "profile_href_prefix": "",
         "mark_unread_prefix": "/mini/manager/chats/",
         "move_folder_prefix": "/mini/manager/chats/",
@@ -1265,6 +1301,50 @@ def _resolve_workspace_for_token_or_user(
         if current_user and current_user.workspace_id:
             return int(current_user.workspace_id)
     return DEFAULT_WORKSPACE_ID
+
+
+def _rename_conversation_customer(
+    db: Session,
+    *,
+    conversation_id: int,
+    workspace_id: int,
+    new_name: str,
+) -> bool:
+    name_clean = new_name.strip()
+    if not name_clean:
+        return False
+    conversation = (
+        db.query(Conversation)
+        .filter(
+            Conversation.id == conversation_id,
+            Conversation.workspace_id == workspace_id,
+        )
+        .first()
+    )
+    if conversation is None:
+        return False
+    profile = (
+        db.query(CustomerProfile)
+        .filter(
+            CustomerProfile.workspace_id == workspace_id,
+            CustomerProfile.customer_account_id == conversation.customer_account_id,
+        )
+        .first()
+    )
+    if profile is None:
+        profile = CustomerProfile(
+            workspace_id=workspace_id,
+            customer_account_id=conversation.customer_account_id,
+            first_name=name_clean,
+            source_chat_id=conversation.chat_id or "",
+        )
+    else:
+        profile.first_name = name_clean
+        if not profile.source_chat_id:
+            profile.source_chat_id = conversation.chat_id or ""
+    db.add(profile)
+    db.commit()
+    return True
 
 
 def _render_app_landing(
@@ -1702,8 +1782,10 @@ async def app_chats_page(
             "show_admin_nav": True,
             "settings_href": "/app/settings",
             "logout_action": "/app/logout",
+            "show_rename_user": True,
             "send_action_prefix": "/app/chats/",
             "delete_user_action_prefix": "/app/chats/",
+            "rename_user_action_prefix": "/app/chats/",
             "profile_href_prefix": "/app/chats/",
             "mark_unread_prefix": "/app/chats/",
             "move_folder_prefix": "/app/chats/",
@@ -2837,12 +2919,45 @@ async def app_chats_delete_conversation(
     return RedirectResponse(url=f"/app/chats?removed={suffix}", status_code=302)
 
 
+@app.post("/app/chats/{conversation_id}/rename-user", response_class=RedirectResponse)
+def app_chats_rename_user(
+    request: Request,
+    conversation_id: int,
+    customer_name: str = Form(""),
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    updated = _rename_conversation_customer(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+        new_name=customer_name,
+    )
+    suffix = "1" if updated else "0"
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    return RedirectResponse(
+        url=f"/app/chats?conversation_id={conversation_id}&q={quote_plus(q.strip())}&view={view}&renamed={suffix}{folder_qs}",
+        status_code=302,
+    )
+
+
 def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
     sent_flag = request.query_params.get("sent")
     quick_flag = request.query_params.get("quick")
     edited_flag = request.query_params.get("edited")
     deleted_flag = request.query_params.get("deleted")
     retried_flag = request.query_params.get("retried")
+    renamed_flag = request.query_params.get("renamed")
     op_message = None
     op_error = None
     if sent_flag == "1":
@@ -2865,6 +2980,10 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
         op_message = "Повторная отправка выполнена"
     if retried_flag == "0":
         op_error = "Повторная отправка не удалась"
+    if renamed_flag == "1":
+        op_message = "Пользователь переименован"
+    if renamed_flag == "0":
+        op_error = "Не удалось переименовать пользователя"
     if request.query_params.get("unread") == "1":
         op_message = "Чат отмечен непрочитанным"
     if request.query_params.get("unread") == "0":
@@ -3064,6 +3183,44 @@ def manager_mini_move_folder(
             view=view,
             folder_id=current_folder_id,
             extra=f"foldered={suffix}",
+        ),
+        status_code=302,
+    )
+
+
+@app.post("/mini/manager/chats/{conversation_id}/rename-user", response_class=RedirectResponse)
+def manager_mini_rename_user(
+    request: Request,
+    conversation_id: int,
+    token: str,
+    customer_name: str = Form(""),
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="mini_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    updated = _rename_conversation_customer(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+        new_name=customer_name,
+    )
+    suffix = "1" if updated else "0"
+    return RedirectResponse(
+        url=_manager_mini_url(
+            token=token,
+            conversation_id=conversation_id,
+            q=q,
+            view=view,
+            folder_id=folder_id,
+            extra=f"renamed={suffix}",
         ),
         status_code=302,
     )

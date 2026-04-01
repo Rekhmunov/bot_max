@@ -356,6 +356,25 @@
       top: 0;
       z-index: 6;
     }
+    .header-menu-btn {
+      border: 0;
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      background: #eef3ff;
+      color: #3a4f7a;
+      font-size: 20px;
+      line-height: 1;
+      font-weight: 800;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      justify-self: end;
+    }
+    .header-menu-btn:hover {
+      background: #e4ecff;
+    }
     .back-btn {
       border: 0;
       background: transparent;
@@ -384,7 +403,7 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      padding-right: 130px;
+      padding-right: 46px;
     }
     .danger-btn {
       border: 0;
@@ -610,6 +629,10 @@
     .context-menu button:hover {
       background: #f2f6ff;
     }
+    .header-context-menu {
+      min-width: 230px;
+      z-index: 1004;
+    }
     .msg-context-menu {
       position: fixed;
       z-index: 1002;
@@ -791,6 +814,62 @@
       font-weight: 700;
       cursor: pointer;
     }
+    .user-pop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(15, 24, 44, 0.35);
+      z-index: 1005;
+      padding: 16px;
+    }
+    .user-pop-card {
+      width: min(420px, 100%);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .user-pop-card h3 {
+      margin: 0;
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .user-pop-card input {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 14px;
+      width: 100%;
+    }
+    .user-pop-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .user-pop-cancel {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: #40506d;
+      padding: 9px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .user-pop-submit {
+      border: 0;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      padding: 9px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
 
     .folder-main {
       min-width: 0;
@@ -868,10 +947,12 @@
   {% set logout_action = ui.logout_action if ui is defined and ui.logout_action else "/admin/logout" %}
   {% set show_profile_links = ui.show_profile_links if ui is defined and ui.show_profile_links is not none else true %}
   {% set show_delete_user = ui.show_delete_user if ui is defined and ui.show_delete_user is not none else true %}
+  {% set show_rename_user = ui.show_rename_user if ui is defined and ui.show_rename_user is not none else true %}
   {% set allow_message_edit_actions = ui.allow_message_edit_actions if ui is defined and ui.allow_message_edit_actions is not none else true %}
   {% set send_action_prefix = ui.send_action_prefix if ui is defined and ui.send_action_prefix else "/admin/chats/" %}
   {% set send_action_suffix = ui.send_action_suffix if ui is defined and ui.send_action_suffix else "" %}
   {% set delete_user_action_prefix = ui.delete_user_action_prefix if ui is defined and ui.delete_user_action_prefix else "/admin/chats/" %}
+  {% set rename_user_action_prefix = ui.rename_user_action_prefix if ui is defined and ui.rename_user_action_prefix else "/admin/chats/" %}
   {% set profile_href_prefix = ui.profile_href_prefix if ui is defined and ui.profile_href_prefix else "/admin/chats/" %}
   {% set mark_unread_prefix = ui.mark_unread_prefix if ui is defined and ui.mark_unread_prefix else "/admin/chats/" %}
   {% set move_folder_prefix = ui.move_folder_prefix if ui is defined and ui.move_folder_prefix else "/admin/chats/" %}
@@ -1004,10 +1085,15 @@
               chat_id: {{ active_thread.chat_id }} | phone_verified: {{ "да" if active_thread.phone_verified else "нет" }}
             </div>
           </div>
-          {% if show_delete_user %}
-            <form method="post" action="{{ delete_user_action_prefix }}{{ active_thread.conversation_id }}/delete-user" style="justify-self:end;" data-soft-nav>
-              <button type="submit" class="danger-btn">Удалить пользователя</button>
-            </form>
+          {% if show_delete_user or show_rename_user %}
+            <button
+              type="button"
+              id="header-menu-btn"
+              class="header-menu-btn"
+              aria-label="Действия с пользователем"
+            >
+              &#8942;
+            </button>
           {% endif %}
         </div>
 
@@ -1026,7 +1112,10 @@
           {% endif %}
 
           {% if messages %}
+            {% set shown = namespace(count=0) %}
             {% for msg in messages %}
+              {% if msg.text or msg.image_url or (msg.direction == "bot" and msg.delivery_state == "failed") %}
+              {% set shown.count = shown.count + 1 %}
               <article
                 class="bubble {{ msg.direction }}"
                 data-message-id="{{ msg.id }}"
@@ -1049,7 +1138,9 @@
                     {{ msg.direction }} / {{ msg.source }}{% if msg.max_message_mid %} | mid: {{ msg.max_message_mid }}{% endif %}
                   </div>
                 {% endif %}
-                <div class="bubble-text">{{ msg.text }}</div>
+                {% if msg.text or msg.image_url %}
+                  <div class="bubble-text">{{ msg.text }}</div>
+                {% endif %}
                 {% if msg.image_url %}
                   <img src="{{ msg.image_url }}" alt="image" />
                 {% endif %}
@@ -1057,7 +1148,11 @@
                   <div class="delivery-error">{{ msg.delivery_error }}</div>
                 {% endif %}
               </article>
+              {% endif %}
             {% endfor %}
+            {% if shown.count == 0 %}
+              <div class="empty">В этом чате пока нет сообщений.</div>
+            {% endif %}
           {% else %}
             <div class="empty">В этом чате пока нет сообщений.</div>
           {% endif %}
@@ -1119,6 +1214,65 @@
       </div>
     </div>
   </div>
+
+  {% if active_thread and (show_delete_user or show_rename_user) %}
+    <div class="context-menu header-context-menu" id="header-context-menu"></div>
+
+    {% if show_delete_user %}
+      <div class="user-pop" id="delete-user-popup">
+        <div class="user-pop-card">
+          <h3>Удалить пользователя?</h3>
+          <div class="thread-meta">Будут удалены пользователь и его чат.</div>
+          <form
+            method="post"
+            action="{{ delete_user_action_prefix }}{{ active_thread.conversation_id }}/delete-user{{ endpoint_query_suffix }}"
+            data-soft-nav
+          >
+            <input type="hidden" name="q" value="{{ query }}" />
+            <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
+            {% if folder_filter is not none %}
+              <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
+            {% endif %}
+            <div class="user-pop-actions">
+              <button type="button" class="user-pop-cancel" data-cancel-delete-user>Отмена</button>
+              <button type="submit" class="user-pop-submit">Удалить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if show_rename_user %}
+      <div class="user-pop" id="rename-user-popup">
+        <div class="user-pop-card">
+          <h3>Переименовать пользователя</h3>
+          <form
+            method="post"
+            action="{{ rename_user_action_prefix }}{{ active_thread.conversation_id }}/rename-user{{ endpoint_query_suffix }}"
+            data-soft-nav
+          >
+            <input type="hidden" name="q" value="{{ query }}" />
+            <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
+            {% if folder_filter is not none %}
+              <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
+            {% endif %}
+            <input
+              type="text"
+              name="customer_name"
+              id="rename-user-input"
+              value="{{ active_thread.customer_label.split(' @', 1)[0] }}"
+              maxlength="255"
+              required
+            />
+            <div class="user-pop-actions">
+              <button type="button" class="user-pop-cancel" data-cancel-rename-user>Отмена</button>
+              <button type="submit" class="user-pop-submit">Сохранить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+  {% endif %}
 
   <script>
     (() => {
@@ -1490,6 +1644,122 @@
           openCtx(rect.right - 4, rect.bottom + 4, threadId, unread);
         });
       });
+    })();
+
+    (() => {
+      const headerMenuBtn = document.getElementById("header-menu-btn");
+      const headerMenu = document.getElementById("header-context-menu");
+      if (!headerMenuBtn || !headerMenu) return;
+
+      const showDeleteUser = {{ "true" if show_delete_user else "false" }};
+      const showRenameUser = {{ "true" if show_rename_user else "false" }};
+      const deletePopup = document.getElementById("delete-user-popup");
+      const renamePopup = document.getElementById("rename-user-popup");
+      const renameInput = document.getElementById("rename-user-input");
+
+      const placeFixedMenu = (menuEl, x, y) => {
+        const pad = 8;
+        menuEl.style.visibility = "hidden";
+        menuEl.style.display = "block";
+        const width = menuEl.offsetWidth || 0;
+        const height = menuEl.offsetHeight || 0;
+        const maxLeft = Math.max(pad, window.innerWidth - width - pad);
+        const maxTop = Math.max(pad, window.innerHeight - height - pad);
+        const left = Math.min(Math.max(pad, x), maxLeft);
+        const top = Math.min(Math.max(pad, y), maxTop);
+        menuEl.style.left = `${left}px`;
+        menuEl.style.top = `${top}px`;
+        menuEl.style.visibility = "visible";
+      };
+
+      const hideHeaderMenu = () => {
+        headerMenu.style.display = "none";
+        headerMenu.innerHTML = "";
+      };
+      const openDeletePopup = () => {
+        if (!deletePopup) return;
+        deletePopup.style.display = "flex";
+      };
+      const closeDeletePopup = () => {
+        if (!deletePopup) return;
+        deletePopup.style.display = "none";
+      };
+      const openRenamePopup = () => {
+        if (!renamePopup) return;
+        renamePopup.style.display = "flex";
+        if (renameInput instanceof HTMLInputElement) {
+          renameInput.focus();
+          renameInput.select();
+        }
+      };
+      const closeRenamePopup = () => {
+        if (!renamePopup) return;
+        renamePopup.style.display = "none";
+      };
+
+      const openHeaderMenu = () => {
+        headerMenu.innerHTML = "";
+        if (showRenameUser) {
+          const renameBtn = document.createElement("button");
+          renameBtn.type = "button";
+          renameBtn.textContent = "Переименовать пользователя";
+          renameBtn.setAttribute("data-open-rename-user", "1");
+          headerMenu.appendChild(renameBtn);
+        }
+        if (showDeleteUser) {
+          const deleteBtn = document.createElement("button");
+          deleteBtn.type = "button";
+          deleteBtn.textContent = "Удалить пользователя";
+          deleteBtn.setAttribute("data-open-delete-user", "1");
+          headerMenu.appendChild(deleteBtn);
+        }
+        const rect = headerMenuBtn.getBoundingClientRect();
+        placeFixedMenu(headerMenu, rect.right - 8, rect.bottom + 6);
+      };
+
+      headerMenuBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (headerMenu.style.display === "block") {
+          hideHeaderMenu();
+          return;
+        }
+        openHeaderMenu();
+      });
+
+      headerMenu.addEventListener("click", (e) => {
+        const target = e.target;
+        if (!(target instanceof HTMLElement)) return;
+        if (target.closest("[data-open-delete-user]")) {
+          hideHeaderMenu();
+          openDeletePopup();
+          return;
+        }
+        if (target.closest("[data-open-rename-user]")) {
+          hideHeaderMenu();
+          openRenamePopup();
+        }
+      });
+
+      document.querySelectorAll("[data-cancel-delete-user]").forEach((btn) => {
+        btn.addEventListener("click", closeDeletePopup);
+      });
+      document.querySelectorAll("[data-cancel-rename-user]").forEach((btn) => {
+        btn.addEventListener("click", closeRenamePopup);
+      });
+      deletePopup?.addEventListener("click", (e) => {
+        if (e.target === deletePopup) closeDeletePopup();
+      });
+      renamePopup?.addEventListener("click", (e) => {
+        if (e.target === renamePopup) closeRenamePopup();
+      });
+
+      document.addEventListener("click", (e) => {
+        if (headerMenu.contains(e.target) || headerMenuBtn.contains(e.target)) return;
+        hideHeaderMenu();
+      });
+      window.addEventListener("resize", hideHeaderMenu);
+      window.addEventListener("scroll", hideHeaderMenu, { passive: true });
     })();
 
     (() => {
