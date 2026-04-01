@@ -175,6 +175,7 @@ def _superadmin_dashboard_snapshot(db: Session) -> dict:
         "users_total": len(users),
         "sessions_active": sessions,
         "alerts_active": alerts_total,
+        "alerts_open": alerts_total,
         "roles": roles,
     }
 
@@ -202,6 +203,11 @@ def _build_superadmin_context(
         .limit(200)
         .all()
     )
+    open_alerts_by_workspace: dict[int, int] = {}
+    for row in latest_alerts:
+        if row.is_resolved:
+            continue
+        open_alerts_by_workspace[row.workspace_id] = open_alerts_by_workspace.get(row.workspace_id, 0) + 1
     latest_audits = (
         db.query(AuditLog)
         .order_by(AuditLog.id.desc())
@@ -230,6 +236,10 @@ def _build_superadmin_context(
         status = "suspended" if ws.is_suspended else ("inactive" if not ws.is_active else "active")
         workspace_rows.append(
             {
+                "workspace": ws,
+                "subscription": sub,
+                "metrics": m,
+                "open_alerts_count": int(open_alerts_by_workspace.get(ws.id, 0)),
                 "id": ws.id,
                 "name": ws.name,
                 "tenant_code": ws.tenant_code,
@@ -323,18 +333,52 @@ def _build_superadmin_context(
             }
         )
 
+    page_title_map = {
+        "dashboard": "Superadmin Dashboard",
+        "workspaces": "Клиенты (Workspaces)",
+        "users": "Пользователи и роли",
+        "plans": "Тарифы и лимиты",
+        "security": "Безопасность",
+        "monitoring": "Мониторинг",
+        "backups": "Бэкапы",
+        "audit": "Аудит-лог",
+        "system": "Системные настройки",
+    }
+    smtp_info = {
+        "host": settings.smtp_host or "—",
+        "port": settings.smtp_port,
+        "sender": settings.smtp_sender or settings.smtp_username or "—",
+        "tls": "on" if settings.smtp_use_tls else "off",
+        "ssl": "on" if settings.smtp_use_ssl else "off",
+        "email_verify_ttl": settings.email_verification_token_ttl_seconds,
+        "email_verify_resend_cooldown": settings.email_verification_resend_cooldown_seconds,
+    }
+    security_info = {
+        "rate_login": settings.rate_limit_login_per_minute,
+        "rate_webhook": settings.rate_limit_webhook_per_minute,
+        "rate_billing": settings.rate_limit_billing_per_minute,
+        "force_https": "on" if settings.force_https else "off",
+    }
+
     return {
         "request": request,
         "current_user": current_user,
+        "section": active_tab,
         "active_tab": active_tab,
+        "page_title": page_title_map.get(active_tab, "Superadmin"),
         "message": message,
         "error": error,
+        "stats": dashboard,
         "dashboard": dashboard,
         "workspace_rows": workspace_rows,
+        "users": user_rows,
         "user_rows": user_rows,
         "plan_rows": plan_rows,
+        "alerts": alert_rows,
         "alert_rows": alert_rows,
+        "audit_items": audits_rows,
         "audit_rows": audits_rows,
+        "backups": backups,
         "session_rows": session_rows,
         "monitor_rows": [
             {
@@ -346,6 +390,9 @@ def _build_superadmin_context(
             for ws in workspaces
         ],
         "backup_rows": backups,
+        "smtp": smtp_info,
+        "security": security_info,
+        "superadmin_static_2fa_code_enabled": bool((settings.superadmin_static_2fa_code or "").strip()),
         "system_flags": {
             "smtp_enabled": bool((settings.smtp_host or "").strip()),
             "webhook_secret_set": bool((settings.webhook_secret or "").strip()),
