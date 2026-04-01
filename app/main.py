@@ -318,6 +318,8 @@ def _render_app_settings_page(
             "error": error,
             "ui_mode": "app",
             "current_user": current_user,
+            "chats_href": "/app/chats",
+            "logout_action": "/app/logout",
             "settings_action": "/app/settings",
             "quick_reply_create_action": "/app/quick-replies",
             "quick_reply_delete_action_prefix": "/app/quick-replies/",
@@ -1601,7 +1603,7 @@ def app_register(
         ip_address=request.client.host if request.client else "",
         user_agent=request.headers.get("user-agent", ""),
     )
-    response = RedirectResponse(url="/app/chats", status_code=302)
+    response = RedirectResponse(url="/app/settings", status_code=302)
     set_service_session_cookie(response, token)
     db.add(
         AuditLog(
@@ -1827,48 +1829,10 @@ def app_settings_page(
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
-    ok, reason = ensure_workspace_limits_and_state(db, workspace_id=workspace_id)
-    bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
-    quick_replies = (
-        db.query(QuickReply)
-        .filter(QuickReply.workspace_id == workspace_id)
-        .order_by(QuickReply.command.asc())
-        .all()
-    )
-    chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
-    delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
-    managers = list_workspace_managers(db, workspace_id=workspace_id)
-    sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
-    alerts = refresh_tenant_alerts(db, workspace_id=workspace_id)
-    note = f"Workspace: {workspace_id}. Менеджеров: {len(managers)}"
-    if not ok:
-        note += f" · Ограничение: {reason}"
-    return templates.TemplateResponse(
+    return _render_app_settings_page(
         request,
-        "admin.html",
-        {
-            "request": request,
-            "settings": bot_settings,
-            "template_prestart": get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id),
-            "template_start": get_template_text(db, TEMPLATE_START, workspace_id=workspace_id),
-            "template_after_phone": get_template_text(
-                db,
-                TEMPLATE_AFTER_PHONE,
-                workspace_id=workspace_id,
-            ),
-            "quick_replies": quick_replies,
-            "webhook_path": webhook_path,
-            "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
-            "chat_metrics": chat_metrics,
-            "delivery_metrics": delivery_metrics,
-            "subscription": sub,
-            "tenant_metrics": tenant_metrics,
-            "tenant_alerts": alerts,
-            "message": note,
-            "error": None,
-        },
+        db=db,
+        current_user=current_user,
     )
 
 

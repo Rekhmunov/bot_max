@@ -157,10 +157,10 @@
 <body>
   <div class="container">
     <div class="top">
-      <h1>Админ-панель бота Max</h1>
+      <h1>{% if ui_mode == "app" %}Настройки клиента{% else %}Админ-панель бота Max{% endif %}</h1>
       <div style="display:flex; gap:10px; align-items:center;">
-        <a href="/admin/chats" style="text-decoration:none; color:#2459f2; font-weight:700;">Чаты</a>
-        <form method="post" action="/admin/logout">
+        <a href="{{ chats_href or '/admin/chats' }}" style="text-decoration:none; color:#2459f2; font-weight:700;">Чаты</a>
+        <form method="post" action="{{ logout_action or '/admin/logout' }}">
           <button class="logout-btn" type="submit">Выйти</button>
         </form>
       </div>
@@ -176,7 +176,7 @@
     <div class="grid">
       <section class="card">
         <h2>Настройки бота</h2>
-        <form method="post" action="/admin/settings">
+        <form method="post" action="{{ settings_action or '/admin/settings' }}">
           <label for="prestart_message">Сообщение до нажатия Start</label>
           <textarea id="prestart_message" name="prestart_message" required>{{ template_prestart }}</textarea>
 
@@ -216,7 +216,7 @@
 
       <section class="card">
         <h2>Добавить быстрый ответ</h2>
-        <form method="post" action="/admin/quick-replies" enctype="multipart/form-data">
+        <form method="post" action="{{ quick_reply_create_action or '/admin/quick-replies' }}" enctype="multipart/form-data">
           <label for="command">Команда менеджера (без /)</label>
           <input id="command" name="command" placeholder="price" required />
 
@@ -235,14 +235,16 @@
       </section>
     </div>
 
-    <section class="card" style="margin-top:16px;">
-      <h2>Webhook для Max</h2>
-      <div class="hint">
-        Укажите этот URL в настройках бота Max:
-        <code>{{ webhook_url }}</code>
-      </div>
-      <div class="hint">Путь webhook на сервере: <code>{{ webhook_path }}</code></div>
-    </section>
+    {% if ui_mode != "app" %}
+      <section class="card" style="margin-top:16px;">
+        <h2>Webhook для Max</h2>
+        <div class="hint">
+          Укажите этот URL в настройках бота Max:
+          <code>{{ webhook_url }}</code>
+        </div>
+        <div class="hint">Путь webhook на сервере: <code>{{ webhook_path }}</code></div>
+      </section>
+    {% endif %}
 
     <section class="card" style="margin-top:16px;">
       <h2>Статистика доставки сообщений</h2>
@@ -352,7 +354,7 @@
                   {% endif %}
                 </td>
                 <td>
-                  <form method="post" action="/admin/quick-replies/{{ item.id }}/delete">
+                  <form method="post" action="{{ quick_reply_delete_action_prefix or '/admin/quick-replies/' }}{{ item.id }}/delete">
                     <button class="delete" type="submit">Удалить</button>
                   </form>
                 </td>
