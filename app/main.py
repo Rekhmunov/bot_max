@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
+import secrets
+import string
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,6 +23,7 @@ from app.auth import (
     create_manager_mini_token,
     create_manager_invite_token,
     create_service_session,
+    hash_password,
     verify_totp_code,
     get_current_admin,
     get_current_service_user,
@@ -121,6 +125,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 _outbox_worker_task: asyncio.Task | None = None
 _rate_limiter = InMemoryRateLimiter()
 _MAX_UPLOAD_BYTES = int(settings.max_upload_bytes)
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _apply_security_headers(response):
@@ -202,6 +207,48 @@ def _sha256(value: str) -> str:
 
 def _json_escape(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)[1:-1]
+
+
+def _password_requirements(password: str) -> dict[str, bool]:
+    value = password or ""
+    return {
+        "length": len(value) >= 8,
+        "upper": any(ch.isupper() for ch in value),
+        "lower": any(ch.islower() for ch in value),
+        "digit": any(ch.isdigit() for ch in value),
+        "special": any(not ch.isalnum() for ch in value),
+    }
+
+
+def _is_strong_password(password: str) -> bool:
+    checks = _password_requirements(password)
+    return all(checks.values())
+
+
+def _password_missing_hint(password: str) -> str:
+    checks = _password_requirements(password)
+    missing: list[str] = []
+    if not checks["length"]:
+        missing.append("минимум 8 символов")
+    if not checks["upper"]:
+        missing.append("заглавную букву (A-Z)")
+    if not checks["lower"]:
+        missing.append("строчную букву (a-z)")
+    if not checks["digit"]:
+        missing.append("цифру")
+    if not checks["special"]:
+        missing.append("спецсимвол (!@#$...)")
+    if not missing:
+        return ""
+    return "Добавьте: " + ", ".join(missing) + "."
+
+
+def _generate_temp_password() -> str:
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*()-_=+"
+    while True:
+        candidate = "".join(secrets.choice(alphabet) for _ in range(14))
+        if _is_strong_password(candidate):
+            return candidate
 
 
 def _render_app_settings_page(
@@ -1225,10 +1272,14 @@ def _render_app_landing(
     *,
     login_error: str | None = None,
     register_error: str | None = None,
+    manager_error: str | None = None,
+    manager_message: str | None = None,
     register_message: str | None = None,
     default_workspace_name: str = "",
     default_display_name: str = "",
     default_username: str = "",
+    view: str = "home",
+    invite_token: str = "",
 ) -> HTMLResponse:
     return templates.TemplateResponse(
         request,
@@ -1237,10 +1288,14 @@ def _render_app_landing(
             "request": request,
             "login_error": login_error,
             "register_error": register_error,
+            "manager_error": manager_error,
+            "manager_message": manager_message,
             "register_message": register_message,
             "default_workspace_name": default_workspace_name,
             "default_display_name": default_display_name,
             "default_username": default_username,
+            "view": view,
+            "invite_token": invite_token,
         },
     )
 
@@ -1360,6 +1415,22 @@ def _sanitize_message_for_ui(value: str) -> str:
     return (value or "").strip()[:500]
 
 
+def _is_password_complex(password: str) -> tuple[bool, list[str]]:
+    value = (password or "").strip()
+    missing: list[str] = []
+    if len(value) < 8:
+        missing.append("минимум 8 символов")
+    if not any(ch.islower() for ch in value):
+        missing.append("строчная буква")
+    if not any(ch.isupper() for ch in value):
+        missing.append("заглавная буква")
+    if not any(ch.isdigit() for ch in value):
+        missing.append("цифра")
+    if not any(not ch.isalnum() for ch in value):
+        missing.append("спецсимвол")
+    return len(missing) == 0, missing
+
+
 @app.get("/app", response_class=HTMLResponse)
 def app_landing(
     request: Request,
@@ -1374,47 +1445,63 @@ def app_landing(
 @app.post("/app/register", response_class=HTMLResponse)
 def app_register(
     request: Request,
-    workspace_name: str = Form(""),
-    display_name: str = Form(""),
-    username: str = Form(""),
+    email: str = Form(""),
     password: str = Form(""),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    workspace_name_clean = workspace_name.strip() or "Новый клиент"
-    display_name_clean = display_name.strip()
-    username_clean = username.strip().lower()
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="register",
+        limit=max(int(settings.rate_limit_login_per_minute), 1),
+    )
+    email_clean = email.strip().lower()
     password_clean = password.strip()
-    if not username_clean or not password_clean:
+    if not email_clean or not password_clean:
         return _render_app_landing(
             request,
-            register_error="Введите логин и пароль.",
-            default_workspace_name=workspace_name_clean,
-            default_display_name=display_name_clean,
-            default_username=username_clean,
+            register_error="Введите email и пароль.",
+            default_username=email_clean,
+            view="register",
         )
+    if "@" not in email_clean or "." not in email_clean.rsplit("@", 1)[-1]:
+        return _render_app_landing(
+            request,
+            register_error="Введите корректный email.",
+            default_username=email_clean,
+            view="register",
+        )
+    password_ok, missing = _is_password_complex(password_clean)
+    if not password_ok:
+        return _render_app_landing(
+            request,
+            register_error="Пароль недостаточно сложный: " + ", ".join(missing),
+            default_username=email_clean,
+            view="register",
+        )
+    workspace_name_clean = f"Workspace {email_clean.split('@', 1)[0]}"
     try:
         workspace, owner = create_workspace_with_owner(
             db,
             workspace_name=workspace_name_clean,
-            username=username_clean,
+            username=email_clean,
             password=password_clean,
-            display_name=display_name_clean,
+            display_name=email_clean.split("@", 1)[0],
         )
     except ValueError as exc:
         code = str(exc)
         msg = "Не удалось зарегистрироваться."
         if code == "username_exists":
-            msg = "Пользователь с таким логином уже существует."
+            msg = "Пользователь с таким email уже существует."
         elif code == "invalid_username":
-            msg = "Логин: 3-64 символа [a-z0-9_.-]."
+            msg = "Email содержит недопустимые символы."
         elif code == "password_too_short":
             msg = "Пароль должен содержать минимум 8 символов."
         return _render_app_landing(
             request,
             register_error=msg,
-            default_workspace_name=workspace_name_clean,
-            default_display_name=display_name_clean,
-            default_username=username_clean,
+            default_username=email_clean,
+            view="register",
         )
 
     token = create_service_session(
@@ -1738,7 +1825,6 @@ def app_managers_page(
 def app_create_manager(
     request: Request,
     username: str = Form(""),
-    password: str = Form(""),
     display_name: str = Form(""),
     max_account_id: str = Form(""),
     current_user: ServiceUser = Depends(require_service_user),
@@ -1800,7 +1886,7 @@ def app_create_manager(
         manager_user = create_service_user(
             db,
             username=username,
-            password=password,
+            password=f"InviteOnly#{uuid4().hex[:10]}",
             role="manager",
             workspace_id=workspace_id,
             display_name=display_name,
@@ -1966,7 +2052,7 @@ def app_accept_manager_invite(
             token=invite_token,
         )
     except HTTPException as exc:
-        return _render_app_landing(request, login_error=str(exc.detail))
+        return _render_app_landing(request, manager_error=str(exc.detail))
 
     workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
     max_account_id = str(claims.get("max_account_id", "")).strip()
@@ -1983,22 +2069,124 @@ def app_accept_manager_invite(
             .first()
         )
     if manager_user is None or not manager_user.is_active or manager_user.is_blocked:
-        return _render_app_landing(request, login_error="Менеджер не активен или не найден.")
+        return _render_app_landing(request, manager_error="Менеджер не активен или не найден.")
     if workspace is None or workspace.is_suspended or not workspace.is_active:
-        return _render_app_landing(request, login_error="Workspace недоступен.")
+        return _render_app_landing(request, manager_error="Workspace недоступен.")
+    if manager_user.password_hash:
+        invite_row.is_used = True
+        invite_row.used_by_user_id = manager_user.id
+        invite_row.used_at = now
+        db.add(invite_row)
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=manager_user.id,
+                action="manager_invite_consumed",
+                object_type="manager_invite",
+                object_id=str(invite_row.id),
+                details_json=f'{{"manager_id":{manager_user.id},"mode":"auto_login"}}',
+            )
+        )
+        db.commit()
 
+        raw_session = create_service_session(
+            db,
+            user_id=manager_user.id,
+            ip_address=request.client.host if request.client else "",
+            user_agent=request.headers.get("user-agent", ""),
+        )
+        response = RedirectResponse(url="/app/chats", status_code=302)
+        set_service_session_cookie(response, raw_session)
+        return response
+
+    return _render_app_landing(
+        request,
+        view="manager_invite",
+        invite_token=invite_token,
+        manager_message="Задайте пароль для аккаунта менеджера.",
+    )
+
+
+@app.post("/app/invite/{invite_token}", response_class=HTMLResponse)
+def app_set_manager_password_from_invite(
+    invite_token: str,
+    request: Request,
+    manager_password: str = Form(""),
+    manager_password_confirm: str = Form(""),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="invite_password_set",
+        limit=max(1, int(settings.rate_limit_login_per_minute)),
+    )
+    try:
+        claims, invite_row, manager_user, workspace = _manager_invite_context(
+            db=db,
+            token=invite_token,
+        )
+    except HTTPException as exc:
+        return _render_app_landing(request, manager_error=str(exc.detail))
+
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    max_account_id = str(claims.get("max_account_id", "")).strip()
+    now = datetime.now(UTC).replace(tzinfo=None)
+
+    if manager_user is None and max_account_id:
+        manager_user = (
+            db.query(ServiceUser)
+            .filter(
+                ServiceUser.workspace_id == workspace_id,
+                ServiceUser.role == "manager",
+                ServiceUser.max_account_id == max_account_id,
+            )
+            .first()
+        )
+    if manager_user is None or not manager_user.is_active or manager_user.is_blocked:
+        return _render_app_landing(request, manager_error="Менеджер не активен или не найден.")
+    if workspace is None or workspace.is_suspended or not workspace.is_active:
+        return _render_app_landing(request, manager_error="Workspace недоступен.")
+
+    password_value = (manager_password or "").strip()
+    confirm_value = (manager_password_confirm or "").strip()
+    if not password_value or not confirm_value:
+        return _render_app_landing(
+            request,
+            manager_error="Введите пароль и подтверждение.",
+            view="manager_invite",
+            invite_token=invite_token,
+        )
+    if password_value != confirm_value:
+        return _render_app_landing(
+            request,
+            manager_error="Пароли не совпадают.",
+            view="manager_invite",
+            invite_token=invite_token,
+        )
+    ok, missing = _is_password_complex(password_value)
+    if not ok:
+        return _render_app_landing(
+            request,
+            manager_error="Слишком простой пароль: " + ", ".join(missing),
+            view="manager_invite",
+            invite_token=invite_token,
+        )
+
+    manager_user.password_hash = hash_password(password_value)
     invite_row.is_used = True
     invite_row.used_by_user_id = manager_user.id
     invite_row.used_at = now
+    db.add(manager_user)
     db.add(invite_row)
     db.add(
         AuditLog(
             workspace_id=workspace_id,
             actor_user_id=manager_user.id,
-            action="manager_invite_consumed",
-            object_type="manager_invite",
-            object_id=str(invite_row.id),
-            details_json=f'{{"manager_id":{manager_user.id}}}',
+            action="manager_password_set_by_invite",
+            object_type="service_user",
+            object_id=str(manager_user.id),
+            details_json='{"source":"invite"}',
         )
     )
     db.commit()

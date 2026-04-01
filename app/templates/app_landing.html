@@ -6,259 +6,450 @@
   <title>FeedPilot SaaS</title>
   <style>
     :root {
-      --bg: #f5f7fb;
-      --card: #ffffff;
-      --text: #1f2430;
-      --muted: #677084;
-      --line: #dde3ee;
-      --primary: #2459f2;
-      --danger: #b42323;
-      --ok-bg: #e9f9ef;
-      --ok-border: #bde6ca;
-      --err-bg: #fde9e9;
-      --err-border: #f1c7c7;
+      --bg-1: #f7f9ff;
+      --bg-2: #edf2ff;
+      --card: rgba(255,255,255,.92);
+      --text: #1f2a44;
+      --muted: #66708a;
+      --line: #dce3f4;
+      --primary: #315efb;
+      --primary-dark: #2047d8;
+      --ok: #1f9d57;
+      --err: #cf3030;
+      --shadow: 0 18px 40px rgba(49,94,251,.14);
     }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: Arial, sans-serif; color: var(--text); background: var(--bg); }
-    .wrap { max-width: 1180px; margin: 24px auto; padding: 0 16px 40px; }
-    .top { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 14px; }
-    .brand { margin: 0; font-size: 26px; font-weight: 800; }
-    .top-right { display: flex; align-items: center; gap: 10px; }
-    .top-link { text-decoration: none; color: #2459f2; font-weight: 700; }
-    .logout-btn { border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 8px 12px; cursor: pointer; }
-    .notice { margin: 10px 0 16px; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
-    .notice.ok { background: var(--ok-bg); border: 1px solid var(--ok-border); }
-    .notice.err { background: var(--err-bg); border: 1px solid var(--err-border); color: var(--danger); }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; box-shadow: 0 4px 16px rgba(0,0,0,.04); }
-    h2 { margin: 0 0 10px 0; font-size: 22px; }
-    h3 { margin: 0 0 8px 0; font-size: 19px; }
-    .muted { color: var(--muted); font-size: 14px; margin: 0 0 10px 0; }
-    label { display: block; margin: 10px 0 6px; font-weight: 600; font-size: 14px; }
-    input { width: 100%; border: 1px solid var(--line); border-radius: 8px; padding: 10px; font: inherit; background: #fff; }
-    .btn { margin-top: 12px; border: 0; border-radius: 8px; background: var(--primary); color: #fff; font-weight: 700; padding: 10px 14px; cursor: pointer; }
-    .workspace-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-    .chip { background: #eef3ff; color: #1f4bc2; border: 1px solid #d6e1ff; border-radius: 999px; padding: 5px 10px; font-size: 12px; font-weight: 700; }
-    .links { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
-    .link-btn { text-decoration: none; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: #1f2430; background: #fff; font-weight: 700; font-size: 14px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
-    th, td { border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; padding: 8px; word-break: break-word; }
-    .small { font-size: 12px; color: var(--muted); }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-    @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } .brand { font-size: 23px; } }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1200px 500px at 10% -10%, #dbe6ff 0%, transparent 60%),
+        radial-gradient(1000px 600px at 100% 0%, #d8f0ff 0%, transparent 58%),
+        linear-gradient(180deg, var(--bg-1), var(--bg-2));
+    }
+    .page {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .landing-shell {
+      width: min(980px, 100%);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+      padding: 20px;
+      transition: transform .25s ease, box-shadow .25s ease;
+    }
+    .landing-shell:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 22px 48px rgba(49,94,251,.18);
+    }
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .brand {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 900;
+      letter-spacing: .2px;
+    }
+    .top-link {
+      text-decoration: none;
+      color: var(--primary);
+      font-weight: 700;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 10px;
+      padding: 8px 12px;
+      transition: .2s ease;
+    }
+    .top-link:hover { border-color: var(--primary); transform: translateY(-1px); }
+
+    .notice {
+      border-radius: 10px;
+      font-size: 14px;
+      padding: 10px 12px;
+      margin: 8px 0;
+      animation: fadeSlide .25s ease;
+    }
+    .notice.ok { background: #eaf9f0; color: #1f7d48; border: 1px solid #bfe9cf; }
+    .notice.err { background: #feecec; color: var(--err); border: 1px solid #f3c8c8; }
+    @keyframes fadeSlide {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .hero {
+      text-align: center;
+      padding: 12px 0 4px;
+    }
+    .hero h2 {
+      margin: 0 0 8px 0;
+      font-size: 30px;
+      line-height: 1.1;
+    }
+    .hero p {
+      margin: 0 auto 14px;
+      max-width: 720px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.45;
+    }
+    .hero-actions {
+      display: flex;
+      justify-content: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+    .action-btn {
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: #fff;
+      color: var(--text);
+      font-weight: 700;
+      padding: 10px 14px;
+      cursor: pointer;
+      transition: .2s ease;
+    }
+    .action-btn.primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+    }
+    .action-btn:hover { transform: translateY(-1px); }
+    .action-btn.primary:hover { background: var(--primary-dark); }
+
+    .panel-wrap {
+      position: relative;
+      min-height: 330px;
+      margin-top: 8px;
+    }
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+      padding: 16px;
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      transform: translateY(10px) scale(.99);
+      pointer-events: none;
+      transition: opacity .22s ease, transform .22s ease;
+    }
+    .panel.active {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+    .panel h3 {
+      margin: 0 0 6px;
+      font-size: 20px;
+    }
+    .muted { color: var(--muted); font-size: 14px; margin: 0 0 12px; }
+    label { display: block; font-size: 13px; font-weight: 700; margin: 10px 0 6px; }
+    input {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 11px;
+      font: inherit;
+      background: #fff;
+      transition: border-color .2s ease, box-shadow .2s ease;
+    }
+    input:focus {
+      outline: none;
+      border-color: #9bb2ff;
+      box-shadow: 0 0 0 3px rgba(49,94,251,.15);
+    }
+    .btn {
+      margin-top: 12px;
+      border: 0;
+      border-radius: 10px;
+      background: var(--primary);
+      color: #fff;
+      font-weight: 700;
+      padding: 11px 14px;
+      cursor: pointer;
+      width: 100%;
+      transition: background .2s ease, transform .2s ease;
+    }
+    .btn:hover { background: var(--primary-dark); transform: translateY(-1px); }
+
+    .password-meter {
+      margin-top: 8px;
+      display: grid;
+      gap: 5px;
+    }
+    .pw-rule {
+      font-size: 12px;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: color .2s ease;
+    }
+    .pw-rule.ok { color: var(--ok); }
+    .pw-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #c6ccdc;
+      transition: background .2s ease;
+    }
+    .pw-rule.ok .pw-dot { background: var(--ok); }
+
+    .fade-in {
+      animation: fadeSlide .25s ease;
+    }
+    .compact-note {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .workspace-box {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+      margin-bottom: 10px;
+      background: #fff;
+    }
+    .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .link-btn {
+      text-decoration: none;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 8px 10px;
+      color: var(--text);
+      font-weight: 700;
+      background: #fff;
+    }
+    .logout-btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    @media (max-width: 760px) {
+      .hero h2 { font-size: 24px; }
+      .landing-shell { border-radius: 18px; padding: 14px; }
+      .panel-wrap { min-height: 360px; }
+    }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="top">
-      <h1 class="brand">FeedPilot SaaS</h1>
-      <div class="top-right">
-        <a href="/admin/login" class="top-link">Суперадмин</a>
+  <div class="page">
+    <div class="landing-shell">
+      <div class="top">
+        <h1 class="brand">FeedPilot SaaS</h1>
         {% if current_user %}
-          <form method="post" action="/app/logout"><button type="submit" class="logout-btn">Выйти</button></form>
+          <form method="post" action="/app/logout">
+            <button type="submit" class="logout-btn">Выйти</button>
+          </form>
         {% endif %}
       </div>
-    </div>
 
-    {% if message %}<div class="notice ok">{{ message }}</div>{% endif %}
-    {% if register_message %}<div class="notice ok">{{ register_message }}</div>{% endif %}
-    {% if error %}<div class="notice err">{{ error }}</div>{% endif %}
-    {% if login_error %}<div class="notice err">{{ login_error }}</div>{% endif %}
-    {% if register_error %}<div class="notice err">{{ register_error }}</div>{% endif %}
+      {% if message %}<div class="notice ok">{{ message }}</div>{% endif %}
+      {% if register_message %}<div class="notice ok">{{ register_message }}</div>{% endif %}
+      {% if manager_message %}<div class="notice ok">{{ manager_message }}</div>{% endif %}
+      {% if error %}<div class="notice err">{{ error }}</div>{% endif %}
+      {% if login_error %}<div class="notice err">{{ login_error }}</div>{% endif %}
+      {% if register_error %}<div class="notice err">{{ register_error }}</div>{% endif %}
+      {% if manager_error %}<div class="notice err">{{ manager_error }}</div>{% endif %}
 
-    {% if current_user %}
-      <section class="card" style="margin-bottom:16px;">
-        <h2>Личный кабинет</h2>
-        <p class="muted">Вы вошли как <b>{{ current_user.username }}</b> ({{ current_user.role }}).</p>
-        {% if current_workspace %}
-          <div class="workspace-meta">
-            <div class="chip">Workspace: {{ current_workspace.name }}</div>
-            <div class="chip">Tenant: {{ current_workspace.tenant_code }}</div>
-            <div class="chip">ID: {{ current_workspace.id }}</div>
-          </div>
-        {% endif %}
-        <div class="links">
-          <a class="link-btn" href="/app/settings">Настройки</a>
-          <a class="link-btn" href="/app/chats">Чаты</a>
-          {% if current_user.role in ["owner", "admin", "superadmin"] %}
-            <a class="link-btn" href="/app/managers">Менеджеры</a>
-          {% endif %}
-          {% if current_user.role == "superadmin" %}
-            <a class="link-btn" href="/app/superadmin">Управление SaaS</a>
-          {% endif %}
-        </div>
-      </section>
-    {% endif %}
-
-    {% if manager_links %}
-      <section class="card" style="margin-bottom:16px;">
-        <h3>Менеджеры и onboarding-ссылки</h3>
-        <p class="muted">Ссылка onboarding одноразовая: после первого открытия менеджер автоматически авторизуется в веб-чат (ПК), mini-app доступна отдельно.</p>
-        <table>
-          <thead>
-            <tr>
-              <th>Менеджер</th>
-              <th>Max ID</th>
-              <th>Onboarding</th>
-              <th>Mini-app</th>
-              <th>Web чат</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for item in manager_links %}
-              <tr>
-                <td>{{ item.display }}<br/><span class="small">@{{ item.username }}</span></td>
-                <td class="mono">{{ item.max_account_id }}</td>
-                <td><a class="mono" href="{{ item.invite_link }}" target="_blank">{{ item.invite_link }}</a></td>
-                <td><a class="mono" href="{{ item.mini_link }}" target="_blank">{{ item.mini_link }}</a></td>
-                <td><a class="mono" href="{{ item.web_link }}" target="_blank">{{ item.web_link }}</a></td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </section>
-    {% endif %}
-
-    {% if superadmin_stats %}
-      <section class="card" style="margin-bottom:16px;">
-        <h3>Суперадмин обзор</h3>
-        <div class="links">
-          <div class="chip">Workspaces: {{ superadmin_stats.workspaces|length }}</div>
-          <div class="chip">Users: {{ superadmin_stats.users|length }}</div>
-          <div class="chip">Sessions: {{ superadmin_stats.sessions|length }}</div>
-          <div class="chip">Audit: {{ superadmin_stats.audits|length }}</div>
-          <div class="chip">Subscriptions: {{ superadmin_stats.subscriptions|length }}</div>
-          <div class="chip">Billing events: {{ superadmin_stats.billing_events|length }}</div>
-        </div>
-      </section>
-    {% endif %}
-
-    <div class="grid">
-      {% if not current_user %}
-        <section class="card">
-          <h3>Вход клиента / менеджера</h3>
-          <p class="muted">Для владельцев workspace и менеджеров (включая вход по onboarding-ссылке).</p>
-          <form method="post" action="/app/login">
-            <label for="login_username">Логин</label>
-            <input id="login_username" name="username" value="{{ default_username or '' }}" required />
-            <label for="login_password">Пароль</label>
-            <input id="login_password" type="password" name="password" required />
-            <label for="login_totp">2FA код (для superadmin)</label>
-            <input id="login_totp" name="totp_code" placeholder="123456" />
-            <button class="btn" type="submit">Войти</button>
-          </form>
-          <div class="small" style="margin-top:8px;">Если вас добавил владелец workspace, используйте выданные данные или onboarding-ссылку.</div>
-        </section>
-
-        <section class="card">
-          <h3>Регистрация клиента</h3>
-          <p class="muted">Создает отдельный workspace (tenant) для вашей компании.</p>
-          <form method="post" action="/app/register">
-            <label for="workspace_name">Название workspace</label>
-            <input id="workspace_name" name="workspace_name" value="{{ default_workspace_name or '' }}" placeholder="Мой магазин" required />
-            <label for="display_name">Ваше имя</label>
-            <input id="display_name" name="display_name" value="{{ default_display_name or '' }}" placeholder="Иван" />
-            <label for="register_username">Логин (латиница, 3+)</label>
-            <input id="register_username" name="username" value="{{ default_username or '' }}" placeholder="myshop_owner" required />
-            <label for="register_password">Пароль (минимум 8)</label>
-            <input id="register_password" type="password" name="password" required />
-            <button class="btn" type="submit">Создать workspace</button>
-          </form>
-        </section>
-      {% else %}
-        <section class="card">
-          <h3>Доступные разделы</h3>
-          <table>
-            <thead><tr><th>Раздел</th><th>Описание</th><th>Ссылка</th></tr></thead>
-            <tbody>
-              <tr><td>Настройки</td><td>Шаблоны и параметры бота.</td><td><a href="/app/settings">/app/settings</a></td></tr>
-              <tr><td>Чаты</td><td>Рабочее место чатов (веб + mobile layout).</td><td><a href="/app/chats">/app/chats</a></td></tr>
-              {% if current_user.role in ["owner", "admin", "superadmin"] %}
-                <tr><td>Менеджеры</td><td>Добавление менеджеров и onboarding-ссылки.</td><td><a href="/app/managers">/app/managers</a></td></tr>
-              {% endif %}
-              {% if current_user.role == "superadmin" %}
-                <tr><td>SaaS контроль</td><td>Клиенты, сессии, аудит, billing hooks.</td><td><a href="/app/superadmin">/app/superadmin</a></td></tr>
-              {% endif %}
-            </tbody>
-          </table>
-        </section>
-        {% if current_user.role == "superadmin" %}
-          <section class="card">
-            <h3>SaaS управление</h3>
-            <p class="muted">Блокировки/разблокировки workspace, лимиты, сессии, backup/restore и диагностика.</p>
-            <div class="links" style="margin-bottom:10px;">
-              <a class="link-btn" href="/app/superadmin/backups" target="_blank">Список бэкапов (JSON)</a>
-              <a class="link-btn" href="/app/superadmin/backup-check" target="_blank">Проверка бэкапа</a>
-              <a class="link-btn" href="/app/superadmin/metrics" target="_blank">Метрики tenants</a>
-              <a class="link-btn" href="/app/superadmin/alerts" target="_blank">Алерты tenants</a>
+      {% if current_user %}
+        <section class="workspace-box fade-in">
+          <b>Личный кабинет</b><br/>
+          Вы вошли как <b>{{ current_user.username }}</b> ({{ current_user.role }}).
+          {% if current_workspace %}
+            <div class="compact-note">
+              Workspace: {{ current_workspace.name }} · tenant: {{ current_workspace.tenant_code }} · id: {{ current_workspace.id }}
             </div>
-            <form method="post" action="/app/superadmin/backup" style="margin-bottom:10px;">
-              <button class="btn" type="submit">Создать backup SQLite</button>
-            </form>
-            <form method="post" action="/app/superadmin/restore" style="margin-bottom:10px;">
-              <label for="backup_name_restore">Имя backup-файла для restore</label>
-              <input id="backup_name_restore" name="backup_name" placeholder="backup-YYYYMMDD-HHMMSS.sqlite3" required />
-              <button class="btn" type="submit">Восстановить из backup</button>
-            </form>
-            <h4 style="margin:14px 0 6px;">Workspaces</h4>
-            {% if superadmin_stats and superadmin_stats.workspaces %}
-              <table>
+          {% endif %}
+          <div class="links">
+            <a class="link-btn" href="/app/settings">Настройки</a>
+            <a class="link-btn" href="/app/chats">Чаты</a>
+            {% if current_user.role in ["owner", "admin", "superadmin"] %}
+              <a class="link-btn" href="/app/managers">Менеджеры</a>
+            {% endif %}
+            {% if current_user.role == "superadmin" %}
+              <a class="link-btn" href="/app/superadmin">SaaS управление</a>
+            {% endif %}
+          </div>
+        </section>
+        {% if manager_links %}
+          <section class="workspace-box fade-in" style="margin-top:10px;">
+            <b>Менеджеры и ссылки</b>
+            <div class="compact-note">Менеджер задаёт пароль по one-time ссылке, логин = Max ID.</div>
+            <div style="overflow:auto;">
+              <table style="width:100%; border-collapse: collapse; margin-top:8px; font-size:13px;">
                 <thead>
                   <tr>
-                    <th>ID</th>
-                    <th>Tenant</th>
-                    <th>Статус</th>
-                    <th>Действия</th>
-                    <th>Лимиты</th>
+                    <th style="text-align:left; border-bottom:1px solid var(--line); padding:6px;">Менеджер</th>
+                    <th style="text-align:left; border-bottom:1px solid var(--line); padding:6px;">Max ID</th>
+                    <th style="text-align:left; border-bottom:1px solid var(--line); padding:6px;">Invite</th>
+                    <th style="text-align:left; border-bottom:1px solid var(--line); padding:6px;">Mini</th>
+                    <th style="text-align:left; border-bottom:1px solid var(--line); padding:6px;">Web</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {% for ws in superadmin_stats.workspaces %}
+                  {% for item in manager_links %}
                     <tr>
-                      <td>{{ ws.id }}</td>
-                      <td>{{ ws.tenant_code }}</td>
-                      <td>{{ "suspended" if ws.is_suspended else "active" }}</td>
-                      <td>
-                        <form method="post" action="/app/superadmin/workspaces/{{ ws.id }}/suspend" style="display:inline;">
-                          <button class="logout-btn" type="submit">Suspend</button>
-                        </form>
-                        <form method="post" action="/app/superadmin/workspaces/{{ ws.id }}/resume" style="display:inline;">
-                          <button class="logout-btn" type="submit">Resume</button>
-                        </form>
-                        <form method="post" action="/app/superadmin/workspaces/{{ ws.id }}/revoke-sessions" style="display:inline;">
-                          <button class="logout-btn" type="submit">Logout all</button>
-                        </form>
-                      </td>
-                      <td>
-                        <form method="post" action="/app/superadmin/workspaces/{{ ws.id }}/plan">
-                          <input name="manager_limit" type="number" min="1" value="3" style="margin-bottom:4px;" />
-                          <input name="dialogs_limit" type="number" min="1" value="500" style="margin-bottom:4px;" />
-                          <input name="messages_per_month_limit" type="number" min="1" value="5000" style="margin-bottom:4px;" />
-                          <input name="status" value="active" style="margin-bottom:4px;" />
-                          <button class="logout-btn" type="submit">Сохранить лимиты</button>
-                        </form>
-                      </td>
+                      <td style="border-bottom:1px solid var(--line); padding:6px;">{{ item.display }}</td>
+                      <td style="border-bottom:1px solid var(--line); padding:6px;">{{ item.max_account_id }}</td>
+                      <td style="border-bottom:1px solid var(--line); padding:6px;"><a href="{{ item.invite_link }}" target="_blank">invite</a></td>
+                      <td style="border-bottom:1px solid var(--line); padding:6px;"><a href="{{ item.mini_link }}" target="_blank">mini</a></td>
+                      <td style="border-bottom:1px solid var(--line); padding:6px;"><a href="{{ item.web_link }}" target="_blank">web</a></td>
                     </tr>
                   {% endfor %}
                 </tbody>
               </table>
-            {% endif %}
+            </div>
           </section>
         {% endif %}
-        <section class="card">
-          <h3>Состояние доступа</h3>
-          <table>
-            <tbody>
-              <tr><th>Пользователь</th><td>{{ current_user.username }}</td></tr>
-              <tr><th>Роль</th><td>{{ current_user.role }}</td></tr>
-              <tr><th>Workspace ID</th><td>{{ current_user.workspace_id or "—" }}</td></tr>
-              <tr><th>Активен</th><td>{{ "да" if current_user.is_active else "нет" }}</td></tr>
-              <tr><th>Блокировка</th><td>{{ "да" if current_user.is_blocked else "нет" }}</td></tr>
-            </tbody>
-          </table>
+        {% if superadmin_stats and current_user.role == "superadmin" %}
+          <section class="workspace-box fade-in" style="margin-top:10px;">
+            <b>SaaS управление</b>
+            <div class="compact-note">
+              Workspaces: {{ superadmin_stats.workspaces|length }} · Users: {{ superadmin_stats.users|length }} · Sessions: {{ superadmin_stats.sessions|length }}
+            </div>
+            <div class="links" style="margin-top:8px;">
+              <a class="link-btn" href="/app/superadmin/backups" target="_blank">Backups JSON</a>
+              <a class="link-btn" href="/app/superadmin/metrics" target="_blank">Metrics JSON</a>
+              <a class="link-btn" href="/app/superadmin/alerts" target="_blank">Alerts JSON</a>
+            </div>
+          </section>
+        {% endif %}
+      {% else %}
+        <section class="hero">
+          <h2>Сервис чатов для продаж и поддержки</h2>
+          <p>
+            Подключайте менеджеров, работайте с клиентскими диалогами в вебе и mini-app,
+            управляйте шаблонами ответов и маршрутизацией обращений в одном интерфейсе.
+          </p>
+          <div class="hero-actions">
+            <button class="action-btn primary" type="button" data-switch="login">Авторизация</button>
+            <button class="action-btn" type="button" data-switch="register">Регистрация</button>
+          </div>
         </section>
+
+        <div class="panel-wrap">
+          <section id="panel-login" class="panel {% if view == 'home' or view == 'login' %}active{% endif %}">
+            <h3>Авторизация</h3>
+            <p class="muted">Единый вход для пользователя и менеджера (по invite-ссылке после установки пароля).</p>
+            <form method="post" action="/app/login">
+              <label for="login_username">Email (логин)</label>
+              <input id="login_username" name="username" type="email" value="{{ default_username or '' }}" required />
+              <label for="login_password">Пароль</label>
+              <input id="login_password" type="password" name="password" required />
+              <label for="login_totp">2FA код (только для superadmin)</label>
+              <input id="login_totp" name="totp_code" placeholder="123456" />
+              <button class="btn" type="submit">Войти</button>
+            </form>
+          </section>
+
+          <section id="panel-register" class="panel {% if view == 'register' %}active{% endif %}">
+            <h3>Регистрация пользователя</h3>
+            <p class="muted">Регистрируется только владелец SaaS-кабинета, который потом назначает менеджеров.</p>
+            <form method="post" action="/app/register">
+              <label for="register_username">Email (логин)</label>
+              <input id="register_username" name="email" type="email" value="{{ default_username or '' }}" placeholder="user@example.com" required />
+              <label for="register_password">Сложный пароль</label>
+              <input id="register_password" name="password" type="password" required />
+              <div class="password-meter" id="password-rules">
+                <div class="pw-rule" data-rule="length"><span class="pw-dot"></span> минимум 8 символов</div>
+                <div class="pw-rule" data-rule="lower"><span class="pw-dot"></span> строчная буква</div>
+                <div class="pw-rule" data-rule="upper"><span class="pw-dot"></span> заглавная буква</div>
+                <div class="pw-rule" data-rule="digit"><span class="pw-dot"></span> цифра</div>
+                <div class="pw-rule" data-rule="special"><span class="pw-dot"></span> спецсимвол</div>
+              </div>
+              <button class="btn" type="submit">Создать аккаунт</button>
+            </form>
+          </section>
+
+          <section id="panel-manager" class="panel {% if view == 'manager_invite' %}active{% endif %}">
+            <h3>Создание пароля менеджера</h3>
+            <p class="muted">Логин менеджера — его Max ID. Задайте пароль для входа по одноразовой ссылке.</p>
+            <form method="post" action="/app/invite/{{ invite_token }}">
+              <label for="manager_password">Пароль</label>
+              <input id="manager_password" name="manager_password" type="password" required />
+              <div class="password-meter" id="manager-password-rules">
+                <div class="pw-rule" data-rule="length"><span class="pw-dot"></span> минимум 8 символов</div>
+                <div class="pw-rule" data-rule="lower"><span class="pw-dot"></span> строчная буква</div>
+                <div class="pw-rule" data-rule="upper"><span class="pw-dot"></span> заглавная буква</div>
+                <div class="pw-rule" data-rule="digit"><span class="pw-dot"></span> цифра</div>
+                <div class="pw-rule" data-rule="special"><span class="pw-dot"></span> спецсимвол</div>
+              </div>
+              <label for="manager_password_confirm">Повторите пароль</label>
+              <input id="manager_password_confirm" name="manager_password_confirm" type="password" required />
+              <button class="btn" type="submit">Сохранить пароль и войти</button>
+            </form>
+          </section>
+        </div>
       {% endif %}
     </div>
   </div>
+  <script>
+    (() => {
+      const switches = Array.from(document.querySelectorAll("[data-switch]"));
+      const panels = {
+        login: document.getElementById("panel-login"),
+        register: document.getElementById("panel-register"),
+        manager_invite: document.getElementById("panel-manager"),
+      };
+      const activate = (name) => {
+        Object.entries(panels).forEach(([key, panel]) => {
+          if (!panel) return;
+          panel.classList.toggle("active", key === name);
+        });
+      };
+      switches.forEach((btn) => {
+        btn.addEventListener("click", () => activate(btn.getAttribute("data-switch")));
+      });
+      {% if view == "register" %}
+      activate("register");
+      {% elif view == "manager_invite" %}
+      activate("manager_invite");
+      {% else %}
+      activate("login");
+      {% endif %}
+
+      const bindPasswordHints = (inputId, rulesId) => {
+        const input = document.getElementById(inputId);
+        const wrap = document.getElementById(rulesId);
+        if (!(input instanceof HTMLInputElement) || !wrap) return;
+        const rows = Array.from(wrap.querySelectorAll("[data-rule]"));
+        const check = () => {
+          const v = input.value || "";
+          const map = {
+            length: v.length >= 8,
+            lower: /[a-z]/.test(v),
+            upper: /[A-Z]/.test(v),
+            digit: /\d/.test(v),
+            special: /[^A-Za-z0-9]/.test(v),
+          };
+          rows.forEach((row) => {
+            const rule = row.getAttribute("data-rule");
+            row.classList.toggle("ok", !!(rule && map[rule]));
+          });
+        };
+        input.addEventListener("input", check);
+        check();
+      };
+      bindPasswordHints("register_password", "password-rules");
+      bindPasswordHints("manager_password", "manager-password-rules");
+    })();
+  </script>
 </body>
 </html>
