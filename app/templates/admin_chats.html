@@ -848,7 +848,7 @@
         <div class="list-title-row">
           <h1 class="list-title">Чаты</h1>
         </div>
-        <form class="search-form" method="get" action="{{ page_path }}">
+        <form class="search-form" method="get" action="{{ page_path }}" data-soft-nav>
           {% if access_token %}
             <input type="hidden" name="token" value="{{ access_token }}" />
           {% endif %}
@@ -861,13 +861,14 @@
       </div>
       <div class="mobile-folder-bar">
         <div class="mobile-folder-scroll">
-          <a class="mobile-folder-item {% if folder_filter is none %}active{% endif %}" href="{{ page_query_prefix }}q={{ query }}">Все</a>
-          <a class="mobile-folder-item {% if folder_filter == 0 %}active{% endif %}" href="{{ page_query_prefix }}q={{ query }}&folder_id=0">Без папки</a>
+          <a class="mobile-folder-item {% if folder_filter is none %}active{% endif %}" href="{{ page_query_prefix }}q={{ query }}" data-soft-nav>Все</a>
+          <a class="mobile-folder-item {% if folder_filter == 0 %}active{% endif %}" href="{{ page_query_prefix }}q={{ query }}&folder_id=0" data-soft-nav>Без папки</a>
           {% for folder in chat_folders %}
             <a
               class="mobile-folder-item {% if folder_filter == folder.id %}active{% endif %}"
               href="{{ page_query_prefix }}q={{ query }}&folder_id={{ folder.id }}"
               title="{{ folder.name }}"
+              data-soft-nav
             >
               {{ folder.name }}
             </a>
@@ -879,13 +880,14 @@
       <div class="chat-list-body">
         <nav class="folder-rail" aria-label="Папки">
           <div class="folder-rail-scroll">
-            <a class="folder-rail-item {% if folder_filter is none %}active{% endif %}" href="{{ page_query_prefix }}q={{ query }}">Все</a>
-            <a class="folder-rail-item {% if folder_filter == 0 %}active{% endif %}" href="{{ page_query_prefix }}q={{ query }}&folder_id=0">Без папки</a>
+            <a class="folder-rail-item {% if folder_filter is none %}active{% endif %}" href="{{ page_query_prefix }}q={{ query }}" data-soft-nav>Все</a>
+            <a class="folder-rail-item {% if folder_filter == 0 %}active{% endif %}" href="{{ page_query_prefix }}q={{ query }}&folder_id=0" data-soft-nav>Без папки</a>
             {% for folder in chat_folders %}
               <a
                 class="folder-rail-item {% if folder_filter == folder.id %}active{% endif %}"
                 href="{{ page_query_prefix }}q={{ query }}&folder_id={{ folder.id }}"
                 title="{{ folder.name }}"
+                data-soft-nav
               >
                 {{ folder.name }}
               </a>
@@ -910,6 +912,7 @@
                 href="{{ page_query_prefix }}conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}"
                 data-thread-id="{{ thread.conversation_id }}"
                 data-thread-unread="{{ '1' if thread.is_unread else '0' }}"
+                data-soft-nav
               >
                 <div class="thread-head">
                   <div class="thread-name">{% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}</div>
@@ -938,7 +941,7 @@
     <main class="chat-screen {% if not active_thread or not mobile_chat_view %}hidden-mobile{% endif %}" id="chat-screen">
       {% if active_thread %}
         <div class="chat-header">
-          <a class="back-btn mobile-only" href="{{ page_query_prefix }}q={{ query }}{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}" aria-label="Назад к чатам">‹</a>
+          <a class="back-btn mobile-only" href="{{ page_query_prefix }}q={{ query }}{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}" aria-label="Назад к чатам" data-soft-nav>‹</a>
           <div class="chat-title-wrap">
             <h2 class="chat-title">
               {% if show_profile_links %}
@@ -956,7 +959,7 @@
             </div>
           </div>
           {% if show_delete_user %}
-            <form method="post" action="{{ delete_user_action_prefix }}{{ active_thread.conversation_id }}/delete-user" style="justify-self:end;">
+            <form method="post" action="{{ delete_user_action_prefix }}{{ active_thread.conversation_id }}/delete-user" style="justify-self:end;" data-soft-nav>
               <button type="submit" class="danger-btn">Удалить пользователя</button>
             </form>
           {% endif %}
@@ -1015,7 +1018,7 @@
         </div>
 
         <section class="compose">
-          <form method="post" action="{{ send_action_prefix }}{{ active_thread.conversation_id }}/send{{ send_action_suffix }}" enctype="multipart/form-data">
+          <form method="post" action="{{ send_action_prefix }}{{ active_thread.conversation_id }}/send{{ send_action_suffix }}" enctype="multipart/form-data" data-soft-nav>
             {% if allow_message_edit_actions %}
               <input type="hidden" id="edit-message-id" name="edit_message_id" value="" />
             {% endif %}
@@ -1056,7 +1059,7 @@
   <div class="folder-create-pop" id="folder-create-pop">
     <div class="folder-create-pop-card">
       <h3>Новая папка</h3>
-      <form class="folder-create-pop-form" method="post" action="{{ create_folder_action }}">
+      <form class="folder-create-pop-form" method="post" action="{{ create_folder_action }}" data-soft-nav>
         <input type="hidden" name="q" value="{{ query }}" />
         <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
         {% if folder_filter is not none %}
@@ -1072,6 +1075,112 @@
   </div>
 
   <script>
+    (() => {
+      const SOFT_NAV_ATTR = "data-soft-nav";
+
+      async function renderFromResponse(response, { replaceHistory = true } = {}) {
+        if (!response || !response.ok) {
+          window.location.reload();
+          return;
+        }
+        const html = await response.text();
+        const nextUrl = response.url || window.location.href;
+        if (replaceHistory) {
+          window.history.replaceState({}, "", nextUrl);
+        } else {
+          window.history.pushState({}, "", nextUrl);
+        }
+        document.open();
+        document.write(html);
+        document.close();
+      }
+
+      async function softVisit(url, options = {}) {
+        const response = await fetch(url, {
+          method: options.method || "GET",
+          body: options.body ?? null,
+          headers: options.headers,
+          credentials: "same-origin",
+        });
+        await renderFromResponse(response, { replaceHistory: !!options.replaceHistory });
+      }
+
+      window.__chatSoftRenderFromResponse = renderFromResponse;
+      window.__chatSoftVisit = softVisit;
+
+      const canInterceptClick = (event, anchor) => {
+        if (!anchor) return false;
+        if (event.defaultPrevented) return false;
+        if (event.button !== 0) return false;
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return false;
+        if (anchor.target && anchor.target !== "_self") return false;
+        if (anchor.hasAttribute("download")) return false;
+        return true;
+      };
+
+      document.addEventListener("click", (event) => {
+        const anchor = event.target.closest(`a[${SOFT_NAV_ATTR}]`);
+        if (!canInterceptClick(event, anchor)) return;
+        event.preventDefault();
+        softVisit(anchor.href, { replaceHistory: false }).catch(() => {
+          window.location.href = anchor.href;
+        });
+      });
+
+      document.addEventListener("submit", (event) => {
+        const form = event.target.closest(`form[${SOFT_NAV_ATTR}]`);
+        if (!form) return;
+        event.preventDefault();
+        const method = (form.method || "GET").toUpperCase();
+        const actionUrl = form.action || window.location.href;
+        const formData = new FormData(form);
+
+        if (method === "GET") {
+          const url = new URL(actionUrl, window.location.origin);
+          const params = new URLSearchParams();
+          for (const [key, value] of formData.entries()) {
+            params.append(key, String(value));
+          }
+          url.search = params.toString();
+          softVisit(url.toString(), { replaceHistory: false }).catch(() => {
+            window.location.href = url.toString();
+          });
+          return;
+        }
+
+        const enctype = (form.enctype || "").toLowerCase();
+        if (enctype.includes("multipart/form-data")) {
+          softVisit(actionUrl, {
+            method,
+            body: formData,
+            replaceHistory: true,
+          }).catch(() => {
+            form.submit();
+          });
+          return;
+        }
+
+        const body = new URLSearchParams();
+        for (const [key, value] of formData.entries()) {
+          body.append(key, String(value));
+        }
+        softVisit(actionUrl, {
+          method,
+          body,
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          replaceHistory: true,
+        }).catch(() => {
+          form.submit();
+        });
+      });
+
+      window.addEventListener("popstate", () => {
+        softVisit(window.location.href, { replaceHistory: true }).catch(() => {
+          window.location.reload();
+        });
+      });
+    })();
+
     (() => {
       const input = document.getElementById("message-input");
       const menu = document.getElementById("slash-menu");
@@ -1194,12 +1303,16 @@
           unreadBtn.textContent = "Отметить непрочитанным";
           unreadBtn.addEventListener("click", async () => {
             hideCtx();
-            await fetch(`${markUnreadPrefix}${threadId}/mark-unread${endpointQuerySuffix}`, {
+            const response = await fetch(`${markUnreadPrefix}${threadId}/mark-unread${endpointQuerySuffix}`, {
               method: "POST",
               headers: { "Content-Type": "application/x-www-form-urlencoded" },
               body: `q=${currentQ}&view=${currentView}${currentFolderParam()}`,
             });
-            window.location.reload();
+            if (window.__chatSoftRenderFromResponse) {
+              await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });
+            } else {
+              window.location.reload();
+            }
           });
           ctx.appendChild(unreadBtn);
         }
@@ -1228,12 +1341,16 @@
         noFolder.textContent = "Без папки";
         noFolder.addEventListener("click", async () => {
           if (!selectedThreadId) return;
-          await fetch(`${moveFolderPrefix}${selectedThreadId}/move-folder${endpointQuerySuffix}`, {
+          const response = await fetch(`${moveFolderPrefix}${selectedThreadId}/move-folder${endpointQuerySuffix}`, {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body: `folder_id=&q=${currentQ}&view=${currentView}${currentFolderMoveParam()}`,
           });
-          window.location.reload();
+          if (window.__chatSoftRenderFromResponse) {
+            await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });
+          } else {
+            window.location.reload();
+          }
         });
         actions.appendChild(noFolder);
 
@@ -1244,14 +1361,18 @@
           btn.textContent = folder.name;
           btn.addEventListener("click", async () => {
             if (!selectedThreadId) return;
-            await fetch(`${moveFolderPrefix}${selectedThreadId}/move-folder${endpointQuerySuffix}`, {
+            const response = await fetch(`${moveFolderPrefix}${selectedThreadId}/move-folder${endpointQuerySuffix}`, {
               method: "POST",
               headers: { "Content-Type": "application/x-www-form-urlencoded" },
               body:
                 `folder_id=${encodeURIComponent(String(folder.id))}` +
                 `&q=${currentQ}&view=${currentView}${currentFolderMoveParam()}`,
             });
-            window.location.reload();
+            if (window.__chatSoftRenderFromResponse) {
+              await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });
+            } else {
+              window.location.reload();
+            }
           });
           actions.appendChild(btn);
         });
@@ -1272,7 +1393,7 @@
         const input = pop.querySelector("#new-folder-name");
         const name = (input.value || "").trim();
         if (!name) return;
-        await fetch(`${createFolderEndpoint}${endpointQuerySuffix}`, {
+        const response = await fetch(`${createFolderEndpoint}${endpointQuerySuffix}`, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body:
@@ -1280,7 +1401,11 @@
             `&conversation_id=${encodeURIComponent(String(selectedThreadId))}` +
             `&q=${currentQ}&view=${currentView}${currentFolderParam()}`,
         });
-        window.location.reload();
+        if (window.__chatSoftRenderFromResponse) {
+          await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });
+        } else {
+          window.location.reload();
+        }
       });
 
       threads.forEach((threadEl) => {
@@ -1377,12 +1502,16 @@
           hideMsgMenu();
           if (!selectedMessageId) return;
           const formBody = `q=${encodeURIComponent("{{ query }}")}&view=${encodeURIComponent("{{ 'chat' if mobile_chat_view else '' }}")}`;
-          await fetch(`${deleteMessagePrefix}${activeConversationId}/messages/${selectedMessageId}/delete${endpointQuerySuffix}`, {
+          const response = await fetch(`${deleteMessagePrefix}${activeConversationId}/messages/${selectedMessageId}/delete${endpointQuerySuffix}`, {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
             body: formBody,
           });
-          window.location.reload();
+          if (window.__chatSoftRenderFromResponse) {
+            await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });
+          } else {
+            window.location.reload();
+          }
         });
         msgMenu.appendChild(deleteBtn);
 
