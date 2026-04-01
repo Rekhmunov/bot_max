@@ -235,20 +235,29 @@
       background: rgba(255, 255, 255, 0.05);
     }
 
-    .modal {
-      position: fixed;
-      inset: 0;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      background: rgba(2, 6, 15, 0.68);
-      z-index: 15;
-      padding: 16px;
-      overflow-y: auto;
+    .stage {
+      position: relative;
+      min-height: 360px;
+      margin-top: 2px;
     }
-    .modal.active { display: flex; }
-    .modal-card {
-      width: min(480px, 100%);
+    .stage-panel {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      transform: translateY(10px) scale(.99);
+      pointer-events: none;
+      transition: opacity .24s ease, transform .24s ease;
+      display: grid;
+      align-content: start;
+    }
+    .stage-panel.active {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+    .panel-card {
+      width: min(520px, 100%);
+      margin: 0 auto;
       border: 1px solid rgba(149, 179, 255, 0.42);
       border-radius: 18px;
       background: var(--card-strong);
@@ -257,13 +266,11 @@
         0 16px 42px rgba(27, 73, 194, 0.34),
         inset 0 1px 0 rgba(210, 225, 255, 0.22);
       padding: 16px;
-      max-height: min(88vh, 720px);
-      overflow: auto;
       transform: translateY(4px) scale(.99);
-      animation: modalIn .2s ease forwards;
+      animation: panelIn .2s ease forwards;
       position: relative;
     }
-    .modal-card::before {
+    .panel-card::before {
       content: "";
       position: absolute;
       inset: -1px;
@@ -276,30 +283,31 @@
       -webkit-mask-composite: xor;
       padding: 1px;
     }
-    @keyframes modalIn {
+    @keyframes panelIn {
       to { transform: translateY(0) scale(1); }
     }
-    .modal-head {
+    .panel-head {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 10px;
       margin-bottom: 8px;
     }
-    .modal-head h3 {
+    .panel-head h3 {
       margin: 0;
       font-size: 21px;
       color: #eef4ff;
     }
-    .close-btn {
+    .ghost-btn {
       border: 1px solid rgba(154, 183, 255, 0.42);
       background: rgba(255, 255, 255, 0.06);
       color: #d9e5ff;
       border-radius: 10px;
-      width: 34px;
       height: 34px;
+      padding: 0 12px;
       cursor: pointer;
-      font-size: 16px;
+      font-size: 13px;
+      font-weight: 700;
       line-height: 1;
     }
 
@@ -365,6 +373,7 @@
       .shell { border-radius: 18px; padding: 14px; }
       .hero p { font-size: 14px; }
       .action-btn { width: 100%; }
+      .stage { min-height: 420px; }
     }
   </style>
 </head>

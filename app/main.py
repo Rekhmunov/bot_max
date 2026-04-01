@@ -1626,6 +1626,7 @@ def app_login(
             request,
             login_error="Неверный логин или пароль.",
             default_username=username.strip().lower(),
+            view="login",
         )
     if user.role == "superadmin" and settings.admin_totp_secret.strip():
         if not verify_totp_code(code=totp_code, secret_b32=settings.admin_totp_secret.strip()):
@@ -1633,6 +1634,7 @@ def app_login(
                 request,
                 login_error="Неверный 2FA код.",
                 default_username=username.strip().lower(),
+                view="login",
             )
     token = create_service_session(
         db,
