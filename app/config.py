@@ -32,8 +32,14 @@ class AppSettings(BaseSettings):
     secure_cookies: bool = False
     admin_totp_secret: str = ""
     billing_hook_secret: str = ""
+    webhook_secret: str = ""
     default_grace_days: int = 7
     backups_dir: str = "backups"
+    max_upload_bytes: int = 5 * 1024 * 1024
+    rate_limit_login_per_minute: int = 20
+    rate_limit_webhook_per_minute: int = 300
+    rate_limit_billing_per_minute: int = 60
+    force_https: bool = False
 
 
 settings = AppSettings()

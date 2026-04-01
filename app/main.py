@@ -97,6 +97,7 @@ from app.ops import (
     refresh_tenant_alerts,
     restore_sqlite_backup,
 )
+from app.security import InMemoryRateLimiter, is_safe_image, is_same_origin, verify_hmac_signature, safe_json_dumps
 from app.schemas import MaxWebhookEvent
 from app.services import (
     DEFAULT_WORKSPACE_ID,
@@ -118,6 +119,75 @@ webhook_path = settings.webhook_path if settings.webhook_path.startswith("/") el
 Path("app/static/uploads").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 _outbox_worker_task: asyncio.Task | None = None
+_rate_limiter = InMemoryRateLimiter()
+_MAX_UPLOAD_BYTES = int(settings.max_upload_bytes)
+
+
+def _apply_security_headers(response):
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+    if settings.force_https:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    response.headers.setdefault("Content-Security-Policy", csp)
+    return response
+
+
+@app.middleware("http")
+async def add_security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    return _apply_security_headers(response)
+
+
+def _enforce_same_origin(request: Request) -> None:
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return
+    if not request.url.path.startswith(("/app", "/admin")):
+        return
+    origin = (request.headers.get("origin") or "").strip()
+    host = (request.headers.get("host") or "").strip()
+    if not host:
+        return
+    expected = f"{request.url.scheme}://{host}"
+    if origin:
+        if not is_same_origin(origin=origin, host_url=expected):
+            raise HTTPException(status_code=403, detail="csrf_origin_mismatch")
+    else:
+        referer = (request.headers.get("referer") or "").strip()
+        if referer and not is_same_origin(origin=referer, host_url=expected):
+            raise HTTPException(status_code=403, detail="csrf_referer_mismatch")
+
+
+def _rate_limit_key(request: Request, scope: str) -> str:
+    ip = request.client.host if request.client else "unknown"
+    return f"{scope}:{ip}"
+
+
+def _check_rate_limit_or_raise(request: Request, *, scope: str, limit: int, window_seconds: int = 60) -> None:
+    if limit <= 0:
+        return
+    key = _rate_limit_key(request, scope)
+    if not _rate_limiter.allow(key=key, limit=limit, window_seconds=window_seconds):
+        raise HTTPException(status_code=429, detail=f"rate_limit_exceeded:{scope}")
+
+
+async def _read_and_validate_upload(photo: UploadFile | None) -> tuple[str | None, bytes | None]:
+    if not photo or not photo.filename:
+        return None, None
+    content = await photo.read()
+    ok, reason = is_safe_image(
+        filename=photo.filename,
+        content=content,
+        max_bytes=_MAX_UPLOAD_BYTES,
+    )
+    if not ok:
+        if reason == "file_too_large":
+            raise HTTPException(status_code=413, detail="Файл слишком большой")
+        raise HTTPException(status_code=400, detail="Некорректный файл изображения")
+    ext = Path(photo.filename).suffix.lower()
+    return ext, content
 
 
 def _workspace_id_for_user(user: ServiceUser | None) -> int:
@@ -274,6 +344,12 @@ def login_submit(
     username: str = Form(...),
     password: str = Form(...),
 ) -> HTMLResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="admin_login",
+        limit=max(1, int(settings.rate_limit_login_per_minute)),
+    )
     if not sign_in_admin(request, username=username, password=password):
         return templates.TemplateResponse(
             request,
@@ -286,6 +362,7 @@ def login_submit(
 
 @app.post("/admin/logout")
 def logout(request: Request) -> RedirectResponse:
+    _enforce_same_origin(request)
     request.session.clear()
     return RedirectResponse(url="/admin/login", status_code=302)
 
@@ -341,6 +418,7 @@ def update_settings(
     _admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    _enforce_same_origin(request)
     if _admin is None:
         return RedirectResponse(url="/admin/login", status_code=302)
     workspace_id = DEFAULT_WORKSPACE_ID
@@ -395,6 +473,12 @@ async def create_quick_reply(
     _admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="admin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     if _admin is None:
         return RedirectResponse(url="/admin/login", status_code=302)
     workspace_id = DEFAULT_WORKSPACE_ID
@@ -447,13 +531,9 @@ async def create_quick_reply(
 
     image_path = None
     if photo and photo.filename:
-        ext = Path(photo.filename).suffix.lower()
-        allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-        if ext not in allowed:
-            raise HTTPException(status_code=400, detail="Неподдерживаемый формат фото")
+        ext, content = await _read_and_validate_upload(photo)
         safe_name = f"{uuid4().hex}{ext}"
         target = Path("app/static/uploads") / safe_name
-        content = await photo.read()
         target.write_bytes(content)
         image_path = f"/static/uploads/{safe_name}"
 
@@ -793,6 +873,7 @@ def admin_chat_customer_profile(
 
 @app.post("/admin/chats/{conversation_id}/send", response_class=RedirectResponse)
 async def admin_chats_send_message(
+    request: Request,
     conversation_id: int,
     text: str = Form(""),
     edit_message_id: int | None = Form(default=None),
@@ -802,18 +883,19 @@ async def admin_chats_send_message(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="admin_send",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 5),
+    )
     workspace_id = DEFAULT_WORKSPACE_ID
     text_value = text.strip()
     view_value = view.strip().lower()
     image_path = None
     if photo and photo.filename:
-        ext = Path(photo.filename).suffix.lower()
-        allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-        if ext not in allowed:
-            raise HTTPException(status_code=400, detail="Неподдерживаемый формат фото")
+        ext, content = await _read_and_validate_upload(photo)
         safe_name = f"{uuid4().hex}{ext}"
         target = Path("app/static/uploads") / safe_name
-        content = await photo.read()
         target.write_bytes(content)
         image_path = f"/static/uploads/{safe_name}"
 
@@ -1365,6 +1447,12 @@ def app_login(
     totp_code: str = Form(""),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="login",
+        limit=max(int(settings.rate_limit_login_per_minute), 1),
+    )
     user = sign_in_service_user(db, username=username, password=password)
     if user is None:
         return _render_app_landing(
@@ -1395,6 +1483,7 @@ def app_logout(
     request: Request,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
     current_user = get_current_service_user(request=request, db=db)
     if current_user is not None:
         revoke_workspace_sessions(db, workspace_id=current_user.workspace_id or DEFAULT_WORKSPACE_ID)
@@ -1409,6 +1498,7 @@ def app_logout_all(
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
     if current_user.role == "superadmin":
         revoke_all_service_sessions(db)
     else:
@@ -1428,6 +1518,12 @@ async def app_create_quick_reply(
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     if current_user.role not in {"owner", "admin", "superadmin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
@@ -1443,13 +1539,9 @@ async def app_create_quick_reply(
         return RedirectResponse(url="/app/settings", status_code=302)
     image_path = None
     if photo and photo.filename:
-        ext = Path(photo.filename).suffix.lower()
-        allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-        if ext not in allowed:
-            raise HTTPException(status_code=400, detail="Неподдерживаемый формат фото")
+        ext, content = await _read_and_validate_upload(photo)
         safe_name = f"{uuid4().hex}{ext}"
         target = Path("app/static/uploads") / safe_name
-        content = await photo.read()
         target.write_bytes(content)
         image_path = f"/static/uploads/{safe_name}"
     db.add(
@@ -1467,10 +1559,17 @@ async def app_create_quick_reply(
 
 @app.post("/app/quick-replies/{reply_id}/delete", response_class=RedirectResponse)
 def app_delete_quick_reply(
+    request: Request,
     reply_id: int,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     if current_user.role not in {"owner", "admin", "superadmin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
@@ -1500,6 +1599,11 @@ async def app_chats_page(
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_view",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     ui = _admin_chats_ui()
     ui.update(
@@ -1640,6 +1744,12 @@ def app_create_manager(
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_manager_create",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     if current_user.role not in {"owner", "admin", "superadmin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
@@ -1726,6 +1836,7 @@ def app_create_manager(
 
 @app.post("/app/settings", response_class=RedirectResponse)
 def app_update_settings(
+    request: Request,
     prestart_message: str = Form(""),
     start_message: str = Form(""),
     after_phone_message: str = Form(""),
@@ -1735,6 +1846,12 @@ def app_update_settings(
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_settings",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     if current_user.role not in {"owner", "admin", "superadmin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
@@ -1755,11 +1872,18 @@ def app_update_settings(
 
 @app.post("/app/settings/intro-steps", response_class=RedirectResponse)
 def app_add_intro_step(
+    request: Request,
     text: str = Form(""),
     delay_seconds: int = Form(0),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_settings",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     if current_user.role not in {"owner", "admin", "superadmin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
@@ -1795,10 +1919,17 @@ def app_add_intro_step(
 
 @app.post("/app/settings/intro-steps/{step_id}/delete", response_class=RedirectResponse)
 def app_delete_intro_step(
+    request: Request,
     step_id: int,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_settings",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     if current_user.role not in {"owner", "admin", "superadmin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
@@ -1936,10 +2067,17 @@ def app_billing_hook(
     payload: dict = Body(...),
     db: Session = Depends(get_db),
 ) -> dict:
-    secret_header = request.headers.get("X-Billing-Secret", "")
+    _check_rate_limit_or_raise(
+        request,
+        scope="billing",
+        limit=max(int(settings.rate_limit_billing_per_minute), 1),
+    )
     expected = settings.billing_hook_secret.strip()
-    if expected and secret_header.strip() != expected:
-        raise HTTPException(status_code=403, detail="invalid_billing_hook_secret")
+    if expected:
+        signature = request.headers.get("X-Billing-Signature", "") or request.headers.get("X-Billing-Secret", "")
+        body_bytes = safe_json_dumps(payload).encode("utf-8")
+        if not verify_hmac_signature(body=body_bytes, secret=expected, provided_signature=signature):
+            raise HTTPException(status_code=403, detail="invalid_billing_signature")
     workspace_id = int(payload.get("workspace_id") or 0)
     if workspace_id <= 0:
         raise HTTPException(status_code=400, detail="workspace_id_required")
@@ -1959,10 +2097,17 @@ def app_billing_hook(
 
 @app.post("/app/superadmin/workspaces/{workspace_id}/suspend")
 def app_superadmin_suspend_workspace(
+    request: Request,
     workspace_id: int,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     if current_user.role != "superadmin":
         raise HTTPException(status_code=403, detail="Только для superadmin")
     ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
@@ -1985,10 +2130,17 @@ def app_superadmin_suspend_workspace(
 
 @app.post("/app/superadmin/workspaces/{workspace_id}/resume")
 def app_superadmin_resume_workspace(
+    request: Request,
     workspace_id: int,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     if current_user.role != "superadmin":
         raise HTTPException(status_code=403, detail="Только для superadmin")
     ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
@@ -2011,10 +2163,17 @@ def app_superadmin_resume_workspace(
 
 @app.post("/app/superadmin/workspaces/{workspace_id}/revoke-sessions")
 def app_superadmin_revoke_workspace_sessions(
+    request: Request,
     workspace_id: int,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     if current_user.role != "superadmin":
         raise HTTPException(status_code=403, detail="Только для superadmin")
     revoke_workspace_sessions(db, workspace_id=workspace_id)
@@ -2034,6 +2193,7 @@ def app_superadmin_revoke_workspace_sessions(
 
 @app.post("/app/superadmin/workspaces/{workspace_id}/plan")
 def app_superadmin_update_workspace_plan(
+    request: Request,
     workspace_id: int,
     manager_limit: int = Form(3),
     dialogs_limit: int = Form(500),
@@ -2042,6 +2202,12 @@ def app_superadmin_update_workspace_plan(
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     if current_user.role != "superadmin":
         raise HTTPException(status_code=403, detail="Только для superadmin")
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
@@ -2070,8 +2236,15 @@ def app_superadmin_update_workspace_plan(
 
 @app.post("/app/superadmin/backup")
 def app_superadmin_create_backup(
+    request: Request,
     current_user: ServiceUser = Depends(require_service_user),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     if current_user.role != "superadmin":
         raise HTTPException(status_code=403, detail="Только для superadmin")
     with SessionLocal() as db:
@@ -2092,9 +2265,16 @@ def app_superadmin_create_backup(
 
 @app.post("/app/superadmin/restore")
 def app_superadmin_restore_backup(
+    request: Request,
     backup_name: str = Form(""),
     current_user: ServiceUser = Depends(require_service_user),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     if current_user.role != "superadmin":
         raise HTTPException(status_code=403, detail="Только для superadmin")
     target_name = backup_name.strip()
@@ -2190,10 +2370,17 @@ def app_superadmin_alerts(
 
 @app.post("/app/superadmin/2fa", response_class=RedirectResponse)
 def app_superadmin_set_2fa_secret(
+    request: Request,
     secret_b32: str = Form(""),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
     if current_user.role != "superadmin":
         raise HTTPException(status_code=403, detail="Только для superadmin")
     normalized = (secret_b32 or "").strip().replace(" ", "").upper()
@@ -2290,6 +2477,7 @@ def app_chat_move_folder(
 
 @app.post("/app/chats/{conversation_id}/send", response_class=RedirectResponse)
 async def app_chats_send_message(
+    request: Request,
     conversation_id: int,
     text: str = Form(""),
     edit_message_id: int | None = Form(default=None),
@@ -2299,18 +2487,19 @@ async def app_chats_send_message(
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_send",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 5),
+    )
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     text_value = text.strip()
     view_value = view.strip().lower()
     image_path = None
     if photo and photo.filename:
-        ext = Path(photo.filename).suffix.lower()
-        allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-        if ext not in allowed:
-            raise HTTPException(status_code=400, detail="Неподдерживаемый формат фото")
+        ext, content = await _read_and_validate_upload(photo)
         safe_name = f"{uuid4().hex}{ext}"
         target = Path("app/static/uploads") / safe_name
-        content = await photo.read()
         target.write_bytes(content)
         image_path = f"/static/uploads/{safe_name}"
 
@@ -2624,6 +2813,7 @@ def manager_mini_create_folder(
 
 @app.post("/mini/manager/chats/{conversation_id}/mark-unread", response_class=RedirectResponse)
 def manager_mini_mark_unread(
+    request: Request,
     conversation_id: int,
     token: str,
     q: str = Form(""),
@@ -2631,6 +2821,11 @@ def manager_mini_mark_unread(
     folder_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="mini_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
     claims = _require_manager_mini_access(token=token, db=db)
     workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
     ok = mark_thread_unread(db, conversation_id=conversation_id, workspace_id=workspace_id)
@@ -2650,6 +2845,7 @@ def manager_mini_mark_unread(
 
 @app.post("/mini/manager/chats/{conversation_id}/move-folder", response_class=RedirectResponse)
 def manager_mini_move_folder(
+    request: Request,
     conversation_id: int,
     token: str,
     folder_id: int = Form(0),
@@ -2658,6 +2854,11 @@ def manager_mini_move_folder(
     current_folder_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="mini_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
     claims = _require_manager_mini_access(token=token, db=db)
     workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
     ok = assign_conversation_to_folder(
@@ -2682,6 +2883,7 @@ def manager_mini_move_folder(
 
 @app.post("/mini/manager/chats/{conversation_id}/send", response_class=RedirectResponse)
 async def manager_mini_send_message(
+    request: Request,
     conversation_id: int,
     token: str,
     text: str = Form(""),
@@ -2691,19 +2893,20 @@ async def manager_mini_send_message(
     folder_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="mini_send",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 5),
+    )
     claims = _require_manager_mini_access(token=token, db=db)
     workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
     text_value = text.strip()
     view_value = view.strip().lower()
     image_path = None
     if photo and photo.filename:
-        ext = Path(photo.filename).suffix.lower()
-        allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
-        if ext not in allowed:
-            raise HTTPException(status_code=400, detail="Неподдерживаемый формат фото")
+        ext, content = await _read_and_validate_upload(photo)
         safe_name = f"{uuid4().hex}{ext}"
         target = Path("app/static/uploads") / safe_name
-        content = await photo.read()
         target.write_bytes(content)
         image_path = f"/static/uploads/{safe_name}"
 
@@ -2754,9 +2957,29 @@ async def manager_mini_send_message(
 @app.post("/max-webhok")
 @app.post("/webhok/max")
 async def max_webhook(
+    request: Request,
     payload: dict = Body(...),
     db: Session = Depends(get_db),
 ) -> dict:
+    _check_rate_limit_or_raise(
+        request,
+        scope="webhook",
+        limit=max(int(settings.rate_limit_webhook_per_minute), 1),
+    )
+    webhook_secret = (settings.webhook_secret or "").strip()
+    if webhook_secret:
+        signature = (
+            request.headers.get("X-Webhook-Signature")
+            or request.headers.get("X-Hub-Signature-256")
+            or ""
+        )
+        raw_body = await request.body()
+        if not verify_hmac_signature(
+            body=raw_body,
+            secret=webhook_secret,
+            provided_signature=signature,
+        ):
+            raise HTTPException(status_code=403, detail="invalid_webhook_signature")
     event = MaxWebhookEvent.from_payload(payload)
     if event is None:
         # Ignore non-message updates or malformed events without failing webhook delivery.
