@@ -266,6 +266,12 @@
       gap: 8px;
       margin-bottom: 4px;
     }
+    .thread-head-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
     .thread-name {
       font-size: 16px;
       font-weight: 700;
@@ -312,6 +318,24 @@
     }
     .dot-new { background: #2d7cff; }
     .dot-error { background: var(--danger); }
+    .thread-menu-btn {
+      display: none;
+      border: 0;
+      width: 26px;
+      height: 26px;
+      border-radius: 8px;
+      background: #eef3ff;
+      color: #3a4f7a;
+      font-size: 18px;
+      line-height: 1;
+      font-weight: 800;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    .thread-menu-btn:hover {
+      background: #e4ecff;
+    }
 
     .chat-screen {
       min-width: 0;
@@ -823,6 +847,14 @@
       .danger-btn {
         padding: 7px 9px;
       }
+      .thread-menu-btn {
+        display: inline-flex;
+      }
+    }
+    @media (hover: none) and (pointer: coarse) {
+      .thread-menu-btn {
+        display: inline-flex;
+      }
     }
   </style>
 </head>
@@ -920,11 +952,21 @@
               >
                 <div class="thread-head">
                   <div class="thread-name">{% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}</div>
-                  {% if thread.has_delivery_errors %}
-                    <span class="dot-error" title="Есть ошибки доставки"></span>
-                  {% elif thread.is_new %}
-                    <span class="dot-new" title="Новый чат"></span>
-                  {% endif %}
+                  <span class="thread-head-right">
+                    {% if thread.has_delivery_errors %}
+                      <span class="dot-error" title="Есть ошибки доставки"></span>
+                    {% elif thread.is_new %}
+                      <span class="dot-new" title="Новый чат"></span>
+                    {% endif %}
+                    <button
+                      type="button"
+                      class="thread-menu-btn"
+                      data-thread-menu-btn
+                      aria-label="Действия с чатом"
+                    >
+                      &#8942;
+                    </button>
+                  </span>
                 </div>
                 <div class="thread-folder-row">
                   {% if thread.folder_name %}
@@ -1263,7 +1305,6 @@
       const currentView = encodeURIComponent("{{ 'chat' if mobile_chat_view else '' }}");
       const currentFolderId = {{ folder_filter if folder_filter is not none else "null" }};
       let selectedThreadId = null;
-      let longPressTimer = null;
 
       const ctx = document.createElement("div");
       ctx.className = "context-menu";
@@ -1311,6 +1352,9 @@
       );
       const currentFolderMoveParam = () => (
         currentFolderId === null ? "" : `&current_folder_id=${encodeURIComponent(String(currentFolderId))}`
+      );
+      const isTouchLikeViewport = () => (
+        window.matchMedia("(max-width: 900px), (hover: none) and (pointer: coarse)").matches
       );
       const openCtx = (x, y, threadId, unread) => {
         selectedThreadId = threadId;
@@ -1428,23 +1472,22 @@
       threads.forEach((threadEl) => {
         const threadId = threadEl.dataset.threadId;
         const unread = threadEl.dataset.threadUnread === "1";
+        const menuBtn = threadEl.querySelector("[data-thread-menu-btn]");
 
         threadEl.addEventListener("contextmenu", (e) => {
+          if (isTouchLikeViewport()) {
+            e.preventDefault();
+            return;
+          }
           e.preventDefault();
           openCtx(e.clientX, e.clientY, threadId, unread);
         });
 
-        threadEl.addEventListener("touchstart", (e) => {
-          const touch = e.touches[0];
-          longPressTimer = setTimeout(() => {
-            openCtx(touch.clientX, touch.clientY, threadId, unread);
-          }, 550);
-        }, { passive: true });
-        threadEl.addEventListener("touchend", () => {
-          if (longPressTimer) clearTimeout(longPressTimer);
-        });
-        threadEl.addEventListener("touchmove", () => {
-          if (longPressTimer) clearTimeout(longPressTimer);
+        menuBtn?.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const rect = menuBtn.getBoundingClientRect();
+          openCtx(rect.right - 4, rect.bottom + 4, threadId, unread);
         });
       });
     })();
