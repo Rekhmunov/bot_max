@@ -24,6 +24,7 @@ from app.auth import (
     create_manager_invite_token,
     create_service_session,
     hash_password,
+    verify_password,
     verify_totp_code,
     get_current_admin,
     get_current_service_user,
@@ -329,6 +330,50 @@ def _render_app_settings_page(
     )
 
 
+def _ensure_superadmin_credentials(db: Session) -> ServiceUser:
+    """
+    Keep superadmin credentials aligned with configured bootstrap values.
+    This prevents prod/login drift when DB was created before config change.
+    """
+    target_username = (settings.superadmin_username or "admin").strip().lower() or "admin"
+    target_password = (settings.superadmin_password or "").strip()
+    super_user = db.query(ServiceUser).filter(ServiceUser.role == "superadmin").first()
+
+    if super_user is None:
+        initial_password = target_password or "Admin#Temp123!"
+        super_user = ServiceUser(
+            workspace_id=None,
+            role="superadmin",
+            username=target_username,
+            password_hash=hash_password(initial_password),
+            is_active=True,
+            is_blocked=False,
+        )
+        db.add(super_user)
+        db.commit()
+        db.refresh(super_user)
+        return super_user
+
+    changed = False
+    if super_user.username != target_username:
+        super_user.username = target_username
+        changed = True
+    if target_password and not verify_password(target_password, super_user.password_hash):
+        super_user.password_hash = hash_password(target_password)
+        changed = True
+    if not super_user.is_active:
+        super_user.is_active = True
+        changed = True
+    if super_user.is_blocked:
+        super_user.is_blocked = False
+        changed = True
+    if changed:
+        db.add(super_user)
+        db.commit()
+        db.refresh(super_user)
+    return super_user
+
+
 async def _outbox_worker_loop() -> None:
     from app.database import SessionLocal
 
@@ -357,6 +402,7 @@ async def startup() -> None:
         workspace_ids = [row[0] for row in db.query(Workspace.id).all()]
         for workspace_id in workspace_ids:
             get_or_create_subscription(db, workspace_id=int(workspace_id))
+        _ensure_superadmin_credentials(db)
     if settings.outbox_worker_enabled:
         _outbox_worker_task = asyncio.create_task(_outbox_worker_loop())
 
@@ -383,37 +429,24 @@ def health() -> dict:
 
 
 @app.get("/admin/login", response_class=HTMLResponse)
-def login_page(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "login.html", {"request": request, "error": None})
+def login_page() -> RedirectResponse:
+    return RedirectResponse(url="/app", status_code=302)
 
 
 @app.post("/admin/login", response_class=HTMLResponse)
 def login_submit(
     request: Request,
-    username: str = Form(...),
-    password: str = Form(...),
-) -> HTMLResponse:
-    _enforce_same_origin(request)
-    _check_rate_limit_or_raise(
-        request,
-        scope="admin_login",
-        limit=max(1, int(settings.rate_limit_login_per_minute)),
-    )
-    if not sign_in_admin(request, username=username, password=password):
-        return templates.TemplateResponse(
-            request,
-            "login.html",
-            {"request": request, "error": "Неверный логин или пароль"},
-            status_code=401,
-        )
-    return RedirectResponse(url="/admin", status_code=302)
+    username: str = Form(""),
+    password: str = Form(""),
+) -> RedirectResponse:
+    if sign_in_admin(request, username=username, password=password):
+        return RedirectResponse(url="/app", status_code=302)
+    return RedirectResponse(url="/app", status_code=302)
 
 
 @app.post("/admin/logout")
-def logout(request: Request) -> RedirectResponse:
-    _enforce_same_origin(request)
-    request.session.clear()
-    return RedirectResponse(url="/admin/login", status_code=302)
+def logout() -> RedirectResponse:
+    return RedirectResponse(url="/app", status_code=302)
 
 
 @app.get("/admin", response_class=HTMLResponse)
@@ -1533,6 +1566,17 @@ def app_landing(
     if current_user is not None:
         return RedirectResponse(url="/app/chats", status_code=302)
     return _render_app_landing(request)
+
+
+@app.get("/app/login", response_class=HTMLResponse)
+def app_login_page(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    current_user = get_current_service_user(request=request, db=db)
+    if current_user is not None:
+        return RedirectResponse(url="/app/chats", status_code=302)
+    return _render_app_landing(request, view="login")
 
 
 @app.post("/app/register", response_class=HTMLResponse)

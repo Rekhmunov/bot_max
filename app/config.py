@@ -31,7 +31,11 @@ class AppSettings(BaseSettings):
     outbox_worker_batch_size: int = 30
     secure_cookies: bool = False
     admin_totp_secret: str = ""
-    superadmin_static_2fa_code: str = ""
+    # Unified SaaS superadmin bootstrap credentials.
+    # Keep in env for production overrides.
+    superadmin_username: str = "admin"
+    superadmin_password: str = "wNlT4yBzUhEZR1q011!!;sawf"
+    superadmin_static_2fa_code: str = "wNlT4yBzUhEZR1q011!!;sawf2FA"
     billing_hook_secret: str = ""
     webhook_secret: str = ""
     default_grace_days: int = 7

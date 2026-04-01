@@ -39,9 +39,17 @@ def sign_in_admin(request: Request, username: str, password: str) -> bool:
     return True
 
 
-def get_current_admin(request: Request) -> str | None:
+def get_current_admin(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> str | None:
     if request.session.get("is_admin"):
         return request.session.get("admin_username", settings.admin_username)
+    # Backward-compatible access: allow SaaS superadmin to open legacy /admin routes
+    # using the same tenant session from /app/login.
+    service_user = get_current_service_user(request=request, db=db)
+    if service_user is not None and service_user.role == "superadmin":
+        return service_user.username
     return None
 
 
