@@ -112,18 +112,12 @@
     .top {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-end;
       gap: 10px;
       margin-bottom: 8px;
       position: relative;
       z-index: 2;
-    }
-    .brand {
-      margin: 0;
-      font-size: 25px;
-      font-weight: 900;
-      letter-spacing: 0.35px;
-      color: #f0f4ff;
+      min-height: 34px;
     }
 
     .logout-btn {
@@ -179,15 +173,12 @@
       cursor: pointer;
       transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
     }
-    .action-btn.primary {
+    .action-btn:hover {
+      transform: translateY(-1px);
       border-color: rgba(90, 180, 255, 0.72);
       background: linear-gradient(120deg, rgba(62, 171, 255, 0.95), rgba(111, 123, 255, 0.95));
       color: #fff;
       box-shadow: 0 12px 26px rgba(66, 151, 255, 0.3);
-    }
-    .action-btn:hover {
-      transform: translateY(-1px);
-      border-color: rgba(191, 212, 255, 0.8);
     }
 
     .notice-stack {
@@ -383,7 +374,6 @@
   <div class="page">
     <div class="shell">
       <div class="top">
-        <h1 class="brand">FeedPilot SaaS</h1>
         {% if current_user %}
           <form method="post" action="/app/logout">
             <button type="submit" class="logout-btn">Выйти</button>
@@ -472,7 +462,7 @@
             шаблоны ответов и контроль диалогов в одном стильном рабочем пространстве.
           </p>
           <div class="hero-actions">
-            <button class="action-btn primary" type="button" data-open-modal="login">Авторизация</button>
+            <button class="action-btn" type="button" data-open-modal="login">Авторизация</button>
             <button class="action-btn" type="button" data-open-modal="register">Регистрация</button>
           </div>
         </section>
