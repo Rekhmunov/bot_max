@@ -1280,6 +1280,21 @@
       `;
       document.body.appendChild(pop);
 
+      const placeFixedMenu = (menuEl, x, y) => {
+        const pad = 8;
+        menuEl.style.visibility = "hidden";
+        menuEl.style.display = "block";
+        const width = menuEl.offsetWidth || 0;
+        const height = menuEl.offsetHeight || 0;
+        const maxLeft = Math.max(pad, window.innerWidth - width - pad);
+        const maxTop = Math.max(pad, window.innerHeight - height - pad);
+        const left = Math.min(Math.max(pad, x), maxLeft);
+        const top = Math.min(Math.max(pad, y), maxTop);
+        menuEl.style.left = `${left}px`;
+        menuEl.style.top = `${top}px`;
+        menuEl.style.visibility = "visible";
+      };
+
       const hideCtx = () => {
         ctx.style.display = "none";
         ctx.innerHTML = "";
@@ -1327,9 +1342,7 @@
         });
         ctx.appendChild(folderBtn);
 
-        ctx.style.left = `${Math.max(8, x)}px`;
-        ctx.style.top = `${Math.max(8, y)}px`;
-        ctx.style.display = "block";
+        placeFixedMenu(ctx, x, y);
       };
 
       const renderFolderButtons = () => {
@@ -1468,6 +1481,21 @@
       let selectedMessageText = "";
       let longPressTimer = null;
 
+      const placeFixedMenu = (menuEl, x, y) => {
+        const pad = 8;
+        menuEl.style.visibility = "hidden";
+        menuEl.style.display = "block";
+        const width = menuEl.offsetWidth || 0;
+        const height = menuEl.offsetHeight || 0;
+        const maxLeft = Math.max(pad, window.innerWidth - width - pad);
+        const maxTop = Math.max(pad, window.innerHeight - height - pad);
+        const left = Math.min(Math.max(pad, x), maxLeft);
+        const top = Math.min(Math.max(pad, y), maxTop);
+        menuEl.style.left = `${left}px`;
+        menuEl.style.top = `${top}px`;
+        menuEl.style.visibility = "visible";
+      };
+
       const hideMsgMenu = () => {
         msgMenu.style.display = "none";
         msgMenu.innerHTML = "";
@@ -1515,9 +1543,7 @@
         });
         msgMenu.appendChild(deleteBtn);
 
-        msgMenu.style.left = `${Math.max(8, x)}px`;
-        msgMenu.style.top = `${Math.max(8, y)}px`;
-        msgMenu.style.display = "block";
+        placeFixedMenu(msgMenu, x, y);
       };
 
       cancelEditBtn?.addEventListener("click", () => {
