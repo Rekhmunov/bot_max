@@ -10,6 +10,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
+from urllib.parse import urlencode
 from uuid import uuid4
 
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -17,6 +18,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy.orm import Session
+from itsdangerous import URLSafeTimedSerializer, BadData, SignatureExpired
 
 from app.auth import (
     clear_service_session_cookie,
@@ -69,6 +71,7 @@ from app.manager_bridge import (
     update_chat_message_text,
 )
 from app.max_client import MaxClient
+from app.email_utils import send_email_verification
 from app.models import (
     AuditLog,
     BillingEvent,
@@ -127,6 +130,7 @@ _outbox_worker_task: asyncio.Task | None = None
 _rate_limiter = InMemoryRateLimiter()
 _MAX_UPLOAD_BYTES = int(settings.max_upload_bytes)
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_EMAIL_VERIFY_SALT = "email-verify-link"
 
 
 def _apply_security_headers(response):
@@ -208,6 +212,49 @@ def _sha256(value: str) -> str:
 
 def _json_escape(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)[1:-1]
+
+
+def _email_verify_serializer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(secret_key=settings.secret_key, salt=_EMAIL_VERIFY_SALT)
+
+
+def _create_email_verify_token(*, user_id: int, email: str) -> str:
+    payload = {"uid": int(user_id), "email": (email or "").strip().lower()}
+    return _email_verify_serializer().dumps(payload)
+
+
+def _decode_email_verify_token(token: str, *, max_age_seconds: int | None = None) -> tuple[int, str] | None:
+    ttl = max_age_seconds if max_age_seconds is not None else max(
+        60,
+        int(settings.email_verification_token_ttl_seconds),
+    )
+    try:
+        payload = _email_verify_serializer().loads(token, max_age=ttl)
+    except (BadData, SignatureExpired):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    user_id = payload.get("uid")
+    email = str(payload.get("email", "")).strip().lower()
+    if not isinstance(user_id, int) or not email:
+        return None
+    return user_id, email
+
+
+def _build_email_verify_link(token: str) -> str:
+    base = settings.public_base_url.rstrip("/")
+    query = urlencode({"token": token})
+    return f"{base}/app/verify-email?{query}"
+
+
+def _send_email_verification_message(*, user: ServiceUser) -> bool:
+    email = (user.username or "").strip().lower()
+    if not email or not _EMAIL_RE.fullmatch(email):
+        return False
+    token = _create_email_verify_token(user_id=user.id, email=email)
+    verify_link = _build_email_verify_link(token)
+    ok, _ = send_email_verification(to_email=email, verify_link=verify_link)
+    return ok
 
 
 def _password_requirements(password: str) -> dict[str, bool]:
@@ -293,6 +340,12 @@ def _render_app_settings_page(
     note = message or f"Workspace: {workspace_id}. Менеджеров: {len(managers)}"
     if not ok:
         note += f" · Ограничение: {reason}"
+    email_status = "подтверждена" if bool(current_user.email_verified) else "не подтверждена"
+    cooldown_seconds = max(int(settings.email_verification_resend_cooldown_seconds), 0)
+    can_resend_verification = True
+    if not current_user.email_verified and current_user.email_verification_sent_at:
+        elapsed = (datetime.now(UTC).replace(tzinfo=None) - current_user.email_verification_sent_at).total_seconds()
+        can_resend_verification = elapsed >= cooldown_seconds
     return templates.TemplateResponse(
         request,
         "admin.html",
@@ -326,6 +379,11 @@ def _render_app_settings_page(
             "quick_reply_delete_action_prefix": "/app/quick-replies/",
             "intro_create_action": "/app/settings/intro-steps",
             "intro_delete_action_prefix": "/app/settings/intro-steps/",
+            "email_status": email_status,
+            "email_verified": bool(current_user.email_verified),
+            "email_value": current_user.username,
+            "email_resend_action": "/app/resend-email-verification",
+            "can_resend_email_verification": can_resend_verification,
         },
     )
 
@@ -1649,6 +1707,9 @@ def app_register(
     )
     response = RedirectResponse(url="/app/settings", status_code=302)
     set_service_session_cookie(response, token)
+    sent_ok = _send_email_verification_message(user=owner)
+    owner.email_verification_sent_at = datetime.now(UTC).replace(tzinfo=None)
+    db.add(owner)
     db.add(
         AuditLog(
             workspace_id=workspace.id,
@@ -1657,6 +1718,16 @@ def app_register(
             object_type="workspace",
             object_id=str(workspace.id),
             details_json='{"source":"landing"}',
+        )
+    )
+    db.add(
+        AuditLog(
+            workspace_id=workspace.id,
+            actor_user_id=owner.id,
+            action="email_verification_sent",
+            object_type="service_user",
+            object_id=str(owner.id),
+            details_json=f'{{"sent":{str(bool(sent_ok)).lower()}}}',
         )
     )
     db.commit()
@@ -1734,6 +1805,120 @@ def app_logout_all(
     response = RedirectResponse(url="/app", status_code=302)
     clear_service_session_cookie(response)
     return response
+
+
+@app.get("/app/verify-email", response_class=HTMLResponse)
+def app_verify_email(
+    request: Request,
+    token: str = "",
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    token_clean = (token or "").strip()
+    decoded = _decode_email_verify_token(token_clean)
+    if not token_clean or decoded is None:
+        return _render_app_landing(
+            request,
+            register_error="Ссылка подтверждения недействительна или устарела.",
+            view="login",
+        )
+    user_id, token_email = decoded
+    user = db.query(ServiceUser).filter(ServiceUser.id == user_id).first()
+    if user is None:
+        return _render_app_landing(
+            request,
+            register_error="Пользователь для подтверждения не найден.",
+            view="login",
+        )
+    current_email = (user.username or "").strip().lower()
+    if current_email != token_email:
+        return _render_app_landing(
+            request,
+            register_error="Эта ссылка больше не подходит для текущего email.",
+            view="login",
+        )
+    if not user.email_verified:
+        user.email_verified = True
+        user.email_verified_at = datetime.now(UTC).replace(tzinfo=None)
+        db.add(user)
+        db.add(
+            AuditLog(
+                workspace_id=user.workspace_id or DEFAULT_WORKSPACE_ID,
+                actor_user_id=user.id,
+                action="email_verified",
+                object_type="service_user",
+                object_id=str(user.id),
+                details_json='{"source":"verify_link"}',
+            )
+        )
+        db.commit()
+    return _render_app_landing(
+        request,
+        register_message="Email успешно подтверждён. Теперь можно войти.",
+        default_username=current_email,
+        view="login",
+    )
+
+
+@app.post("/app/resend-email-verification", response_class=HTMLResponse)
+def app_resend_email_verification(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="email_verify_resend",
+        limit=max(1, int(settings.rate_limit_login_per_minute)),
+    )
+    if current_user.email_verified:
+        return _render_app_settings_page(
+            request,
+            db=db,
+            current_user=current_user,
+            message="Email уже подтверждён.",
+        )
+    cooldown_seconds = max(int(settings.email_verification_resend_cooldown_seconds), 0)
+    if current_user.email_verification_sent_at and cooldown_seconds > 0:
+        elapsed = (
+            datetime.now(UTC).replace(tzinfo=None) - current_user.email_verification_sent_at
+        ).total_seconds()
+        if elapsed < cooldown_seconds:
+            remaining = int(cooldown_seconds - elapsed)
+            return _render_app_settings_page(
+                request,
+                db=db,
+                current_user=current_user,
+                error=f"Повторная отправка будет доступна через {remaining} сек.",
+            )
+    sent_ok = _send_email_verification_message(user=current_user)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    current_user.email_verification_sent_at = now
+    db.add(current_user)
+    db.add(
+        AuditLog(
+            workspace_id=current_user.workspace_id or DEFAULT_WORKSPACE_ID,
+            actor_user_id=current_user.id,
+            action="email_verification_resent",
+            object_type="service_user",
+            object_id=str(current_user.id),
+            details_json=f'{{"sent":{str(bool(sent_ok)).lower()}}}',
+        )
+    )
+    db.commit()
+    if sent_ok:
+        msg = "Письмо с подтверждением отправлено."
+    else:
+        msg = (
+            "Письмо не отправлено: SMTP не настроен. "
+            "Проверьте SMTP настройки на сервере."
+        )
+    return _render_app_settings_page(
+        request,
+        db=db,
+        current_user=current_user,
+        message=msg,
+    )
 
 
 @app.post("/app/quick-replies", response_class=HTMLResponse)

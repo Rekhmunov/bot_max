@@ -173,6 +173,21 @@
       <div class="notice error">{{ error }}</div>
     {% endif %}
 
+    {% if ui_mode == "app" and current_user %}
+      <section class="card" style="margin-bottom:16px;">
+        <h2>Статус email</h2>
+        {% if current_user.email_verified %}
+          <div class="hint">✅ Почта подтверждена: <b>{{ current_user.username }}</b></div>
+        {% else %}
+          <div class="hint">⚠️ Почта не подтверждена: <b>{{ current_user.username }}</b></div>
+          <div class="hint">Подтвердите адрес по ссылке из письма. Без подтверждения часть функций может быть ограничена в будущем.</div>
+          <form method="post" action="{{ email_resend_action or '/app/resend-email-verification' }}">
+            <button class="btn" type="submit" {% if not can_resend_email_verification %}disabled{% endif %}>Отправить письмо повторно</button>
+          </form>
+        {% endif %}
+      </section>
+    {% endif %}
+
     <div class="grid">
       <section class="card">
         <h2>Настройки бота</h2>

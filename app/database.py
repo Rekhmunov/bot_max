@@ -185,6 +185,12 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(text("ALTER TABLE service_users ADD COLUMN totp_secret VARCHAR(255) DEFAULT ''"))
             if "totp_enabled" not in service_user_columns:
                 conn.execute(text("ALTER TABLE service_users ADD COLUMN totp_enabled INTEGER DEFAULT 0"))
+            if "email_verified" not in service_user_columns:
+                conn.execute(text("ALTER TABLE service_users ADD COLUMN email_verified INTEGER DEFAULT 0"))
+            if "email_verified_at" not in service_user_columns:
+                conn.execute(text("ALTER TABLE service_users ADD COLUMN email_verified_at DATETIME"))
+            if "email_verification_sent_at" not in service_user_columns:
+                conn.execute(text("ALTER TABLE service_users ADD COLUMN email_verification_sent_at DATETIME"))
 
         if "intro_steps" in table_names:
             intro_columns = {col["name"] for col in inspector.get_columns("intro_steps")}

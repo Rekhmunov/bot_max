@@ -36,6 +36,16 @@ class AppSettings(BaseSettings):
     superadmin_username: str = "admin"
     superadmin_password: str = "wNlT4yBzUhEZR1q011!!;sawf"
     superadmin_static_2fa_code: str = "wNlT4yBzUhEZR1q011!!;sawf2FA"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_sender: str = ""
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
+    smtp_timeout_seconds: int = 20
+    email_verification_token_ttl_seconds: int = 24 * 60 * 60
+    email_verification_resend_cooldown_seconds: int = 60
     billing_hook_secret: str = ""
     webhook_secret: str = ""
     default_grace_days: int = 7
