@@ -14,6 +14,7 @@ from app.models import BotSettings, Conversation, MessageLog, QuickReply, Servic
 
 DEFAULT_WORKSPACE_ID = 1
 _USERNAME_RE = re.compile(r"^[a-z0-9_.\-]{3,64}$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def normalize_username(value: str) -> str:
@@ -21,7 +22,8 @@ def normalize_username(value: str) -> str:
 
 
 def validate_username(value: str) -> bool:
-    return bool(_USERNAME_RE.fullmatch(normalize_username(value)))
+    normalized = normalize_username(value)
+    return bool(_USERNAME_RE.fullmatch(normalized) or _EMAIL_RE.fullmatch(normalized))
 
 
 def ensure_default_workspace(db: Session) -> Workspace:
