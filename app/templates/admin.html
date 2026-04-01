@@ -200,6 +200,13 @@
           <label for="admin_account_id">ID аккаунта администратора в Max</label>
           <input id="admin_account_id" name="admin_account_id" value="{{ settings.admin_account_id }}" />
 
+          <label for="routing_mode">Режим назначения менеджера</label>
+          <select id="routing_mode" name="routing_mode" style="width:100%; border:1px solid var(--line); border-radius:8px; padding:10px;">
+            {% set mode = (settings.routing_mode or "round_robin") %}
+            <option value="round_robin" {% if mode == "round_robin" %}selected{% endif %}>Round-robin</option>
+            <option value="random" {% if mode == "random" %}selected{% endif %}>Random</option>
+          </select>
+
           <button class="btn" type="submit">Сохранить настройки</button>
         </form>
         <div class="hint">
@@ -247,6 +254,76 @@
       <div class="hint">Новых (непрочитанных) чатов: <b>{{ chat_metrics.unread_threads }}</b></div>
       <div class="hint">Чатов с ошибками доставки: <b>{{ chat_metrics.error_threads }}</b></div>
     </section>
+
+    {% if subscription %}
+    <section class="card" style="margin-top:16px;">
+      <h2>Тариф и лимиты</h2>
+      <div class="hint">План: <b>{{ subscription.plan_code }}</b></div>
+      <div class="hint">Статус: <b>{{ subscription.status }}</b></div>
+      <div class="hint">Лимит менеджеров: <b>{{ subscription.manager_limit }}</b></div>
+      <div class="hint">Лимит диалогов: <b>{{ subscription.dialogs_limit }}</b></div>
+      <div class="hint">Лимит сообщений/мес: <b>{{ subscription.messages_per_month_limit }}</b></div>
+      {% if tenant_metrics %}
+        <div class="hint">Активных менеджеров: <b>{{ tenant_metrics.managers_active }}</b></div>
+        <div class="hint">Диалогов: <b>{{ tenant_metrics.dialogs_total }}</b></div>
+        <div class="hint">Сообщений в текущем месяце: <b>{{ tenant_metrics.messages_month }}</b></div>
+      {% endif %}
+      {% if tenant_alerts %}
+        <div class="hint" style="margin-top:8px;"><b>Алерты:</b></div>
+        {% for alert in tenant_alerts %}
+          <div class="hint">- [{{ alert.severity }}] {{ alert.message }}</div>
+        {% endfor %}
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% if intro_steps %}
+    <section class="card" style="margin-top:16px;">
+      <h2>Intro шаги (после подтверждения телефона)</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Задержка (сек)</th>
+            <th>Текст</th>
+            <th>Активен</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for step in intro_steps %}
+          <tr>
+            <td>{{ step.step_order }}</td>
+            <td>{{ step.delay_seconds }}</td>
+            <td>{{ step.text }}</td>
+            <td>{{ "да" if step.is_active else "нет" }}</td>
+            <td>
+              <form method="post" action="{{ intro_delete_action_prefix or '/app/intro-steps/' }}{{ step.id }}/delete">
+                <button class="delete" type="submit">Удалить</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endif %}
+
+    {% if show_intro_form %}
+    <section class="card" style="margin-top:16px;">
+      <h2>Добавить intro шаг</h2>
+      <form method="post" action="{{ intro_create_action or '/app/intro-steps' }}">
+        <label for="step_order">Порядок</label>
+        <input id="step_order" name="step_order" type="number" value="1" min="1" />
+        <label for="delay_seconds">Задержка перед отправкой (сек)</label>
+        <input id="delay_seconds" name="delay_seconds" type="number" value="0" min="0" max="3600" />
+        <label for="intro_text">Текст шага</label>
+        <textarea id="intro_text" name="text" required></textarea>
+        <label><input type="checkbox" name="is_active" value="1" checked /> Активен</label>
+        <button class="btn" type="submit">Добавить шаг</button>
+      </form>
+    </section>
+    {% endif %}
 
     <section class="card" style="margin-top:16px;">
       <h2>Список быстрых ответов</h2>

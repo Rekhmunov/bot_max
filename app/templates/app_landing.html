@@ -143,6 +143,8 @@
             <input id="login_username" name="username" value="{{ default_username or '' }}" required />
             <label for="login_password">Пароль</label>
             <input id="login_password" type="password" name="password" required />
+            <label for="login_totp">2FA код (для superadmin)</label>
+            <input id="login_totp" name="totp_code" placeholder="123456" />
             <button class="btn" type="submit">Войти</button>
           </form>
           <div class="small" style="margin-top:8px;">Если вас добавил владелец workspace, используйте выданные данные или onboarding-ссылку.</div>
@@ -180,6 +182,69 @@
             </tbody>
           </table>
         </section>
+        {% if current_user.role == "superadmin" %}
+          <section class="card">
+            <h3>SaaS управление</h3>
+            <p class="muted">Блокировки/разблокировки workspace, лимиты, сессии, backup/restore и диагностика.</p>
+            <div class="links" style="margin-bottom:10px;">
+              <a class="link-btn" href="/app/superadmin/backups" target="_blank">Список бэкапов (JSON)</a>
+              <a class="link-btn" href="/app/superadmin/backup-check" target="_blank">Проверка бэкапа</a>
+              <a class="link-btn" href="/app/superadmin/metrics" target="_blank">Метрики tenants</a>
+              <a class="link-btn" href="/app/superadmin/alerts" target="_blank">Алерты tenants</a>
+            </div>
+            <form method="post" action="/app/superadmin/backup" style="margin-bottom:10px;">
+              <button class="btn" type="submit">Создать backup SQLite</button>
+            </form>
+            <form method="post" action="/app/superadmin/restore" style="margin-bottom:10px;">
+              <label for="backup_name_restore">Имя backup-файла для restore</label>
+              <input id="backup_name_restore" name="backup_name" placeholder="backup-YYYYMMDD-HHMMSS.sqlite3" required />
+              <button class="btn" type="submit">Восстановить из backup</button>
+            </form>
+            <h4 style="margin:14px 0 6px;">Workspaces</h4>
+            {% if superadmin_stats and superadmin_stats.workspaces %}
+              <table>
+                <thead>
+                  <tr>
+                    <th>ID</th>
+                    <th>Tenant</th>
+                    <th>Статус</th>
+                    <th>Действия</th>
+                    <th>Лимиты</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for ws in superadmin_stats.workspaces %}
+                    <tr>
+                      <td>{{ ws.id }}</td>
+                      <td>{{ ws.tenant_code }}</td>
+                      <td>{{ "suspended" if ws.is_suspended else "active" }}</td>
+                      <td>
+                        <form method="post" action="/app/superadmin/workspaces/{{ ws.id }}/suspend" style="display:inline;">
+                          <button class="logout-btn" type="submit">Suspend</button>
+                        </form>
+                        <form method="post" action="/app/superadmin/workspaces/{{ ws.id }}/resume" style="display:inline;">
+                          <button class="logout-btn" type="submit">Resume</button>
+                        </form>
+                        <form method="post" action="/app/superadmin/workspaces/{{ ws.id }}/revoke-sessions" style="display:inline;">
+                          <button class="logout-btn" type="submit">Logout all</button>
+                        </form>
+                      </td>
+                      <td>
+                        <form method="post" action="/app/superadmin/workspaces/{{ ws.id }}/plan">
+                          <input name="manager_limit" type="number" min="1" value="3" style="margin-bottom:4px;" />
+                          <input name="dialogs_limit" type="number" min="1" value="500" style="margin-bottom:4px;" />
+                          <input name="messages_per_month_limit" type="number" min="1" value="5000" style="margin-bottom:4px;" />
+                          <input name="status" value="active" style="margin-bottom:4px;" />
+                          <button class="logout-btn" type="submit">Сохранить лимиты</button>
+                        </form>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            {% endif %}
+          </section>
+        {% endif %}
         <section class="card">
           <h3>Состояние доступа</h3>
           <table>

@@ -20,13 +20,21 @@ from app.models import (
     Conversation,
     ConversationMeta,
     CustomerProfile,
+    IntroStep,
     ManagerDispatch,
     MessageLog,
     MessageTemplate,
     OutboxMessage,
     QuickReply,
+    ServiceUser,
 )
 from app.schemas import MaxWebhookEvent
+from app.ops import (
+    can_create_dialog,
+    can_send_message_this_month,
+    ensure_workspace_limits_and_state,
+    track_message_sent,
+)
 from app.services import DEFAULT_WORKSPACE_ID
 
 TEMPLATE_PRESTART = "prestart_message"
@@ -170,6 +178,20 @@ def _get_or_create_conversation(
     *,
     workspace_id: int = DEFAULT_WORKSPACE_ID,
 ) -> Conversation:
+    can_dialog, _ = can_create_dialog(db, workspace_id=workspace_id)
+    if not can_dialog:
+        # Keep deterministic behavior for callers: stop creating new rows over quota.
+        existing = (
+            db.query(Conversation)
+            .filter(
+                Conversation.workspace_id == workspace_id,
+                Conversation.chat_id == chat_id,
+            )
+            .first()
+        )
+        if existing:
+            return existing
+        raise ValueError("dialogs_limit_exceeded")
     conversation = (
         db.query(Conversation)
         .filter(
@@ -315,6 +337,37 @@ def _schedule_outbox_retry(item: OutboxMessage, result: dict) -> None:
     item.last_attempt_at = _as_naive_utc(_utc_now())
     item.last_error = _format_delivery_error(result)
     item.next_retry_at = _as_naive_utc(_utc_now() + timedelta(seconds=_next_backoff_delay(item.retry_count)))
+
+
+def _pick_manager_for_workspace(db: Session, *, workspace_id: int, settings: BotSettings) -> str | None:
+    managers = (
+        db.query(ServiceUser)
+        .filter(
+            ServiceUser.workspace_id == workspace_id,
+            ServiceUser.role == "manager",
+            ServiceUser.is_active.is_(True),
+            ServiceUser.is_blocked.is_(False),
+        )
+        .order_by(ServiceUser.id.asc())
+        .all()
+    )
+    if not managers:
+        fallback = (settings.manager_account_id or "").strip()
+        return fallback or None
+
+    mode = (settings.routing_mode or "round_robin").strip().lower()
+    if mode == "random":
+        idx = int(_utc_now().timestamp()) % len(managers)
+    else:
+        cursor = int(settings.routing_rr_cursor or 0)
+        idx = cursor % len(managers)
+        settings.routing_rr_cursor = cursor + 1
+        db.add(settings)
+        db.commit()
+
+    picked = managers[idx]
+    manager_id = (picked.max_account_id or picked.username or "").strip()
+    return manager_id or None
 
 
 def _mark_outbox_sent(item: OutboxMessage, result: dict) -> None:
@@ -510,9 +563,34 @@ async def _dispatch_outbox(
     ok = bool(result.get("success", True) or result.get("message"))
     retriable = _is_retriable_error(result)
     if ok:
+        can_send, reason = can_send_message_this_month(db, workspace_id=item.workspace_id)
+        if not can_send:
+            fail = {"status_code": 402, "response": {"code": reason, "message": reason}, "endpoint": "billing_limit"}
+            item.state = "failed"
+            item.is_permanent_failure = True
+            item.retry_count += 1
+            item.last_attempt_at = _as_naive_utc(_utc_now())
+            item.last_error = _format_delivery_error(fail)
+            item.next_retry_at = _as_naive_utc(_utc_now() + timedelta(hours=24))
+            db.add(item)
+            db.commit()
+            _update_chat_message_delivery(
+                db,
+                chat_message_id=item.chat_message_id,
+                state="failed",
+                error=item.last_error,
+                retry_count=item.retry_count,
+                next_retry_at=item.next_retry_at,
+            )
+            return False, False, fail
         _mark_outbox_sent(item, result)
         db.add(item)
         db.commit()
+        track_message_sent(
+            db,
+            workspace_id=item.workspace_id,
+            external_id=item.external_message_mid or "",
+        )
         _update_chat_message_delivery(
             db,
             chat_message_id=item.chat_message_id,
@@ -1286,12 +1364,19 @@ async def handle_customer_event(
     event: MaxWebhookEvent,
 ) -> dict:
     workspace_id = settings.workspace_id or DEFAULT_WORKSPACE_ID
-    conversation = _get_or_create_conversation(
-        db,
-        chat_id=event.chat_id,
-        customer_id=event.sender_id,
-        workspace_id=workspace_id,
-    )
+    try:
+        conversation = _get_or_create_conversation(
+            db,
+            chat_id=event.chat_id,
+            customer_id=event.sender_id,
+            workspace_id=workspace_id,
+        )
+    except ValueError:
+        await client.send_text(
+            chat_id=event.chat_id,
+            text="Достигнут лимит активных диалогов по вашему workspace. Попробуйте позже.",
+        )
+        return {"ok": True, "flow": "dialogs_limit_exceeded"}
     meta = _get_or_create_meta(db, conversation_id=conversation.id, workspace_id=workspace_id)
     customer = _upsert_customer_profile(
         db=db,
@@ -1391,14 +1476,42 @@ async def handle_customer_event(
         return {"ok": True, "flow": "start_prompt"}
 
     if phone_just_verified:
-        await queue_only_send_text(
-            db,
-            conversation_id=conversation.id,
-            target_chat_id=event.chat_id,
-            target_user_id=event.sender_id,
-            text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
-            source="bot_system",
+        intro_steps = (
+            db.query(IntroStep)
+            .filter(
+                IntroStep.workspace_id == workspace_id,
+                IntroStep.is_active.is_(True),
+            )
+            .order_by(IntroStep.step_order.asc(), IntroStep.id.asc())
+            .all()
         )
+        if intro_steps:
+            for step in intro_steps:
+                if step.delay_seconds > 0:
+                    await asyncio.sleep(min(step.delay_seconds, 30))
+                text_value = (step.text or "").strip()
+                if not text_value:
+                    continue
+                await queue_only_send_text(
+                    db,
+                    conversation_id=conversation.id,
+                    target_chat_id=event.chat_id,
+                    target_user_id=event.sender_id,
+                    text=text_value,
+                    source="bot_system",
+                )
+            meta.intro_sent = True
+            db.add(meta)
+            db.commit()
+        else:
+            await queue_only_send_text(
+                db,
+                conversation_id=conversation.id,
+                target_chat_id=event.chat_id,
+                target_user_id=event.sender_id,
+                text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
+                source="bot_system",
+            )
         await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "phone_verified"}
 
@@ -1407,6 +1520,11 @@ async def handle_customer_event(
 
     # Customer message stays in thread for manager mini-app.
     if meta.phone_verified and event.text.strip():
+        manager_id = _pick_manager_for_workspace(db, workspace_id=workspace_id, settings=settings)
+        if manager_id:
+            meta.manager_owner_id = manager_id
+            db.add(meta)
+            db.commit()
         return {"ok": True, "flow": "queued_for_mini_app"}
 
     return {"ok": True, "flow": "ignored_before_phone"}
@@ -2052,8 +2170,13 @@ async def update_chat_message_text(
     db: Session,
     chat_message_id: int,
     new_text: str,
+    *,
+    workspace_id: int | None = None,
 ) -> ChatMessage | None:
-    msg = db.query(ChatMessage).filter(ChatMessage.id == chat_message_id).first()
+    query = db.query(ChatMessage).filter(ChatMessage.id == chat_message_id)
+    if workspace_id is not None:
+        query = query.filter(ChatMessage.workspace_id == workspace_id)
+    msg = query.first()
     if not msg:
         return None
     text_value = new_text.strip()
@@ -2067,8 +2190,16 @@ async def update_chat_message_text(
     return msg
 
 
-async def remove_chat_message(db: Session, chat_message_id: int) -> bool:
-    msg = db.query(ChatMessage).filter(ChatMessage.id == chat_message_id).first()
+async def remove_chat_message(
+    db: Session,
+    chat_message_id: int,
+    *,
+    workspace_id: int | None = None,
+) -> bool:
+    query = db.query(ChatMessage).filter(ChatMessage.id == chat_message_id)
+    if workspace_id is not None:
+        query = query.filter(ChatMessage.workspace_id == workspace_id)
+    msg = query.first()
     if not msg:
         return False
     if msg.max_message_mid:

@@ -29,6 +29,11 @@ class AppSettings(BaseSettings):
     outbox_worker_enabled: bool = True
     outbox_poll_interval_seconds: int = 5
     outbox_worker_batch_size: int = 30
+    secure_cookies: bool = False
+    admin_totp_secret: str = ""
+    billing_hook_secret: str = ""
+    default_grace_days: int = 7
+    backups_dir: str = "backups"
 
 
 settings = AppSettings()

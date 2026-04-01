@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -30,6 +30,8 @@ class ServiceUser(Base):
     max_account_id: Mapped[str] = mapped_column(String(255), default="", index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    totp_secret: Mapped[str] = mapped_column(String(255), default="")
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -132,6 +134,8 @@ class BotSettings(Base):
         Text,
         default="Менеджер подключен к диалогу.",
     )
+    routing_mode: Mapped[str] = mapped_column(String(20), default="round_robin")
+    routing_rr_cursor: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class QuickReply(Base):
@@ -156,6 +160,7 @@ class Conversation(Base):
     manager_added: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     folder_id: Mapped[int | None] = mapped_column(Integer, index=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     messages: Mapped[list["MessageLog"]] = relationship(
         back_populates="conversation",
@@ -244,8 +249,23 @@ class ConversationMeta(Base):
     is_unread: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     phone_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     start_prompt_sent: Mapped[bool] = mapped_column(Boolean, default=False)
+    intro_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     phone_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     unread_errors_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class TenantAlert(Base):
+    __tablename__ = "tenant_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    alert_key: Mapped[str] = mapped_column(String(120), index=True)
+    severity: Mapped[str] = mapped_column(String(20), default="warning", index=True)
+    message: Mapped[str] = mapped_column(Text, default="")
+    metric_value: Mapped[float] = mapped_column(Float, default=0.0)
+    is_resolved: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class CustomerProfile(Base):

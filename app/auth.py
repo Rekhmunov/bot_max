@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import struct
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -129,7 +130,7 @@ def set_service_session_cookie(response: Any, raw_token: str) -> None:
         max_age=60 * 60 * 24 * 30,
         httponly=True,
         samesite="lax",
-        secure=False,
+        secure=bool(settings.secure_cookies),
         path="/",
     )
 
@@ -329,3 +330,28 @@ def verify_manager_invite_token(token: str, *, max_age_seconds: int = 60 * 60 * 
     if isinstance(manager_user_id, int):
         result["manager_user_id"] = manager_user_id
     return result
+
+
+def verify_totp_code(*, code: str, secret_b32: str, window: int = 1) -> bool:
+    normalized_code = (code or "").strip().replace(" ", "")
+    if len(normalized_code) != 6 or not normalized_code.isdigit():
+        return False
+    normalized_secret = (secret_b32 or "").strip().replace(" ", "").upper()
+    if not normalized_secret:
+        return False
+    try:
+        key = base64.b32decode(normalized_secret, casefold=True)
+    except Exception:
+        return False
+    current_step = int(datetime.now(UTC).timestamp()) // 30
+    for offset in range(-max(window, 0), max(window, 0) + 1):
+        counter = current_step + offset
+        msg = struct.pack(">Q", counter)
+        digest = hmac.new(key, msg, hashlib.sha1).digest()
+        pos = digest[-1] & 0x0F
+        chunk = digest[pos : pos + 4]
+        value = struct.unpack(">I", chunk)[0] & 0x7FFFFFFF
+        otp = str(value % 1_000_000).zfill(6)
+        if secrets.compare_digest(otp, normalized_code):
+            return True
+    return False

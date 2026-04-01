@@ -75,6 +75,10 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE conversation_meta ADD COLUMN workspace_id INTEGER DEFAULT 1")
                 )
+            if "intro_sent" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN intro_sent INTEGER DEFAULT 0")
+                )
             if "unread_errors_count" not in meta_columns:
                 conn.execute(
                     text("ALTER TABLE conversation_meta ADD COLUMN unread_errors_count INTEGER DEFAULT 0")
@@ -98,6 +102,15 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(text("ALTER TABLE conversations ADD COLUMN workspace_id INTEGER DEFAULT 1"))
             if "folder_id" not in conversation_columns:
                 conn.execute(text("ALTER TABLE conversations ADD COLUMN folder_id INTEGER"))
+            if "created_at" not in conversation_columns:
+                # SQLite does not allow non-constant defaults in ALTER TABLE ADD COLUMN.
+                conn.execute(text("ALTER TABLE conversations ADD COLUMN created_at DATETIME"))
+                conn.execute(
+                    text(
+                        "UPDATE conversations SET created_at = CURRENT_TIMESTAMP "
+                        "WHERE created_at IS NULL"
+                    )
+                )
 
         if "outbox_messages" in table_names:
             outbox_columns = {col["name"] for col in inspector.get_columns("outbox_messages")}
@@ -125,6 +138,10 @@ def _ensure_lightweight_migrations() -> None:
             settings_columns = {col["name"] for col in inspector.get_columns("bot_settings")}
             if "workspace_id" not in settings_columns:
                 conn.execute(text("ALTER TABLE bot_settings ADD COLUMN workspace_id INTEGER DEFAULT 1"))
+            if "routing_mode" not in settings_columns:
+                conn.execute(text("ALTER TABLE bot_settings ADD COLUMN routing_mode VARCHAR(20) DEFAULT 'round_robin'"))
+            if "routing_rr_cursor" not in settings_columns:
+                conn.execute(text("ALTER TABLE bot_settings ADD COLUMN routing_rr_cursor INTEGER DEFAULT 0"))
 
         if "quick_replies" in table_names:
             quick_columns = {col["name"] for col in inspector.get_columns("quick_replies")}
@@ -161,6 +178,40 @@ def _ensure_lightweight_migrations() -> None:
             webhook_columns = {col["name"] for col in inspector.get_columns("webhook_events")}
             if "event_uid" not in webhook_columns and "event_key" in webhook_columns:
                 conn.execute(text("ALTER TABLE webhook_events RENAME COLUMN event_key TO event_uid"))
+
+        if "service_users" in table_names:
+            service_user_columns = {col["name"] for col in inspector.get_columns("service_users")}
+            if "totp_secret" not in service_user_columns:
+                conn.execute(text("ALTER TABLE service_users ADD COLUMN totp_secret VARCHAR(255) DEFAULT ''"))
+            if "totp_enabled" not in service_user_columns:
+                conn.execute(text("ALTER TABLE service_users ADD COLUMN totp_enabled INTEGER DEFAULT 0"))
+
+        if "intro_steps" in table_names:
+            intro_columns = {col["name"] for col in inspector.get_columns("intro_steps")}
+            if "created_at" not in intro_columns:
+                conn.execute(
+                    text("ALTER TABLE intro_steps ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+                )
+
+        if "tenant_alerts" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE tenant_alerts ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "workspace_id INTEGER NOT NULL, "
+                    "alert_key VARCHAR(120), "
+                    "severity VARCHAR(20) DEFAULT 'warning', "
+                    "message TEXT DEFAULT '', "
+                    "metric_value FLOAT DEFAULT 0, "
+                    "is_resolved INTEGER DEFAULT 0, "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+                    "resolved_at DATETIME)"
+                )
+            )
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tenant_alerts_workspace_id ON tenant_alerts (workspace_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tenant_alerts_alert_key ON tenant_alerts (alert_key)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tenant_alerts_severity ON tenant_alerts (severity)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tenant_alerts_is_resolved ON tenant_alerts (is_resolved)"))
 
         # Workspace-scoped uniqueness for fresh deployments.
         conn.execute(

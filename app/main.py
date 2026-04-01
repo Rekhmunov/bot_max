@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,6 +20,7 @@ from app.auth import (
     create_manager_mini_token,
     create_manager_invite_token,
     create_service_session,
+    verify_totp_code,
     get_current_admin,
     get_current_service_user,
     require_admin,
@@ -70,6 +72,7 @@ from app.models import (
     Conversation,
     ConversationMeta,
     CustomerProfile,
+    IntroStep,
     ManagerInvite,
     ManagerDispatch,
     MessageLog,
@@ -77,9 +80,22 @@ from app.models import (
     QuickReply,
     ServiceUser,
     Subscription,
+    TenantAlert,
     UserSession,
     WebhookEvent,
     Workspace,
+)
+from app.ops import (
+    apply_billing_hook,
+    can_add_manager,
+    collect_tenant_metrics,
+    create_sqlite_backup,
+    ensure_workspace_active_by_billing,
+    ensure_workspace_limits_and_state,
+    get_or_create_subscription,
+    list_backups,
+    refresh_tenant_alerts,
+    restore_sqlite_backup,
 )
 from app.schemas import MaxWebhookEvent
 from app.services import (
@@ -92,6 +108,7 @@ from app.services import (
     list_workspace_managers,
 )
 from fastapi.templating import Jinja2Templates
+from app.database import SessionLocal
 
 app = FastAPI(title=settings.app_name)
 templates = Jinja2Templates(directory="app/templates")
@@ -113,6 +130,86 @@ def _sha256(value: str) -> str:
     return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
 
 
+def _json_escape(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)[1:-1]
+
+
+def _render_app_settings_page(
+    request: Request,
+    *,
+    db: Session,
+    current_user: ServiceUser,
+    message: str | None = None,
+    error: str | None = None,
+) -> HTMLResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    ok, reason = ensure_workspace_limits_and_state(db, workspace_id=workspace_id)
+    bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
+    quick_replies = (
+        db.query(QuickReply)
+        .filter(QuickReply.workspace_id == workspace_id)
+        .order_by(QuickReply.command.asc())
+        .all()
+    )
+    intro_steps = (
+        db.query(IntroStep)
+        .filter(IntroStep.workspace_id == workspace_id, IntroStep.is_active.is_(True))
+        .order_by(IntroStep.step_order.asc(), IntroStep.id.asc())
+        .all()
+    )
+    chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
+    delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
+    managers = list_workspace_managers(db, workspace_id=workspace_id)
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
+    refresh_tenant_alerts(db, workspace_id=workspace_id)
+    active_alerts = (
+        db.query(TenantAlert)
+        .filter(
+            TenantAlert.workspace_id == workspace_id,
+            TenantAlert.is_resolved.is_(False),
+        )
+        .order_by(TenantAlert.id.desc())
+        .all()
+    )
+    note = message or f"Workspace: {workspace_id}. Менеджеров: {len(managers)}"
+    if not ok:
+        note += f" · Ограничение: {reason}"
+    return templates.TemplateResponse(
+        request,
+        "admin.html",
+        {
+            "request": request,
+            "settings": bot_settings,
+            "template_prestart": get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id),
+            "template_start": get_template_text(db, TEMPLATE_START, workspace_id=workspace_id),
+            "template_after_phone": get_template_text(
+                db,
+                TEMPLATE_AFTER_PHONE,
+                workspace_id=workspace_id,
+            ),
+            "quick_replies": quick_replies,
+            "intro_steps": intro_steps,
+            "webhook_path": webhook_path,
+            "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+            "chat_metrics": chat_metrics,
+            "delivery_metrics": delivery_metrics,
+            "subscription": sub,
+            "tenant_metrics": tenant_metrics,
+            "tenant_alerts": active_alerts,
+            "message": note,
+            "error": error,
+            "ui_mode": "app",
+            "current_user": current_user,
+            "settings_action": "/app/settings",
+            "quick_reply_create_action": "/app/quick-replies",
+            "quick_reply_delete_action_prefix": "/app/quick-replies/",
+            "intro_create_action": "/app/settings/intro-steps",
+            "intro_delete_action_prefix": "/app/settings/intro-steps/",
+        },
+    )
+
+
 async def _outbox_worker_loop() -> None:
     from app.database import SessionLocal
 
@@ -120,6 +217,10 @@ async def _outbox_worker_loop() -> None:
         try:
             with SessionLocal() as db:
                 await process_outbox_queue(db, limit=settings.outbox_worker_batch_size)
+                workspace_ids = [row[0] for row in db.query(Workspace.id).all()]
+                for workspace_id in workspace_ids:
+                    refresh_tenant_alerts(db, workspace_id=int(workspace_id))
+                    ensure_workspace_active_by_billing(db, workspace_id=int(workspace_id))
         except Exception:
             # Keep worker alive even if one cycle fails.
             pass
@@ -134,6 +235,9 @@ async def startup() -> None:
 
     with SessionLocal() as db:
         ensure_default_templates(db)
+        workspace_ids = [row[0] for row in db.query(Workspace.id).all()]
+        for workspace_id in workspace_ids:
+            get_or_create_subscription(db, workspace_id=int(workspace_id))
     if settings.outbox_worker_enabled:
         _outbox_worker_task = asyncio.create_task(_outbox_worker_loop())
 
@@ -1081,6 +1185,8 @@ def _build_manager_invite_links(
         .filter(
             ManagerInvite.workspace_id == workspace_id,
             ManagerInvite.used_by_user_id == manager.id,
+            ManagerInvite.is_used.is_(False),
+            ManagerInvite.expires_at > datetime.now(UTC).replace(tzinfo=None),
         )
         .first()
     )
@@ -1099,9 +1205,8 @@ def _build_manager_invite_links(
         invite_row.max_account_id = manager_identifier
         invite_row.invite_token_hash = token_hash
         invite_row.display_name = manager.display_name or manager.username
+        # Keep a generated one-time link stable until it is consumed/expired.
         invite_row.expires_at = now + timedelta(days=7)
-        invite_row.is_used = False
-        invite_row.used_at = None
     db.add(invite_row)
     db.commit()
 
@@ -1146,6 +1251,31 @@ def _manager_invite_context(
     if workspace is None or not workspace.is_active or workspace.is_suspended:
         raise HTTPException(status_code=403, detail="Workspace недоступен")
     return claims, invite_row, manager_user, workspace
+
+
+def _require_csrf(request: Request) -> None:
+    cookie_token = (request.cookies.get(CSRF_COOKIE_NAME) or "").strip()
+    header_token = (request.headers.get("x-csrf-token") or "").strip()
+    if not cookie_token or not header_token or not secrets.compare_digest(cookie_token, header_token):
+        raise HTTPException(status_code=403, detail="CSRF verification failed")
+
+
+def _set_csrf_cookie_if_missing(request: Request, response: HTMLResponse | RedirectResponse) -> None:
+    existing = (request.cookies.get(CSRF_COOKIE_NAME) or "").strip()
+    value = existing or _new_csrf_token()
+    response.set_cookie(
+        CSRF_COOKIE_NAME,
+        value,
+        max_age=60 * 60 * 24 * 30,
+        httponly=False,
+        secure=bool(settings.secure_cookies),
+        samesite="lax",
+        path="/",
+    )
+
+
+def _sanitize_message_for_ui(value: str) -> str:
+    return (value or "").strip()[:500]
 
 
 @app.get("/app", response_class=HTMLResponse)
@@ -1232,6 +1362,7 @@ def app_login(
     request: Request,
     username: str = Form(""),
     password: str = Form(""),
+    totp_code: str = Form(""),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     user = sign_in_service_user(db, username=username, password=password)
@@ -1241,6 +1372,13 @@ def app_login(
             login_error="Неверный логин или пароль.",
             default_username=username.strip().lower(),
         )
+    if user.role == "superadmin" and settings.admin_totp_secret.strip():
+        if not verify_totp_code(code=totp_code, secret_b32=settings.admin_totp_secret.strip()):
+            return _render_app_landing(
+                request,
+                login_error="Неверный 2FA код.",
+                default_username=username.strip().lower(),
+            )
     token = create_service_session(
         db,
         user_id=user.id,
@@ -1278,6 +1416,78 @@ def app_logout_all(
     response = RedirectResponse(url="/app", status_code=302)
     clear_service_session_cookie(response)
     return response
+
+
+@app.post("/app/quick-replies", response_class=HTMLResponse)
+async def app_create_quick_reply(
+    request: Request,
+    command: str = Form(""),
+    title: str = Form(""),
+    text: str = Form(""),
+    photo: UploadFile | None = File(default=None),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    if current_user.role not in {"owner", "admin", "superadmin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    normalized = command.strip().lstrip("/").lower()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Команда не может быть пустой")
+    exists = (
+        db.query(QuickReply)
+        .filter(QuickReply.workspace_id == workspace_id, QuickReply.command == normalized)
+        .first()
+    )
+    if exists:
+        return RedirectResponse(url="/app/settings", status_code=302)
+    image_path = None
+    if photo and photo.filename:
+        ext = Path(photo.filename).suffix.lower()
+        allowed = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+        if ext not in allowed:
+            raise HTTPException(status_code=400, detail="Неподдерживаемый формат фото")
+        safe_name = f"{uuid4().hex}{ext}"
+        target = Path("app/static/uploads") / safe_name
+        content = await photo.read()
+        target.write_bytes(content)
+        image_path = f"/static/uploads/{safe_name}"
+    db.add(
+        QuickReply(
+            workspace_id=workspace_id,
+            command=normalized,
+            title=title.strip(),
+            text=text.strip(),
+            image_path=image_path,
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/settings", status_code=302)
+
+
+@app.post("/app/quick-replies/{reply_id}/delete", response_class=RedirectResponse)
+def app_delete_quick_reply(
+    reply_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if current_user.role not in {"owner", "admin", "superadmin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    reply = (
+        db.query(QuickReply)
+        .filter(QuickReply.workspace_id == workspace_id, QuickReply.id == reply_id)
+        .first()
+    )
+    if reply:
+        if reply.image_path:
+            relative_static_path = reply.image_path.removeprefix("/static/")
+            img_path = Path("app/static") / relative_static_path
+            if img_path.exists():
+                img_path.unlink()
+        db.delete(reply)
+        db.commit()
+    return RedirectResponse(url="/app/settings", status_code=302)
 
 
 @app.get("/app/chats", response_class=HTMLResponse)
@@ -1330,6 +1540,7 @@ def app_settings_page(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    ok, reason = ensure_workspace_limits_and_state(db, workspace_id=workspace_id)
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
     quick_replies = (
         db.query(QuickReply)
@@ -1340,6 +1551,12 @@ def app_settings_page(
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
     managers = list_workspace_managers(db, workspace_id=workspace_id)
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
+    alerts = refresh_tenant_alerts(db, workspace_id=workspace_id)
+    note = f"Workspace: {workspace_id}. Менеджеров: {len(managers)}"
+    if not ok:
+        note += f" · Ограничение: {reason}"
     return templates.TemplateResponse(
         request,
         "admin.html",
@@ -1358,7 +1575,10 @@ def app_settings_page(
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
-            "message": f"Workspace: {workspace_id}. Менеджеров: {len(managers)}",
+            "subscription": sub,
+            "tenant_metrics": tenant_metrics,
+            "tenant_alerts": alerts,
+            "message": note,
             "error": None,
         },
     )
@@ -1423,6 +1643,34 @@ def app_create_manager(
     if current_user.role not in {"owner", "admin", "superadmin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    ok_ws, ws_err = ensure_workspace_limits_and_state(db, workspace_id=workspace_id)
+    if not ok_ws:
+        return templates.TemplateResponse(
+            request,
+            "app_landing.html",
+            {
+                "request": request,
+                "current_user": current_user,
+                "current_workspace": db.query(Workspace).filter(Workspace.id == workspace_id).first(),
+                "message": None,
+                "error": "Workspace приостановлен из-за биллинга.",
+            },
+            status_code=403,
+        )
+    can_add, add_err = can_add_manager(db, workspace_id=workspace_id)
+    if not can_add:
+        return templates.TemplateResponse(
+            request,
+            "app_landing.html",
+            {
+                "request": request,
+                "current_user": current_user,
+                "current_workspace": db.query(Workspace).filter(Workspace.id == workspace_id).first(),
+                "message": None,
+                "error": "Достигнут лимит менеджеров для текущего тарифа.",
+            },
+            status_code=400,
+        )
     max_account_clean = max_account_id.strip()
     if not max_account_clean:
         return templates.TemplateResponse(
@@ -1476,48 +1724,123 @@ def app_create_manager(
     return RedirectResponse(url="/app/managers", status_code=302)
 
 
+@app.post("/app/settings", response_class=RedirectResponse)
+def app_update_settings(
+    prestart_message: str = Form(""),
+    start_message: str = Form(""),
+    after_phone_message: str = Form(""),
+    manager_account_id: str = Form(""),
+    admin_account_id: str = Form(""),
+    routing_mode: str = Form("round_robin"),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    if current_user.role not in {"owner", "admin", "superadmin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    settings_row = get_or_create_settings(db, workspace_id=workspace_id)
+    settings_row.manager_account_id = manager_account_id.strip()
+    settings_row.admin_account_id = admin_account_id.strip()
+    mode = (routing_mode or "round_robin").strip().lower()
+    if mode not in {"round_robin", "random"}:
+        mode = "round_robin"
+    settings_row.routing_mode = mode
+    db.add(settings_row)
+    set_template_text(db, TEMPLATE_PRESTART, prestart_message, workspace_id=workspace_id)
+    set_template_text(db, TEMPLATE_START, start_message, workspace_id=workspace_id)
+    set_template_text(db, TEMPLATE_AFTER_PHONE, after_phone_message, workspace_id=workspace_id)
+    db.commit()
+    return RedirectResponse(url="/app/settings", status_code=302)
+
+
+@app.post("/app/settings/intro-steps", response_class=RedirectResponse)
+def app_add_intro_step(
+    text: str = Form(""),
+    delay_seconds: int = Form(0),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    if current_user.role not in {"owner", "admin", "superadmin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    value = (text or "").strip()
+    if not value:
+        raise HTTPException(status_code=400, detail="intro_text_required")
+    max_order = (
+        db.query(func.max(IntroStep.step_order))
+        .filter(IntroStep.workspace_id == workspace_id)
+        .scalar()
+    )
+    step = IntroStep(
+        workspace_id=workspace_id,
+        step_order=int(max_order or 0) + 1,
+        delay_seconds=max(0, int(delay_seconds)),
+        text=value,
+        is_active=True,
+    )
+    db.add(step)
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=current_user.id,
+            action="intro_step_added",
+            object_type="intro_step",
+            object_id="0",
+            details_json="{}",
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/settings", status_code=302)
+
+
+@app.post("/app/settings/intro-steps/{step_id}/delete", response_class=RedirectResponse)
+def app_delete_intro_step(
+    step_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    if current_user.role not in {"owner", "admin", "superadmin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    row = (
+        db.query(IntroStep)
+        .filter(IntroStep.id == step_id, IntroStep.workspace_id == workspace_id)
+        .first()
+    )
+    if row is not None:
+        db.delete(row)
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=current_user.id,
+                action="intro_step_deleted",
+                object_type="intro_step",
+                object_id=str(step_id),
+                details_json="{}",
+            )
+        )
+        db.commit()
+    return RedirectResponse(url="/app/settings", status_code=302)
+
+
 @app.get("/app/invite/{invite_token}", response_class=HTMLResponse)
 def app_accept_manager_invite(
     invite_token: str,
     request: Request,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    claims = verify_manager_invite_token(invite_token)
-    if not claims:
-        return _render_app_landing(request, login_error="Ссылка приглашения недействительна.")
+    try:
+        claims, invite_row, manager_user, workspace = _manager_invite_context(
+            db=db,
+            token=invite_token,
+        )
+    except HTTPException as exc:
+        return _render_app_landing(request, login_error=str(exc.detail))
 
     workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
-    manager_user_id = claims.get("manager_user_id")
     max_account_id = str(claims.get("max_account_id", "")).strip()
-    token_hash = _sha256(invite_token)
     now = datetime.now(UTC).replace(tzinfo=None)
 
-    invite_row = (
-        db.query(ManagerInvite)
-        .filter(
-            ManagerInvite.workspace_id == workspace_id,
-            ManagerInvite.invite_token_hash == token_hash,
-        )
-        .first()
-    )
-    if invite_row is None:
-        return _render_app_landing(request, login_error="Приглашение не найдено.")
-    if invite_row.is_used:
-        return _render_app_landing(request, login_error="Эта ссылка уже использована.")
-    if invite_row.expires_at and invite_row.expires_at < now:
-        return _render_app_landing(request, login_error="Срок действия приглашения истек.")
-
-    manager_user = None
-    if isinstance(manager_user_id, int):
-        manager_user = (
-            db.query(ServiceUser)
-            .filter(
-                ServiceUser.id == manager_user_id,
-                ServiceUser.workspace_id == workspace_id,
-                ServiceUser.role == "manager",
-            )
-            .first()
-        )
     if manager_user is None and max_account_id:
         manager_user = (
             db.query(ServiceUser)
@@ -1530,6 +1853,8 @@ def app_accept_manager_invite(
         )
     if manager_user is None or not manager_user.is_active or manager_user.is_blocked:
         return _render_app_landing(request, login_error="Менеджер не активен или не найден.")
+    if workspace is None or workspace.is_suspended or not workspace.is_active:
+        return _render_app_landing(request, login_error="Workspace недоступен.")
 
     invite_row.is_used = True
     invite_row.used_by_user_id = manager_user.id
@@ -1603,6 +1928,290 @@ def app_superadmin_page(
             },
         },
     )
+
+
+@app.post("/app/billing/hook")
+def app_billing_hook(
+    request: Request,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    secret_header = request.headers.get("X-Billing-Secret", "")
+    expected = settings.billing_hook_secret.strip()
+    if expected and secret_header.strip() != expected:
+        raise HTTPException(status_code=403, detail="invalid_billing_hook_secret")
+    workspace_id = int(payload.get("workspace_id") or 0)
+    if workspace_id <= 0:
+        raise HTTPException(status_code=400, detail="workspace_id_required")
+    event_type = str(payload.get("event_type") or "").strip()
+    if not event_type:
+        raise HTTPException(status_code=400, detail="event_type_required")
+    external_id = str(payload.get("external_id") or "").strip()
+    sub = apply_billing_hook(
+        db,
+        workspace_id=workspace_id,
+        event_type=event_type,
+        external_id=external_id,
+        payload_json=str(payload),
+    )
+    return {"ok": True, "workspace_id": workspace_id, "status": sub.status}
+
+
+@app.post("/app/superadmin/workspaces/{workspace_id}/suspend")
+def app_superadmin_suspend_workspace(
+    workspace_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+    ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if ws:
+        ws.is_suspended = True
+        db.add(ws)
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=current_user.id,
+                action="workspace_suspended",
+                object_type="workspace",
+                object_id=str(workspace_id),
+                details_json="{}",
+            )
+        )
+        db.commit()
+    return RedirectResponse(url="/app/superadmin", status_code=302)
+
+
+@app.post("/app/superadmin/workspaces/{workspace_id}/resume")
+def app_superadmin_resume_workspace(
+    workspace_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+    ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if ws:
+        ws.is_suspended = False
+        db.add(ws)
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=current_user.id,
+                action="workspace_resumed",
+                object_type="workspace",
+                object_id=str(workspace_id),
+                details_json="{}",
+            )
+        )
+        db.commit()
+    return RedirectResponse(url="/app/superadmin", status_code=302)
+
+
+@app.post("/app/superadmin/workspaces/{workspace_id}/revoke-sessions")
+def app_superadmin_revoke_workspace_sessions(
+    workspace_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+    revoke_workspace_sessions(db, workspace_id=workspace_id)
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=current_user.id,
+            action="workspace_sessions_revoked",
+            object_type="workspace",
+            object_id=str(workspace_id),
+            details_json="{}",
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/superadmin", status_code=302)
+
+
+@app.post("/app/superadmin/workspaces/{workspace_id}/plan")
+def app_superadmin_update_workspace_plan(
+    workspace_id: int,
+    manager_limit: int = Form(3),
+    dialogs_limit: int = Form(500),
+    messages_per_month_limit: int = Form(5000),
+    status: str = Form("active"),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    sub.manager_limit = max(1, int(manager_limit))
+    sub.dialogs_limit = max(1, int(dialogs_limit))
+    sub.messages_per_month_limit = max(1, int(messages_per_month_limit))
+    sub.status = (status or "active").strip().lower()
+    db.add(sub)
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=current_user.id,
+            action="workspace_plan_updated",
+            object_type="subscription",
+            object_id=str(sub.id),
+            details_json=(
+                f'{{"manager_limit":{sub.manager_limit},"dialogs_limit":{sub.dialogs_limit},'
+                f'"messages_per_month_limit":{sub.messages_per_month_limit},"status":"{sub.status}"}}'
+            ),
+        )
+    )
+    db.commit()
+    ensure_workspace_active_by_billing(db, workspace_id=workspace_id)
+    return RedirectResponse(url="/app/superadmin", status_code=302)
+
+
+@app.post("/app/superadmin/backup")
+def app_superadmin_create_backup(
+    current_user: ServiceUser = Depends(require_service_user),
+) -> RedirectResponse:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+    with SessionLocal() as db:
+        backup_path = create_sqlite_backup()
+        db.add(
+            AuditLog(
+                workspace_id=None,
+                actor_user_id=current_user.id,
+                action="backup_created",
+                object_type="backup",
+                object_id=backup_path.name,
+                details_json="{}",
+            )
+        )
+        db.commit()
+    return RedirectResponse(url="/app/superadmin", status_code=302)
+
+
+@app.post("/app/superadmin/restore")
+def app_superadmin_restore_backup(
+    backup_name: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+) -> RedirectResponse:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+    target_name = backup_name.strip()
+    restore_sqlite_backup(target_name)
+    with SessionLocal() as db:
+        db.add(
+            AuditLog(
+                workspace_id=None,
+                actor_user_id=current_user.id,
+                action="backup_restored",
+                object_type="backup",
+                object_id=target_name,
+                details_json="{}",
+            )
+        )
+        db.commit()
+    return RedirectResponse(url="/app/superadmin", status_code=302)
+
+
+@app.get("/app/superadmin/backups")
+def app_superadmin_list_backups(
+    current_user: ServiceUser = Depends(require_service_user),
+) -> dict:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+    return {"ok": True, "items": list_backups(limit=50)}
+
+
+@app.get("/app/superadmin/backup-check")
+def app_superadmin_backup_check(
+    current_user: ServiceUser = Depends(require_service_user),
+) -> dict:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+    items = list_backups(limit=1)
+    return {"ok": bool(items), "latest_backup": (items[0] if items else None)}
+
+
+@app.get("/app/superadmin/metrics")
+def app_superadmin_metrics(
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+    results: list[dict] = []
+    for ws in db.query(Workspace).order_by(Workspace.id.asc()).all():
+        metrics = collect_tenant_metrics(db, workspace_id=ws.id)
+        created_alerts = refresh_tenant_alerts(db, workspace_id=ws.id)
+        results.append(
+            {
+                "workspace_id": ws.id,
+                "tenant_code": ws.tenant_code,
+                "is_suspended": ws.is_suspended,
+                "metrics": metrics,
+                "new_alerts": len(created_alerts),
+            }
+        )
+    return {"ok": True, "tenants": results}
+
+
+@app.get("/app/superadmin/alerts")
+def app_superadmin_alerts(
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+    alerts = (
+        db.query(TenantAlert)
+        .order_by(TenantAlert.id.desc())
+        .limit(200)
+        .all()
+    )
+    return {
+        "ok": True,
+        "items": [
+            {
+                "id": a.id,
+                "workspace_id": a.workspace_id,
+                "alert_key": a.alert_key,
+                "severity": a.severity,
+                "message": a.message,
+                "metric_value": a.metric_value,
+                "is_resolved": a.is_resolved,
+                "created_at": str(a.created_at),
+                "resolved_at": (str(a.resolved_at) if a.resolved_at else None),
+            }
+            for a in alerts
+        ],
+    }
+
+
+@app.post("/app/superadmin/2fa", response_class=RedirectResponse)
+def app_superadmin_set_2fa_secret(
+    secret_b32: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+    normalized = (secret_b32 or "").strip().replace(" ", "").upper()
+    if normalized and (len(normalized) < 16 or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=" for ch in normalized)):
+        raise HTTPException(status_code=400, detail="invalid_totp_secret")
+    settings.admin_totp_secret = normalized
+    db.add(
+        AuditLog(
+            workspace_id=None,
+            actor_user_id=current_user.id,
+            action="superadmin_2fa_updated",
+            object_type="security",
+            object_id="admin_totp_secret",
+            details_json='{"enabled":' + ("true" if bool(normalized) else "false") + "}",
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/superadmin", status_code=302)
 
 
 @app.post("/app/chats/folders", response_class=RedirectResponse)
