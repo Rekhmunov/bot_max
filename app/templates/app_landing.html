@@ -484,9 +484,11 @@
             </div>
           {% endif %}
           <div class="links">
-            <a class="link-btn" href="/app/settings">Настройки</a>
-            <a class="link-btn" href="/app/chats">Чаты</a>
-            {% if current_user.role in ["owner", "admin", "superadmin"] %}
+            {% if current_user.role != "superadmin" %}
+              <a class="link-btn" href="/app/settings">Настройки</a>
+              <a class="link-btn" href="/app/chats">Чаты</a>
+            {% endif %}
+            {% if current_user.role in ["owner", "admin"] %}
               <a class="link-btn" href="/app/managers">Менеджеры</a>
             {% endif %}
             {% if current_user.role == "superadmin" %}

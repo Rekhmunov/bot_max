@@ -1710,17 +1710,14 @@ def _resolve_app_workspace_scope(
 ) -> tuple[int, Workspace | None, bool]:
     """
     Resolve workspace scope for /app/chats.
-    Superadmin can explicitly open any tenant via workspace_id query param.
+    Superadmin must not access /app/chats: only /app/superadmin is allowed.
     """
-    if workspace_id is not None:
-        if current_user.role != "superadmin":
-            raise HTTPException(status_code=403, detail="Недостаточно прав")
-        target = db.query(Workspace).filter(Workspace.id == int(workspace_id)).first()
-        if target is None:
-            raise HTTPException(status_code=404, detail="Клиент не найден")
-        return int(target.id), target, True
+    if current_user.role == "superadmin":
+        raise HTTPException(status_code=403, detail="Для superadmin доступна только панель /app/superadmin")
 
     current_workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    if workspace_id is not None and int(workspace_id) != int(current_workspace_id):
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
     target = db.query(Workspace).filter(Workspace.id == int(current_workspace_id)).first()
     return int(current_workspace_id), target, False
 
@@ -2265,6 +2262,8 @@ def app_resend_email_verification(
         scope="email_verify_resend",
         limit=max(1, int(settings.rate_limit_login_per_minute)),
     )
+    if current_user.role == "superadmin":
+        raise HTTPException(status_code=403, detail="Для superadmin доступна только панель /app/superadmin")
     if current_user.email_verified:
         return _render_app_settings_page(
             request,
@@ -2331,7 +2330,7 @@ async def app_create_quick_reply(
         scope="app_ops",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin", "superadmin"}:
+    if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     normalized = command.strip().lstrip("/").lower()
@@ -2377,7 +2376,7 @@ def app_delete_quick_reply(
         scope="app_ops",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin", "superadmin"}:
+    if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     reply = (
@@ -2407,6 +2406,8 @@ async def app_chats_page(
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    if current_user.role == "superadmin":
+        raise HTTPException(status_code=403, detail="Для superadmin доступна только панель /app/superadmin")
     _check_rate_limit_or_raise(
         request,
         scope="app_view",
@@ -2469,6 +2470,8 @@ def app_settings_page(
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    if current_user.role == "superadmin":
+        raise HTTPException(status_code=403, detail="Для superadmin доступна только панель /app/superadmin")
     return _render_app_settings_page(
         request,
         db=db,
@@ -2482,10 +2485,12 @@ def app_managers_page(
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    if current_user.role == "superadmin":
+        raise HTTPException(status_code=403, detail="Для superadmin доступна только панель /app/superadmin")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     managers = list_workspace_managers(db, workspace_id=workspace_id)
     workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if current_user.role not in {"owner", "admin", "superadmin"}:
+    if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
 
     links: list[dict[str, str]] = []
@@ -2537,7 +2542,7 @@ def app_create_manager(
         scope="app_manager_create",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin", "superadmin"}:
+    if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     ok_ws, ws_err = ensure_workspace_limits_and_state(db, workspace_id=workspace_id)
@@ -2640,7 +2645,7 @@ def app_update_settings(
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
-    if current_user.role not in {"owner", "admin", "superadmin"}:
+    if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
     settings_row.manager_account_id = manager_account_id.strip()
@@ -2672,7 +2677,7 @@ def app_add_intro_step(
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
-    if current_user.role not in {"owner", "admin", "superadmin"}:
+    if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     value = (text or "").strip()
     if not value:
@@ -2718,7 +2723,7 @@ def app_delete_intro_step(
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
-    if current_user.role not in {"owner", "admin", "superadmin"}:
+    if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     row = (
         db.query(IntroStep)
@@ -2939,10 +2944,8 @@ def app_superadmin_workspace_chats_redirect(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     _require_superadmin(current_user)
-    target = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if target is None:
-        raise HTTPException(status_code=404, detail="Клиент не найден")
-    return RedirectResponse(url=f"/app/chats?workspace_id={workspace_id}", status_code=302)
+    _ = (workspace_id, db)
+    raise HTTPException(status_code=403, detail="Открытие чатов для superadmin отключено")
 
 
 @app.get("/app/superadmin/users", response_class=HTMLResponse)
