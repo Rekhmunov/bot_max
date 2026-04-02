@@ -197,6 +197,63 @@
     }
     .manager-id-extra { display: none; }
     .manager-id-extra.show { display: grid; }
+    .manager-status-kpis {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      margin: 10px 0 2px;
+    }
+    .manager-status-kpi {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: #fff;
+    }
+    .manager-status-kpi .label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .manager-status-kpi .value {
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .status-chip.connected {
+      color: #126b3c;
+      background: #e8f8ef;
+      border-color: #b9e6cc;
+    }
+    .status-chip.pending {
+      color: #7a5a00;
+      background: #fff6de;
+      border-color: #f0da9d;
+    }
+    .status-chip.failed {
+      color: #9e2c2c;
+      background: #fdeaea;
+      border-color: #f2c8c8;
+    }
+    .status-chip.not_sent {
+      color: #4a5568;
+      background: #eef2f7;
+      border-color: #d8e0ec;
+    }
+    .status-chip.deactivated {
+      color: #6b2f91;
+      background: #f3eaff;
+      border-color: #dbc3f5;
+    }
     code { background: #eef1f8; padding: 2px 6px; border-radius: 6px; }
   </style>
 </head>
@@ -389,6 +446,59 @@
       <div class="hint">Новых (непрочитанных) чатов: <b>{{ chat_metrics.unread_threads }}</b></div>
       <div class="hint">Чатов с ошибками доставки: <b>{{ chat_metrics.error_threads }}</b></div>
     </section>
+
+    {% if ui_mode == "app" %}
+    {% set manager_summary = manager_status_summary if manager_status_summary is defined else {"connected": 0, "pending": 0, "failed": 0, "total": 0} %}
+    <section class="card" style="margin-top:16px;">
+      <h2>Менеджеры: статусы подключения</h2>
+      <div class="manager-status-kpis">
+        <div class="manager-status-kpi">
+          <div class="label">Подключено</div>
+          <div class="value">{{ manager_summary.connected or 0 }}</div>
+        </div>
+        <div class="manager-status-kpi">
+          <div class="label">Ожидает подключения</div>
+          <div class="value">{{ manager_summary.pending or 0 }}</div>
+        </div>
+        <div class="manager-status-kpi">
+          <div class="label">Ошибки отправки</div>
+          <div class="value">{{ manager_summary.failed or 0 }}</div>
+        </div>
+        <div class="manager-status-kpi">
+          <div class="label">Всего ID в настройках</div>
+          <div class="value">{{ manager_summary.total or 0 }}</div>
+        </div>
+      </div>
+      {% if manager_status_rows %}
+      <table>
+        <thead>
+          <tr>
+            <th>ID в Max</th>
+            <th>Статус</th>
+            <th>Ссылка отправлена</th>
+            <th>Подключился</th>
+            <th>Последний вход</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in manager_status_rows %}
+          <tr>
+            <td><code>{{ row.max_account_id }}</code></td>
+            <td>
+              <span class="status-chip {{ row.status_key }}">{{ row.status_label }}</span>
+            </td>
+            <td>{{ row.link_sent_at }}</td>
+            <td>{{ row.connected_at }}</td>
+            <td>{{ row.last_login_at }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="hint">Добавьте хотя бы один ID менеджера, чтобы отслеживать статус подключения.</div>
+      {% endif %}
+    </section>
+    {% endif %}
 
     {% if subscription %}
     <section class="card" style="margin-top:16px;">

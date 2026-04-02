@@ -640,6 +640,9 @@ def run() -> None:
             follow_redirects=False,
         )
         assert send_manager_link.status_code == 200
+        assert "Менеджеры: статусы подключения" in send_manager_link.text
+        assert "Ожидает подключения" in send_manager_link.text
+        assert "Ссылка не отправлялась" in send_manager_link.text
 
         # App settings must also enforce manager IDs limit on plain save.
         app_limit_email = f"limit_{uuid4().hex[:8]}@example.com"

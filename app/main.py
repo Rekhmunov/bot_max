@@ -175,6 +175,146 @@ def _parse_manager_ids(raw: str) -> list[str]:
     return [item.strip() for item in (raw or "").split(",") if item.strip()]
 
 
+def _safe_json_dict(raw: str) -> dict:
+    try:
+        parsed = json.loads(raw or "{}")
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _collect_manager_status_rows(
+    db: Session,
+    *,
+    workspace_id: int,
+    manager_ids: list[str],
+) -> tuple[list[dict[str, str]], dict[str, int]]:
+    normalized_ids: list[str] = []
+    seen_ids: set[str] = set()
+    for raw_id in manager_ids:
+        value = (raw_id or "").strip()
+        if not value or value in seen_ids:
+            continue
+        seen_ids.add(value)
+        normalized_ids.append(value)
+
+    summary = {
+        "connected": 0,
+        "pending": 0,
+        "failed": 0,
+        "not_sent": 0,
+        "deactivated": 0,
+        "total": len(normalized_ids),
+    }
+    if not normalized_ids:
+        return [], summary
+
+    manager_rows = (
+        db.query(ServiceUser)
+        .filter(
+            ServiceUser.workspace_id == workspace_id,
+            ServiceUser.role == "manager",
+            ServiceUser.max_account_id.in_(normalized_ids),
+        )
+        .order_by(ServiceUser.id.desc())
+        .all()
+    )
+    manager_by_max_id: dict[str, ServiceUser] = {}
+    for row in manager_rows:
+        max_id = (row.max_account_id or "").strip()
+        if not max_id or max_id in manager_by_max_id:
+            continue
+        manager_by_max_id[max_id] = row
+
+    invite_rows = (
+        db.query(ManagerInvite)
+        .filter(
+            ManagerInvite.workspace_id == workspace_id,
+            ManagerInvite.max_account_id.in_(normalized_ids),
+        )
+        .order_by(ManagerInvite.created_at.desc(), ManagerInvite.id.desc())
+        .all()
+    )
+    latest_invite_by_max_id: dict[str, ManagerInvite] = {}
+    connected_at_by_max_id: dict[str, datetime] = {}
+    for invite in invite_rows:
+        max_id = (invite.max_account_id or "").strip()
+        if not max_id:
+            continue
+        if max_id not in latest_invite_by_max_id:
+            latest_invite_by_max_id[max_id] = invite
+        if invite.used_at:
+            existing_connected_at = connected_at_by_max_id.get(max_id)
+            if existing_connected_at is None or invite.used_at > existing_connected_at:
+                connected_at_by_max_id[max_id] = invite.used_at
+
+    audit_rows = (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.workspace_id == workspace_id,
+            AuditLog.action.in_(["manager_invite_sent", "manager_invite_send_failed"]),
+        )
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(5000)
+        .all()
+    )
+    last_sent_at_by_max_id: dict[str, datetime] = {}
+    last_failed_at_by_max_id: dict[str, datetime] = {}
+    for log_row in audit_rows:
+        details = _safe_json_dict(log_row.details_json)
+        max_id = str(details.get("max_account_id", "")).strip()
+        if not max_id or max_id not in seen_ids:
+            continue
+        if log_row.action == "manager_invite_sent" and max_id not in last_sent_at_by_max_id:
+            last_sent_at_by_max_id[max_id] = log_row.created_at
+        if log_row.action == "manager_invite_send_failed" and max_id not in last_failed_at_by_max_id:
+            last_failed_at_by_max_id[max_id] = log_row.created_at
+
+    status_labels = {
+        "connected": "Подключен",
+        "pending": "Ожидает подключения",
+        "failed": "Ошибка отправки",
+        "not_sent": "Ссылка не отправлялась",
+        "deactivated": "Отключен",
+    }
+    status_rows: list[dict[str, str]] = []
+    for max_id in normalized_ids:
+        manager_user = manager_by_max_id.get(max_id)
+        invite_row = latest_invite_by_max_id.get(max_id)
+        last_login_at = manager_user.last_login_at if manager_user else None
+        connected_at = connected_at_by_max_id.get(max_id)
+        if last_login_at and (connected_at is None or last_login_at > connected_at):
+            connected_at = last_login_at
+        last_sent_at = last_sent_at_by_max_id.get(max_id)
+        if last_sent_at is None and invite_row is not None:
+            last_sent_at = invite_row.created_at
+        last_failed_at = last_failed_at_by_max_id.get(max_id)
+
+        status_key = "not_sent"
+        if manager_user is not None and (not manager_user.is_active or manager_user.is_blocked):
+            status_key = "deactivated"
+        elif connected_at is not None:
+            status_key = "connected"
+        elif last_failed_at is not None and (last_sent_at is None or last_failed_at >= last_sent_at):
+            status_key = "failed"
+        elif last_sent_at is not None:
+            status_key = "pending"
+
+        summary[status_key] += 1
+        status_rows.append(
+            {
+                "max_account_id": max_id,
+                "status_key": status_key,
+                "status_label": status_labels.get(status_key, "—"),
+                "link_sent_at": _to_iso(last_sent_at),
+                "connected_at": _to_iso(connected_at),
+                "last_login_at": _to_iso(last_login_at),
+            }
+        )
+
+    return status_rows, summary
+
+
 def _manager_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
     if (sub.plan_code or "").strip().lower() == "unlimited":
@@ -335,6 +475,17 @@ async def _send_manager_invite_link_to_max(
     send_result = await MaxClient().send_text_to_user(user_id=manager_id_clean, text=message_text)
     sent_ok = bool(send_result.get("success", True) or send_result.get("message") or send_result.get("mock"))
     if not sent_ok:
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=actor_user_id,
+                action="manager_invite_send_failed",
+                object_type="service_user",
+                object_id=str(manager_user.id),
+                details_json=f'{{"max_account_id":"{manager_id_clean}"}}',
+            )
+        )
+        db.commit()
         status_code = send_result.get("status_code")
         if status_code == 404:
             return False, "Указан неверный ID менеджера в Max."
@@ -1013,7 +1164,17 @@ def _render_app_settings_page(
         # Keep settings page available on partially migrated SQLite snapshots.
         db.rollback()
     manager_rows_limit = _manager_rows_limit(db, workspace_id=workspace_id)
-    note = message or f"Workspace: {workspace_id}. Менеджеров: {len(managers)}"
+    manager_id_rows = _parse_manager_ids(bot_settings.manager_account_id)
+    manager_status_rows, manager_status_summary = _collect_manager_status_rows(
+        db,
+        workspace_id=workspace_id,
+        manager_ids=manager_id_rows,
+    )
+    note = (
+        message
+        or f"Workspace: {workspace_id}. Подключено: {manager_status_summary['connected']}, "
+        f"ожидает подключения: {manager_status_summary['pending']}"
+    )
     if not ok:
         note += f" · Ограничение: {reason}"
     email_status = "подтверждена" if bool(current_user.email_verified) else "не подтверждена"
@@ -1051,7 +1212,7 @@ def _render_app_settings_page(
             "chats_href": "/app/chats",
             "logout_action": "/app/logout",
             "settings_action": "/app/settings",
-            "manager_id_rows": _parse_manager_ids(bot_settings.manager_account_id),
+            "manager_id_rows": manager_id_rows,
             "manager_ids_limit": _manager_limit_for_workspace(db, workspace_id=workspace_id),
             "manager_invite_send_action": "/app/settings/send-manager-link",
             "manager_invite_copy_action": "/app/settings/copy-manager-link",
@@ -1064,10 +1225,12 @@ def _render_app_settings_page(
             "email_value": current_user.username,
             "email_resend_action": "/app/resend-email-verification",
             "can_resend_email_verification": can_resend_verification,
-            "manager_id_rows": _parse_manager_ids(bot_settings.manager_account_id),
+            "manager_id_rows": manager_id_rows,
             "manager_ids_limit": manager_rows_limit,
             "manager_invite_send_action": "/app/settings/send-manager-link",
             "manager_invite_copy_action": "/app/settings/copy-manager-link",
+            "manager_status_rows": manager_status_rows,
+            "manager_status_summary": manager_status_summary,
         },
     )
 
@@ -1230,6 +1393,15 @@ def admin_page(
             "manager_ids_limit": int(sub.manager_limit or 0),
             "manager_invite_send_action": "/admin/settings/send-manager-link",
             "manager_invite_copy_action": "/admin/settings/copy-manager-link",
+            "manager_status_rows": [],
+            "manager_status_summary": {
+                "connected": 0,
+                "pending": 0,
+                "failed": 0,
+                "not_sent": 0,
+                "deactivated": 0,
+                "total": 0,
+            },
             "message": None,
             "error": None,
         },
@@ -1290,6 +1462,15 @@ async def update_settings(
                 "manager_ids_limit": manager_limit_value,
                 "manager_invite_send_action": "/admin/settings/send-manager-link",
                 "manager_invite_copy_action": "/admin/settings/copy-manager-link",
+                "manager_status_rows": [],
+                "manager_status_summary": {
+                    "connected": 0,
+                    "pending": 0,
+                    "failed": 0,
+                    "not_sent": 0,
+                    "deactivated": 0,
+                    "total": 0,
+                },
                 "message": None,
                 "error": "Ваш тарифный план не позволяет добавлять больше менеджеров.",
             },
@@ -1343,6 +1524,15 @@ async def update_settings(
             "manager_ids_limit": manager_limit_value,
             "manager_invite_send_action": "/admin/settings/send-manager-link",
             "manager_invite_copy_action": "/admin/settings/copy-manager-link",
+            "manager_status_rows": [],
+            "manager_status_summary": {
+                "connected": 0,
+                "pending": 0,
+                "failed": 0,
+                "not_sent": 0,
+                "deactivated": 0,
+                "total": 0,
+            },
             "message": "Настройки сохранены",
             "error": None,
         },
@@ -1397,6 +1587,15 @@ async def admin_send_manager_link(
             "manager_ids_limit": _manager_limit_for_workspace(db, workspace_id=workspace_id),
             "manager_invite_send_action": "/admin/settings/send-manager-link",
             "manager_invite_copy_action": "/admin/settings/copy-manager-link",
+            "manager_status_rows": [],
+            "manager_status_summary": {
+                "connected": 0,
+                "pending": 0,
+                "failed": 0,
+                "not_sent": 0,
+                "deactivated": 0,
+                "total": 0,
+            },
             "message": (msg if ok else None),
             "error": (None if ok else msg),
         },
@@ -1529,6 +1728,15 @@ async def create_quick_reply(
                 "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
                 "chat_metrics": chat_metrics,
                 "delivery_metrics": delivery_metrics,
+                "manager_status_rows": [],
+                "manager_status_summary": {
+                    "connected": 0,
+                    "pending": 0,
+                    "failed": 0,
+                    "not_sent": 0,
+                    "deactivated": 0,
+                    "total": 0,
+                },
                 "message": None,
                 "error": f"Команда /{normalized} уже существует",
             },
@@ -1580,6 +1788,15 @@ async def create_quick_reply(
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
+            "manager_status_rows": [],
+            "manager_status_summary": {
+                "connected": 0,
+                "pending": 0,
+                "failed": 0,
+                "not_sent": 0,
+                "deactivated": 0,
+                "total": 0,
+            },
             "message": f"Быстрый ответ /{normalized} добавлен",
             "error": None,
         },
