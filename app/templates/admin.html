@@ -296,44 +296,9 @@
           {% set manager_ids = manager_id_rows if manager_id_rows is defined else [] %}
           {% set single_manager_id = (manager_ids[0] if manager_ids else "") %}
 
-          <label for="manager_account_id">ID менеджеров в Max</label>
-          <div class="manager-ids-wrap" id="manager-ids-wrap">
-            <div class="manager-id-row">
-              <input
-                id="manager_account_id"
-                name="manager_account_ids"
-                value="{{ single_manager_id }}"
-                placeholder="ID менеджеров в Max"
-              />
-              <button
-                type="button"
-                class="manager-row-send-btn"
-                name="send_manager_id"
-                value="{{ single_manager_id }}"
-                formaction="{{ manager_invite_send_action or '/app/settings/send-manager-link' }}"
-                aria-label="Отправить ссылку менеджеру"
-                title="Отправить ссылку менеджеру"
-              >➤</button>
-              <button
-                type="button"
-                class="manager-row-copy-btn"
-                name="copy_manager_id"
-                value="{{ single_manager_id }}"
-                data-copy-action="{{ manager_invite_copy_action or '/app/settings/copy-manager-link' }}"
-                aria-label="Скопировать ссылку приглашения"
-                title="Скопировать ссылку приглашения"
-              >⧉</button>
-            </div>
-          </div>
-
           <input type="hidden" name="admin_account_id" value="{{ settings.admin_account_id }}" />
 
-          <label for="routing_mode">Режим назначения менеджера</label>
-          <select id="routing_mode" name="routing_mode" style="width:100%; border:1px solid var(--line); border-radius:8px; padding:10px;">
-            {% set mode = (settings.routing_mode or "round_robin") %}
-            <option value="round_robin" {% if mode == "round_robin" %}selected{% endif %}>Распределять по очереди</option>
-            <option value="random" {% if mode == "random" %}selected{% endif %}>Случайное назначение</option>
-          </select>
+          <input type="hidden" name="routing_mode" value="{{ settings.routing_mode or 'round_robin' }}" />
 
           <button class="btn" type="submit">Сохранить настройки</button>
         </form>
@@ -424,6 +389,37 @@
     {% set manager_summary = manager_status_summary if manager_status_summary is defined else {"connected": 0, "pending": 0, "failed": 0, "total": 0} %}
     <section class="card" style="margin-top:16px;">
       <h2>Менеджеры: статусы подключения</h2>
+      {% set manager_ids = manager_id_rows if manager_id_rows is defined else [] %}
+      {% set single_manager_id = (manager_ids[0] if manager_ids else "") %}
+      <div class="manager-ids-wrap" id="manager-ids-wrap" style="margin-bottom:10px;">
+        <label for="manager_account_id" style="margin-top:0;">Добавление нового менеджера</label>
+        <div class="manager-id-row">
+          <input
+            id="manager_account_id"
+            name="manager_account_ids"
+            value="{{ single_manager_id }}"
+            placeholder="ID менеджера в Max"
+          />
+          <button
+            type="button"
+            class="manager-row-send-btn"
+            name="send_manager_id"
+            value="{{ single_manager_id }}"
+            formaction="{{ manager_invite_send_action or '/app/settings/send-manager-link' }}"
+            aria-label="Отправить ссылку менеджеру"
+            title="Отправить ссылку менеджеру"
+          >➤</button>
+          <button
+            type="button"
+            class="manager-row-copy-btn"
+            name="copy_manager_id"
+            value="{{ single_manager_id }}"
+            data-copy-action="{{ manager_invite_copy_action or '/app/settings/copy-manager-link' }}"
+            aria-label="Скопировать ссылку приглашения"
+            title="Скопировать ссылку приглашения"
+          >⧉</button>
+        </div>
+      </div>
       <div class="manager-status-kpis">
         <div class="manager-status-kpi">
           <div class="label">Подключено</div>
@@ -481,6 +477,12 @@
       {% else %}
         <div class="hint">Добавьте хотя бы один ID менеджера, чтобы отслеживать статус подключения.</div>
       {% endif %}
+      <label for="routing_mode_manager" style="margin-top:14px;">Режим назначения менеджера</label>
+      <select id="routing_mode_manager" name="routing_mode" style="width:100%; border:1px solid var(--line); border-radius:8px; padding:10px; max-width:420px;">
+        {% set mode = (settings.routing_mode or "round_robin") %}
+        <option value="round_robin" {% if mode == "round_robin" %}selected{% endif %}>Распределять по очереди</option>
+        <option value="random" {% if mode == "random" %}selected{% endif %}>Случайное назначение</option>
+      </select>
     </section>
     {% endif %}
 

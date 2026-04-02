@@ -3755,20 +3755,7 @@ async def app_update_settings(
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
-    form_data = await request.form()
-    manager_ids = _extract_manager_ids_from_form(form_data)
-    if not manager_ids:
-        manager_ids = _parse_manager_ids(_normalize_manager_ids(manager_account_id))
-    manager_limit_value = _manager_limit_for_workspace(db, workspace_id=workspace_id)
-    if len(manager_ids) > manager_limit_value:
-        return _render_app_settings_page(
-            request,
-            db=db,
-            current_user=current_user,
-            error="Ваш тарифный план не позволяет добавлять больше менеджеров.",
-        )
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
-    settings_row.manager_account_id = _normalize_manager_ids(",".join(manager_ids))
     settings_row.admin_account_id = admin_account_id.strip()
     mode = (routing_mode or "round_robin").strip().lower()
     if mode not in {"round_robin", "random"}:
@@ -3790,6 +3777,7 @@ async def app_update_settings(
         after_phone_message=after_phone_message,
     )
     db.commit()
+    # Manager add/remove is now handled in the manager status block actions.
     return RedirectResponse(url="/app/settings", status_code=302)
 
 
@@ -3797,7 +3785,6 @@ async def app_update_settings(
 async def app_send_manager_link(
     request: Request,
     send_manager_id: str = Form(""),
-    request_customer_phone: str = Form(""),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -3810,14 +3797,23 @@ async def app_send_manager_link(
     if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
-    form_data = await request.form()
-    manager_ids = _extract_manager_ids_from_form(form_data)
-    manager_ids_csv = _normalize_manager_ids(",".join(manager_ids))
     target_manager_id = (send_manager_id or "").strip()
+    if not target_manager_id:
+        return _render_app_settings_page(
+            request,
+            db=db,
+            current_user=current_user,
+            error='Введите ID менеджера в поле "Добавление нового менеджера".',
+        )
+
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
-    sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    manager_limit_value = max(1, int(sub.manager_limit or 0))
-    if len(manager_ids) > manager_limit_value:
+    existing_ids = _parse_manager_ids(settings_row.manager_account_id)
+    merged_ids = list(existing_ids)
+    if target_manager_id not in merged_ids:
+        merged_ids.append(target_manager_id)
+
+    manager_limit_value = _manager_limit_for_workspace(db, workspace_id=workspace_id)
+    if len(merged_ids) > manager_limit_value:
         return _render_app_settings_page(
             request,
             db=db,
@@ -3825,18 +3821,7 @@ async def app_send_manager_link(
             error="Ваш тарифный план не позволяет добавлять больше менеджеров.",
         )
 
-    settings_row.manager_account_id = manager_ids_csv
-    settings_row.admin_account_id = str(form_data.get("admin_account_id", "") or "").strip()
-    mode = str(form_data.get("routing_mode", "round_robin") or "round_robin").strip().lower()
-    if mode not in {"round_robin", "random"}:
-        mode = "round_robin"
-    settings_row.routing_mode = mode
-    settings_row.request_customer_phone = str(request_customer_phone or "").strip().lower() in {
-        "1",
-        "true",
-        "on",
-        "yes",
-    }
+    settings_row.manager_account_id = _normalize_manager_ids(",".join(merged_ids))
     db.add(settings_row)
     db.commit()
 
@@ -3859,7 +3844,6 @@ async def app_send_manager_link(
 async def app_copy_manager_link(
     request: Request,
     copy_manager_id: str = Form(""),
-    request_customer_phone: str = Form(""),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
@@ -3872,14 +3856,21 @@ async def app_copy_manager_link(
     if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
-    form_data = await request.form()
-    manager_ids = _extract_manager_ids_from_form(form_data)
-    manager_ids_csv = _normalize_manager_ids(",".join(manager_ids))
     target_manager_id = (copy_manager_id or "").strip()
+    if not target_manager_id:
+        return JSONResponse(
+            {"ok": False, "error": 'Введите ID менеджера в поле "Добавление нового менеджера".'},
+            status_code=400,
+        )
+
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
-    sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    manager_limit_value = max(1, int(sub.manager_limit or 0))
-    if len(manager_ids) > manager_limit_value:
+    existing_ids = _parse_manager_ids(settings_row.manager_account_id)
+    merged_ids = list(existing_ids)
+    if target_manager_id not in merged_ids:
+        merged_ids.append(target_manager_id)
+
+    manager_limit_value = _manager_limit_for_workspace(db, workspace_id=workspace_id)
+    if len(merged_ids) > manager_limit_value:
         return JSONResponse(
             {
                 "ok": False,
@@ -3888,18 +3879,7 @@ async def app_copy_manager_link(
             status_code=400,
         )
 
-    settings_row.manager_account_id = manager_ids_csv
-    settings_row.admin_account_id = str(form_data.get("admin_account_id", "") or "").strip()
-    mode = str(form_data.get("routing_mode", "round_robin") or "round_robin").strip().lower()
-    if mode not in {"round_robin", "random"}:
-        mode = "round_robin"
-    settings_row.routing_mode = mode
-    settings_row.request_customer_phone = str(request_customer_phone or "").strip().lower() in {
-        "1",
-        "true",
-        "on",
-        "yes",
-    }
+    settings_row.manager_account_id = _normalize_manager_ids(",".join(merged_ids))
     db.add(settings_row)
     db.commit()
 
@@ -3930,15 +3910,12 @@ async def app_remove_manager(
     if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
-    form_data = await request.form()
     target_manager_id = (remove_manager_id or "").strip()
     if not target_manager_id:
         return JSONResponse({"ok": False, "error": "Не указан ID менеджера для удаления."}, status_code=400)
 
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
-    manager_ids = _extract_manager_ids_from_form(form_data)
-    if not manager_ids:
-        manager_ids = _parse_manager_ids(settings_row.manager_account_id)
+    manager_ids = _parse_manager_ids(settings_row.manager_account_id)
     updated_ids = [item for item in manager_ids if item != target_manager_id]
     settings_row.manager_account_id = _normalize_manager_ids(",".join(updated_ids))
     db.add(settings_row)
