@@ -226,8 +226,7 @@
             </div>
           </div>
 
-          <label for="admin_account_id">ID аккаунта администратора в Max</label>
-          <input id="admin_account_id" name="admin_account_id" value="{{ settings.admin_account_id }}" />
+          <input type="hidden" name="admin_account_id" value="{{ settings.admin_account_id }}" />
 
           <label for="routing_mode">Режим назначения менеджера</label>
           <select id="routing_mode" name="routing_mode" style="width:100%; border:1px solid var(--line); border-radius:8px; padding:10px;">
