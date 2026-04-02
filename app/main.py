@@ -3322,11 +3322,20 @@ def app_superadmin_restore_backup(
 
 
 @app.get("/app/superadmin/backups")
+def app_superadmin_backups_redirect(
+    current_user: ServiceUser = Depends(require_service_user),
+) -> RedirectResponse:
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для суперадмина")
+    return RedirectResponse(url="/app/superadmin/backups/view", status_code=302)
+
+
+@app.get("/app/superadmin/backups/list")
 def app_superadmin_list_backups(
     current_user: ServiceUser = Depends(require_service_user),
 ) -> dict:
     if current_user.role != "superadmin":
-        raise HTTPException(status_code=403, detail="Только для superadmin")
+        raise HTTPException(status_code=403, detail="Только для суперадмина")
     return {"ok": True, "items": list_backups(limit=50)}
 
 

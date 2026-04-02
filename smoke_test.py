@@ -57,7 +57,7 @@ def run() -> None:
             ("/app/superadmin/plans", "Тарифы и лимиты"),
             ("/app/superadmin/security", "Безопасность"),
             ("/app/superadmin/monitoring", "Мониторинг по клиентам"),
-            ("/app/superadmin/backups/view", "Резервные копии"),
+            ("/app/superadmin/backups", "Резервные копии"),
             ("/app/superadmin/audit", "Аудит-лог"),
             ("/app/superadmin/system", "Системные настройки"),
         ]
