@@ -520,7 +520,7 @@
     }
     .compose-row {
       display: grid;
-      grid-template-columns: auto 1fr auto;
+      grid-template-columns: auto 1fr auto auto;
       gap: 8px;
       align-items: center;
     }
@@ -555,40 +555,48 @@
     .send-btn {
       border: 0;
       border-radius: 50%;
-      background: #fff;
-      border: 1px solid var(--line);
-      color: var(--accent);
+      background: var(--accent);
+      color: #fff;
       font-weight: 800;
       width: 36px;
       height: 36px;
       padding: 0;
       cursor: pointer;
-      font-size: 18px;
+      font-size: 0;
       display: none;
       align-items: center;
       justify-content: center;
       line-height: 1;
+      box-shadow: 0 3px 10px rgba(25, 118, 255, 0.25);
     }
     .send-btn.is-visible {
       display: inline-flex;
     }
     .schedule-btn {
-      border: 1px solid var(--line);
+      border: 0;
       border-radius: 50%;
-      background: #fff;
-      color: #6f7b93;
+      background: var(--accent);
+      color: #fff;
       width: 36px;
       height: 36px;
       padding: 0;
       cursor: pointer;
-      font-size: 16px;
+      font-size: 0;
       display: none;
       align-items: center;
       justify-content: center;
       line-height: 1;
+      box-shadow: 0 3px 10px rgba(25, 118, 255, 0.25);
     }
-    .schedule-btn.is-visible {
-      display: inline-flex;
+    .send-btn svg,
+    .schedule-btn svg {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
     .slash-menu {
       display: none;
@@ -949,7 +957,7 @@
         padding-top: max(10px, env(safe-area-inset-top));
       }
       .compose {
-        padding-bottom: max(10px, env(safe-area-inset-bottom));
+        padding-bottom: calc(max(10px, env(safe-area-inset-bottom)) + var(--keyboard-offset, 0px));
       }
       .schedule-btn.mobile-visible {
         display: inline-flex;
@@ -957,6 +965,21 @@
       .bubble {
         max-width: 92%;
       }
+      .schedule-grid {
+        grid-template-columns: 1fr;
+      }
+      .danger-btn {
+        padding: 7px 9px;
+      }
+      .thread-menu-btn {
+        display: inline-flex;
+      }
+    }
+    @media (hover: none) and (pointer: coarse) {
+      .thread-menu-btn {
+        display: inline-flex;
+      }
+    }
     .schedule-pop {
       position: fixed;
       inset: 0;
@@ -1051,18 +1074,6 @@
     }
     .schedule-trigger-menu button:hover {
       background: #f2f6ff;
-    }
-      .danger-btn {
-        padding: 7px 9px;
-      }
-      .thread-menu-btn {
-        display: inline-flex;
-      }
-    }
-    @media (hover: none) and (pointer: coarse) {
-      .thread-menu-btn {
-        display: inline-flex;
-      }
     }
   </style>
 </head>
@@ -1459,6 +1470,15 @@
         scheduleBtnMobile.classList.toggle("is-visible", visible);
         scheduleBtnMobile.classList.toggle("mobile-visible", visible && isTouchLikeViewport());
       };
+      const setKeyboardInset = () => {
+        const vv = window.visualViewport;
+        if (!vv) {
+          document.documentElement.style.setProperty("--keyboard-offset", "0px");
+          return;
+        }
+        const keyboard = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+        document.documentElement.style.setProperty("--keyboard-offset", `${keyboard}px`);
+      };
 
       const placeFixedMenu = (menuEl, x, y) => {
         const pad = 8;
@@ -1552,6 +1572,14 @@
         closeScheduleMenu();
         syncSendVisibility();
       });
+      window.visualViewport?.addEventListener("resize", setKeyboardInset);
+      window.visualViewport?.addEventListener("scroll", setKeyboardInset);
+      messageInput.addEventListener("focus", () => {
+        setTimeout(setKeyboardInset, 20);
+      });
+      messageInput.addEventListener("blur", () => {
+        setTimeout(setKeyboardInset, 20);
+      });
 
       messageInput.addEventListener("input", syncSendVisibility);
       photoInput.addEventListener("change", syncSendVisibility);
@@ -1559,6 +1587,7 @@
         if (!scheduledAtInput.value) return;
         scheduleHint.textContent = "Запланировано";
       });
+      setKeyboardInset();
       syncSendVisibility();
     })();
 
