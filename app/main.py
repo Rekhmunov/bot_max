@@ -175,6 +175,11 @@ def _parse_manager_ids(raw: str) -> list[str]:
     return [item.strip() for item in (raw or "").split(",") if item.strip()]
 
 
+def _manager_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    return max(1, int(sub.manager_limit or 0))
+
+
 def _extract_manager_ids_from_form(form_data: object) -> list[str]:
     get = getattr(form_data, "get", None)
     getlist = getattr(form_data, "getlist", None)
@@ -861,6 +866,9 @@ def _render_app_settings_page(
             "chats_href": "/app/chats",
             "logout_action": "/app/logout",
             "settings_action": "/app/settings",
+            "manager_id_rows": _parse_manager_ids(bot_settings.manager_account_id),
+            "manager_ids_limit": _manager_limit_for_workspace(db, workspace_id=workspace_id),
+            "manager_invite_send_action": "/app/settings/send-manager-link",
             "quick_reply_create_action": "/app/quick-replies",
             "quick_reply_delete_action_prefix": "/app/quick-replies/",
             "intro_create_action": "/app/settings/intro-steps",
@@ -3032,6 +3040,14 @@ async def app_update_settings(
     manager_ids = _extract_manager_ids_from_form(form_data)
     if not manager_ids:
         manager_ids = _parse_manager_ids(_normalize_manager_ids(manager_account_id))
+    manager_limit_value = _manager_limit_for_workspace(db, workspace_id=workspace_id)
+    if len(manager_ids) > manager_limit_value:
+        return _render_app_settings_page(
+            request,
+            db=db,
+            current_user=current_user,
+            error="Ваш тарифный план не позволяет добавлять больше менеджеров.",
+        )
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
     settings_row.manager_account_id = _normalize_manager_ids(",".join(manager_ids))
     settings_row.admin_account_id = admin_account_id.strip()

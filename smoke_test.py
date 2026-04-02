@@ -8,7 +8,7 @@ from app.database import SessionLocal, init_db
 from app.main import app
 from app.manager_bridge import DEFAULT_TEMPLATES
 from app.services import get_or_create_settings
-from app.models import ChatFolder, Conversation, ServiceUser, WebhookEvent, Workspace
+from app.models import ChatFolder, Conversation, ServiceUser, Subscription, WebhookEvent, Workspace
 
 
 def run() -> None:
@@ -628,6 +628,45 @@ def run() -> None:
             follow_redirects=False,
         )
         assert send_manager_link.status_code == 200
+
+        # App settings must also enforce manager IDs limit on plain save.
+        app_limit_email = f"limit_{uuid4().hex[:8]}@example.com"
+        app_limit_register = client.post(
+            "/app/register",
+            data={"email": app_limit_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert app_limit_register.status_code in (302, 303)
+        app_limit_login = client.post(
+            "/app/login",
+            data={"username": app_limit_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert app_limit_login.status_code in (302, 303)
+        app_limit_cookies = app_limit_login.cookies
+        with SessionLocal() as db:
+            app_limit_user = db.query(ServiceUser).filter(ServiceUser.username == app_limit_email).first()
+            assert app_limit_user is not None
+            ws_id = int(app_limit_user.workspace_id or 0)
+            from app.ops import get_or_create_subscription
+            sub = get_or_create_subscription(db, workspace_id=ws_id)
+            sub.manager_limit = 1
+            db.add(sub)
+            db.commit()
+        app_limit_save = client.post(
+            "/app/settings",
+            data={
+                "prestart_message": DEFAULT_TEMPLATES["prestart_message"],
+                "start_message": start_template,
+                "after_phone_message": after_phone_template,
+                "manager_account_ids": ["90100", "90101"],
+                "routing_mode": "round_robin",
+            },
+            cookies=app_limit_cookies,
+            follow_redirects=True,
+        )
+        assert app_limit_save.status_code == 200
+        assert "Ваш тарифный план не позволяет добавлять больше менеджеров." in app_limit_save.text
         assert "Ссылка отправлена менеджеру 90000." in send_manager_link.text
 
         admin_chats_page = client.get(
