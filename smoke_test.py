@@ -282,9 +282,10 @@ def run() -> None:
             cookies=cookies,
         )
         assert save_settings.status_code == 200
-        assert "format-row" in save_settings.text
-        assert "data-format-target=\"start_message\"" in save_settings.text
-        assert "data-format-target=\"after_phone_message\"" in save_settings.text
+        assert "format-row" not in save_settings.text
+        assert "Распределять по очереди" in save_settings.text
+        assert "Случайное назначение" in save_settings.text
+        assert "Логика: бот общается с покупателем" not in save_settings.text
 
         create_reply = client.post(
             "/admin/quick-replies",
@@ -585,6 +586,26 @@ def run() -> None:
                 .all()
             )
             assert settings_row.manager_account_id == "90000"
+
+        save_settings_multi = client.post(
+            "/admin/settings",
+            data={
+                "prestart_message": DEFAULT_TEMPLATES["prestart_message"],
+                "start_message": start_template,
+                "after_phone_message": after_phone_template,
+                "manager_account_id": "90000",
+                "manager_account_id_2": "90001",
+                "admin_account_id": "",
+                "routing_mode": "round_robin",
+            },
+            cookies=cookies,
+        )
+        assert save_settings_multi.status_code == 200
+        assert "manager-id-extra" in save_settings_multi.text
+        assert "add-manager-id-btn" in save_settings_multi.text
+        with SessionLocal() as db:
+            settings_row = get_or_create_settings(db)
+            assert settings_row.manager_account_id == "90000,90001"
 
         admin_chats_page = client.get(
             f"/admin/chats?conversation_id={conversation_id}",

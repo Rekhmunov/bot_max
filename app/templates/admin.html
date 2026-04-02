@@ -135,26 +135,33 @@
       padding: 6px 10px;
       cursor: pointer;
     }
-    .format-row {
-      display: flex;
-      flex-wrap: wrap;
+    .manager-ids-wrap {
+      display: grid;
       gap: 8px;
-      margin: 6px 0 6px;
     }
-    .format-btn {
+    .manager-id-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .add-manager-id-btn {
       border: 1px solid var(--line);
       background: #fff;
+      color: #3b4d74;
       border-radius: 8px;
-      padding: 6px 9px;
-      font-size: 12px;
+      width: 34px;
+      height: 34px;
+      font-size: 20px;
+      line-height: 1;
       font-weight: 700;
-      color: #35425f;
       cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
-    .format-btn[disabled] {
-      opacity: .55;
-      cursor: not-allowed;
-    }
+    .manager-id-extra { display: none; }
+    .manager-id-extra.show { display: grid; }
     code { background: #eef1f8; padding: 2px 6px; border-radius: 6px; }
   </style>
 </head>
@@ -200,22 +207,24 @@
           <textarea id="prestart_message" name="prestart_message" required>{{ template_prestart }}</textarea>
 
           <label for="start_message">Сообщение после Start (просим номер)</label>
-          <div class="format-row">
-            <button type="button" class="format-btn" data-format-target="start_message" data-format-kind="bold" disabled title="Пока недоступно в Max">Жирный</button>
-            <button type="button" class="format-btn" data-format-target="start_message" data-format-kind="link" disabled title="Пока недоступно в Max">Ссылка</button>
-          </div>
           <textarea id="start_message" name="start_message" required>{{ template_start }}</textarea>
 
           <label for="after_phone_message">Сообщение после подтверждения номера</label>
-          <div class="format-row">
-            <button type="button" class="format-btn" data-format-target="after_phone_message" data-format-kind="bold" disabled title="Пока недоступно в Max">Жирный</button>
-            <button type="button" class="format-btn" data-format-target="after_phone_message" data-format-kind="link" disabled title="Пока недоступно в Max">Ссылка</button>
-          </div>
           <textarea id="after_phone_message" name="after_phone_message" required>{{ template_after_phone }}</textarea>
-          <div class="hint">Форматирование (жирный/ссылки) пока не применяется Max API и временно отключено.</div>
+          {% set manager_ids = (settings.manager_account_id or "").split(",") %}
+          {% set manager_id_1 = (manager_ids[0].strip() if manager_ids|length > 0 else "") %}
+          {% set manager_id_2 = (manager_ids[1].strip() if manager_ids|length > 1 else "") %}
 
-          <label for="manager_account_id">ID чата менеджер-бот в Max</label>
-          <input id="manager_account_id" name="manager_account_id" value="{{ settings.manager_account_id }}" required />
+          <label for="manager_account_id">ID менеджера в Max</label>
+          <div class="manager-ids-wrap">
+            <div class="manager-id-row">
+              <input id="manager_account_id" name="manager_account_id" value="{{ manager_id_1 }}" />
+              <button type="button" class="add-manager-id-btn" id="add-manager-id-btn" aria-label="Добавить ID менеджера">+</button>
+            </div>
+            <div class="manager-id-extra {% if manager_id_2 %}show{% endif %}" id="manager-id-extra">
+              <input id="manager_account_id_2" name="manager_account_id_2" value="{{ manager_id_2 }}" placeholder="ID второго менеджера" />
+            </div>
+          </div>
 
           <label for="admin_account_id">ID аккаунта администратора в Max</label>
           <input id="admin_account_id" name="admin_account_id" value="{{ settings.admin_account_id }}" />
@@ -223,15 +232,12 @@
           <label for="routing_mode">Режим назначения менеджера</label>
           <select id="routing_mode" name="routing_mode" style="width:100%; border:1px solid var(--line); border-radius:8px; padding:10px;">
             {% set mode = (settings.routing_mode or "round_robin") %}
-            <option value="round_robin" {% if mode == "round_robin" %}selected{% endif %}>Round-robin</option>
-            <option value="random" {% if mode == "random" %}selected{% endif %}>Random</option>
+            <option value="round_robin" {% if mode == "round_robin" %}selected{% endif %}>Распределять по очереди</option>
+            <option value="random" {% if mode == "random" %}selected{% endif %}>Случайное назначение</option>
           </select>
 
           <button class="btn" type="submit">Сохранить настройки</button>
         </form>
-        <div class="hint">
-          Логика: бот общается с покупателем, а менеджер отвечает в своем чате с ботом через reply.
-        </div>
       </section>
 
       <section class="card">
@@ -388,41 +394,13 @@
   </div>
   <script>
     (() => {
-      const buttons = Array.from(document.querySelectorAll("[data-format-target][data-format-kind]"));
-      if (!buttons.length) return;
-
-      const wrapSelection = (textarea, before, after) => {
-        const start = textarea.selectionStart ?? textarea.value.length;
-        const end = textarea.selectionEnd ?? textarea.value.length;
-        const selected = textarea.value.slice(start, end);
-        const insertText = `${before}${selected}${after}`;
-        textarea.setRangeText(insertText, start, end, "end");
-        textarea.focus();
-      };
-
-      buttons.forEach((btn) => {
-        btn.addEventListener("click", () => {
-          const targetId = btn.getAttribute("data-format-target");
-          const kind = btn.getAttribute("data-format-kind");
-          if (!targetId || !kind) return;
-          const textarea = document.getElementById(targetId);
-          if (!(textarea instanceof HTMLTextAreaElement)) return;
-
-          if (kind === "bold") {
-            wrapSelection(textarea, "**", "**");
-            return;
-          }
-          if (kind === "link") {
-            const url = window.prompt("Введите URL", "https://");
-            if (!url) return;
-            const start = textarea.selectionStart ?? textarea.value.length;
-            const end = textarea.selectionEnd ?? textarea.value.length;
-            const selected = textarea.value.slice(start, end) || "текст ссылки";
-            const insertText = `[${selected}](${url.trim()})`;
-            textarea.setRangeText(insertText, start, end, "end");
-            textarea.focus();
-          }
-        });
+      const plusBtn = document.getElementById("add-manager-id-btn");
+      const extraRow = document.getElementById("manager-id-extra");
+      if (!plusBtn || !extraRow) return;
+      plusBtn.addEventListener("click", () => {
+        extraRow.classList.add("show");
+        const second = document.getElementById("manager_account_id_2");
+        if (second instanceof HTMLInputElement) second.focus();
       });
     })();
   </script>

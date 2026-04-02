@@ -159,6 +159,22 @@ def _safe_int(value: int | str | None, default: int, min_value: int = 0) -> int:
     return max(min_value, parsed)
 
 
+def _normalize_manager_ids(raw: str) -> str:
+    tokens: list[str] = []
+    seen: set[str] = set()
+    for item in re.split(r"[,\n;]+", raw or ""):
+        value = item.strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        tokens.append(value)
+    return ",".join(tokens)
+
+
+def _parse_manager_ids(raw: str) -> list[str]:
+    return [item.strip() for item in (raw or "").split(",") if item.strip()]
+
+
 def _superadmin_dashboard_snapshot(db: Session) -> dict:
     workspaces = db.query(Workspace).order_by(Workspace.id.asc()).all()
     users = db.query(ServiceUser).order_by(ServiceUser.id.asc()).all()
@@ -883,6 +899,7 @@ def update_settings(
     start_message: str = Form(...),
     after_phone_message: str = Form(...),
     manager_account_id: str = Form(...),
+    manager_account_id_2: str = Form(""),
     admin_account_id: str = Form(""),
     _admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db),
@@ -892,7 +909,9 @@ def update_settings(
         return RedirectResponse(url="/admin/login", status_code=302)
     workspace_id = DEFAULT_WORKSPACE_ID
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
-    bot_settings.manager_account_id = manager_account_id.strip()
+    bot_settings.manager_account_id = _normalize_manager_ids(
+        f"{manager_account_id},{manager_account_id_2}"
+    )
     bot_settings.admin_account_id = admin_account_id.strip()
     db.add(bot_settings)
     set_template_text(db, TEMPLATE_PRESTART, prestart_message, workspace_id=workspace_id)
@@ -1612,8 +1631,8 @@ def _require_manager_mini_access(token: str, db: Session) -> dict:
         return claims
 
     settings_db = get_or_create_settings(db, workspace_id=workspace_id)
-    expected_manager_id = (settings_db.manager_account_id or "").strip()
-    if expected_manager_id and manager_id != expected_manager_id:
+    expected_manager_ids = _parse_manager_ids(settings_db.manager_account_id)
+    if expected_manager_ids and manager_id not in expected_manager_ids:
         raise HTTPException(status_code=403, detail="Доступ mini-app запрещен")
     return claims
 
@@ -2702,7 +2721,7 @@ def app_update_settings(
     if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
-    settings_row.manager_account_id = manager_account_id.strip()
+    settings_row.manager_account_id = _normalize_manager_ids(manager_account_id)
     settings_row.admin_account_id = admin_account_id.strip()
     mode = (routing_mode or "round_robin").strip().lower()
     if mode not in {"round_robin", "random"}:

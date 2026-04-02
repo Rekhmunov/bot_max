@@ -67,6 +67,23 @@ DEFAULT_TEMPLATES: dict[str, str] = {
 OUTBOX_RETRY_BACKOFF_SECONDS = (5, 20, 60, 300)
 
 
+def _parse_manager_ids(raw_value: str) -> list[str]:
+    """
+    Parse comma/newline/semicolon separated manager account IDs.
+    """
+    raw = (raw_value or "").strip()
+    if not raw:
+        return []
+    items: list[str] = []
+    for part in re.split(r"[\s,;]+", raw):
+        value = (part or "").strip()
+        if not value:
+            continue
+        if value not in items:
+            items.append(value)
+    return items
+
+
 @dataclass
 class ForwardResult:
     ok: bool
@@ -370,8 +387,8 @@ def _pick_manager_for_workspace(db: Session, *, workspace_id: int, settings: Bot
         .all()
     )
     if not managers:
-        fallback = (settings.manager_account_id or "").strip()
-        return fallback or None
+        fallback_ids = _parse_manager_ids(settings.manager_account_id)
+        return fallback_ids[0] if fallback_ids else None
 
     mode = (settings.routing_mode or "round_robin").strip().lower()
     if mode == "random":
@@ -1598,7 +1615,8 @@ async def forward_customer_message_to_manager(
     event: MaxWebhookEvent,
     extra_header: str | None,
 ) -> ForwardResult:
-    manager_user_id = settings.manager_account_id.strip()
+    manager_ids = _parse_manager_ids(settings.manager_account_id)
+    manager_user_id = manager_ids[0] if manager_ids else ""
     if not manager_user_id:
         return ForwardResult(ok=False, message="manager_account_id is empty")
 
@@ -1649,9 +1667,10 @@ async def handle_manager_message(
     settings: BotSettings,
     event: MaxWebhookEvent,
 ) -> dict:
-    manager_user_id = settings.manager_account_id.strip()
-    if str(event.sender_id).strip() != str(manager_user_id).strip():
+    manager_ids = _parse_manager_ids(settings.manager_account_id)
+    if str(event.sender_id).strip() not in {str(item).strip() for item in manager_ids}:
         return {"ok": True, "ignored": "not_manager_sender"}
+    manager_user_id = str(event.sender_id).strip()
 
     text_value = event.text.strip()
     if text_value.lower() in {"/help", "/h"}:
