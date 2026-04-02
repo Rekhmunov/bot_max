@@ -536,6 +536,8 @@ def run() -> None:
         assert "Max Manager Mini App" in manager_mini_page.text
         assert "mobile-folder-bar" in manager_mini_page.text
         assert "/mini/manager/chats/" in manager_mini_page.text
+        assert "Настройки" in manager_mini_page.text
+        assert "Выйти" in manager_mini_page.text
 
         manager_mini_page_bad_token = client.get("/mini/manager?token=broken")
         assert manager_mini_page_bad_token.status_code == 403

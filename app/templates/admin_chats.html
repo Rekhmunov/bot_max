@@ -358,6 +358,34 @@
       top: 0;
       z-index: 6;
     }
+    .chat-header-actions {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      margin-left: 6px;
+      margin-right: 6px;
+    }
+    .chat-header-link {
+      text-decoration: none;
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 9px;
+      background: var(--accent-soft);
+      padding: 6px 8px;
+      line-height: 1;
+    }
+    .chat-header-logout {
+      border: 0;
+      border-radius: 9px;
+      background: #f0f3fa;
+      color: #556079;
+      padding: 6px 8px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      line-height: 1;
+    }
     .header-menu-btn {
       border: 0;
       width: 34px;
@@ -988,6 +1016,9 @@
       .chat-header {
         padding-top: max(10px, env(safe-area-inset-top));
       }
+      .chat-header-actions {
+        display: inline-flex;
+      }
       .compose {
         bottom: var(--keyboard-offset, 0px);
         padding-bottom: max(10px, env(safe-area-inset-bottom));
@@ -1242,6 +1273,14 @@
       {% if active_thread %}
         <div class="chat-header">
           <a class="back-btn mobile-only" href="{{ page_query_prefix }}q={{ query }}{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}" aria-label="Назад к чатам" data-soft-nav>‹</a>
+          {% if show_admin_nav %}
+            <div class="chat-header-actions mobile-only">
+              <a class="chat-header-link" href="{{ settings_href }}">Настройки</a>
+              <form method="post" action="{{ logout_action }}">
+                <button class="chat-header-logout" type="submit">Выйти</button>
+              </form>
+            </div>
+          {% endif %}
           <div class="chat-title-wrap">
             <h2 class="chat-title">
               {% if show_profile_links %}
