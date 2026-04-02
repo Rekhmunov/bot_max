@@ -296,7 +296,7 @@ def run() -> None:
         assert "Распределять по очереди" in save_settings.text
         assert "Случайное назначение" in save_settings.text
         assert "Логика: бот общается с покупателем" not in save_settings.text
-        assert "add-manager-id-btn" in save_settings.text
+        assert "add-manager-id-btn" not in save_settings.text
         assert "manager-row-send-btn" in save_settings.text
         assert "Запрос номера телефона у покупателя" in save_settings.text
 
@@ -625,7 +625,7 @@ def run() -> None:
         )
         assert save_settings_multi.status_code == 200
         assert "manager-ids-wrap" in save_settings_multi.text
-        assert "add-manager-id-btn" in save_settings_multi.text
+        assert "add-manager-id-btn" not in save_settings_multi.text
         with SessionLocal() as db:
             settings_row = get_or_create_settings(db)
             parsed_ids = [item.strip() for item in (settings_row.manager_account_id or "").split(",") if item.strip()]
@@ -728,6 +728,18 @@ def run() -> None:
             invite_flow_settings = get_or_create_settings(db, workspace_id=invite_flow_workspace_id)
             current_ids = [item.strip() for item in (invite_flow_settings.manager_account_id or "").split(",") if item.strip()]
             assert current_ids == ["90000"]
+            removed_manager = (
+                db.query(ServiceUser)
+                .filter(
+                    ServiceUser.workspace_id == invite_flow_workspace_id,
+                    ServiceUser.role == "manager",
+                    ServiceUser.max_account_id == "90001",
+                )
+                .first()
+            )
+            if removed_manager is not None:
+                assert bool(removed_manager.is_active) is False
+                assert bool(removed_manager.is_blocked) is True
 
         # Usage counters in "Тариф и лимиты" must reflect quick reply consumption.
         add_quick_reply_for_invite_ws = client.post(
@@ -778,6 +790,8 @@ def run() -> None:
         )
         assert app_limit_save.status_code == 200
         assert "Ваш тарифный план не позволяет добавлять больше менеджеров." in app_limit_save.text
+        # Alerts can be absent when no threshold is reached; just verify the block remains renderable.
+        assert "Тариф и лимиты" in app_limit_save.text
 
         # Phone request toggle in app settings:
         # - unchecked: bot should not wait for contact after Start

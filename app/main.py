@@ -175,6 +175,16 @@ def _parse_manager_ids(raw: str) -> list[str]:
     return [item.strip() for item in (raw or "").split(",") if item.strip()]
 
 
+def _merge_manager_ids(existing_csv: str, candidate_id: str) -> list[str]:
+    ids = _parse_manager_ids(existing_csv)
+    target = (candidate_id or "").strip()
+    if not target:
+        return ids
+    if target not in ids:
+        ids.append(target)
+    return ids
+
+
 def _purge_default_workspace_manager_data(db: Session) -> int:
     """
     Default workspace belongs to the platform/system scope.
@@ -417,6 +427,85 @@ def _build_usage_context(
         else:
             usage_remaining[key] = str(max(0, int(limit_value) - int(used_value)))
     return usage_limits, usage_used, usage_remaining
+
+
+def _localized_alert_entry(alert: TenantAlert) -> dict[str, str]:
+    severity_labels = {
+        "critical": "Критично",
+        "warning": "Предупреждение",
+        "info": "Информация",
+    }
+    key_labels = {
+        "managers_limit": "Лимит менеджеров",
+        "dialogs_limit": "Лимит диалогов",
+        "messages_month_limit": "Лимит сообщений в месяц",
+        "quick_replies_limit": "Лимит быстрых ответов",
+        "folders_limit": "Лимит папок",
+    }
+    alert_key = (alert.alert_key or "").strip()
+    key_label = key_labels.get(alert_key, alert_key or "Алерт")
+    raw_message = (alert.message or "").strip()
+    suffix = raw_message
+    prefix = f"{alert_key}:"
+    if alert_key and raw_message.startswith(prefix):
+        suffix = raw_message[len(prefix) :].strip()
+    message_ru = f"{key_label}: {suffix}" if suffix else key_label
+    return {
+        "severity_label": severity_labels.get((alert.severity or "").strip().lower(), "Алерт"),
+        "message": message_ru,
+    }
+
+
+def _deactivate_workspace_managers_by_max_ids(
+    db: Session,
+    *,
+    workspace_id: int,
+    manager_max_ids: list[str],
+    actor_user_id: int | None,
+) -> list[int]:
+    ids_to_remove = [item.strip() for item in manager_max_ids if item and item.strip()]
+    if not ids_to_remove:
+        return []
+    unique_ids = list(dict.fromkeys(ids_to_remove))
+    manager_rows = (
+        db.query(ServiceUser)
+        .filter(
+            ServiceUser.workspace_id == workspace_id,
+            ServiceUser.role == "manager",
+            ServiceUser.max_account_id.in_(unique_ids),
+        )
+        .all()
+    )
+    revoked_user_ids: list[int] = []
+    for row in manager_rows:
+        row.is_active = False
+        row.is_blocked = True
+        db.add(row)
+        revoked_user_ids.append(int(row.id))
+    db.query(ManagerInvite).filter(
+        ManagerInvite.workspace_id == workspace_id,
+        ManagerInvite.max_account_id.in_(unique_ids),
+    ).delete(synchronize_session=False)
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=actor_user_id,
+            action="manager_removed",
+            object_type="service_user",
+            object_id=",".join(str(item) for item in revoked_user_ids) if revoked_user_ids else ",".join(unique_ids),
+            details_json=safe_json_dumps(
+                {
+                    "max_account_ids": unique_ids,
+                    "revoked_user_ids": revoked_user_ids,
+                    "source": "settings_sync",
+                }
+            ),
+        )
+    )
+    db.commit()
+    for user_id in revoked_user_ids:
+        revoke_user_sessions(db, user_id=user_id)
+    return revoked_user_ids
 
 
 def _manager_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
@@ -2669,6 +2758,9 @@ def _resolve_app_workspace_scope(
     """
     if current_user.role == "superadmin":
         raise HTTPException(status_code=403, detail="Для superadmin доступна только панель /app/superadmin")
+
+    if not current_user.is_active or current_user.is_blocked:
+        raise HTTPException(status_code=403, detail="Доступ запрещен")
 
     current_workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     if workspace_id is not None and int(workspace_id) != int(current_workspace_id):

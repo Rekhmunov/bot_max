@@ -175,28 +175,7 @@
       align-items: center;
       justify-content: center;
     }
-    .manager-add-row {
-      display: flex;
-      justify-content: flex-start;
-    }
-    .add-manager-id-btn {
-      border: 1px solid var(--line);
-      background: #fff;
-      color: #3b4d74;
-      border-radius: 8px;
-      height: 34px;
-      min-width: 34px;
-      font-size: 20px;
-      line-height: 1;
-      font-weight: 700;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0 10px;
-    }
     .manager-id-extra { display: none; }
-    .manager-id-extra.show { display: grid; }
     .manager-status-kpis {
       display: grid;
       gap: 10px;
@@ -315,24 +294,22 @@
           <label for="after_phone_message">Сообщение после подтверждения номера</label>
           <textarea id="after_phone_message" name="after_phone_message" required>{{ template_after_phone }}</textarea>
           {% set manager_ids = manager_id_rows if manager_id_rows is defined else [] %}
-          {% if not manager_ids %}
-            {% set manager_ids = [""] %}
-          {% endif %}
+          {% set single_manager_id = (manager_ids[0] if manager_ids else "") %}
 
           <label for="manager_account_id">ID менеджеров в Max</label>
           <div class="manager-ids-wrap" id="manager-ids-wrap">
-            {% for manager_id in manager_ids %}
             <div class="manager-id-row">
               <input
+                id="manager_account_id"
                 name="manager_account_ids"
-                value="{{ manager_id }}"
+                value="{{ single_manager_id }}"
                 placeholder="ID менеджеров в Max"
               />
               <button
                 type="button"
                 class="manager-row-send-btn"
                 name="send_manager_id"
-                value="{{ manager_id }}"
+                value="{{ single_manager_id }}"
                 formaction="{{ manager_invite_send_action or '/app/settings/send-manager-link' }}"
                 aria-label="Отправить ссылку менеджеру"
                 title="Отправить ссылку менеджеру"
@@ -341,15 +318,11 @@
                 type="button"
                 class="manager-row-copy-btn"
                 name="copy_manager_id"
-                value="{{ manager_id }}"
+                value="{{ single_manager_id }}"
                 data-copy-action="{{ manager_invite_copy_action or '/app/settings/copy-manager-link' }}"
                 aria-label="Скопировать ссылку приглашения"
                 title="Скопировать ссылку приглашения"
               >⧉</button>
-            </div>
-            {% endfor %}
-            <div class="manager-add-row">
-              <button type="button" class="add-manager-id-btn" id="add-manager-id-btn" aria-label="Добавить ID менеджера">+</button>
             </div>
           </div>
 
@@ -552,7 +525,16 @@
       {% if tenant_alerts %}
         <div class="hint" style="margin-top:8px;"><b>Алерты:</b></div>
         {% for alert in tenant_alerts %}
-          <div class="hint">- [{{ alert.severity }}] {{ alert.message }}</div>
+          {% set severity_label = "Критично" if alert.severity == "critical" else ("Предупреждение" if alert.severity == "warning" else alert.severity) %}
+          {% set alert_label = {
+            "managers_limit": "Лимит менеджеров",
+            "dialogs_limit": "Лимит диалогов",
+            "messages_month_limit": "Лимит сообщений в месяц",
+            "quick_replies_limit": "Лимит быстрых ответов",
+            "folders_limit": "Лимит папок"
+          }.get(alert.alert_key, alert.alert_key) %}
+          {% set alert_metric = alert.message.split(": ", 1)[1] if ": " in alert.message else alert.message %}
+          <div class="hint">- [{{ severity_label }}] {{ alert_label }}: {{ alert_metric }}</div>
         {% endfor %}
       {% endif %}
     </section>
@@ -609,45 +591,8 @@
   </div>
   <script>
     (() => {
-      const plusBtn = document.getElementById("add-manager-id-btn");
       const rowsWrap = document.getElementById("manager-ids-wrap");
-      if (!plusBtn || !rowsWrap) return;
-      plusBtn.addEventListener("click", () => {
-        const rows = Array.from(rowsWrap.querySelectorAll("input[name='manager_account_ids']"));
-        const lastInput = rows.length ? rows[rows.length - 1] : null;
-        if (lastInput && !lastInput.value.trim()) {
-          lastInput.focus();
-          return;
-        }
-        const addRow = rowsWrap.querySelector(".manager-add-row");
-        if (!addRow) return;
-        const row = document.createElement("div");
-        row.className = "manager-id-row";
-        row.innerHTML = `
-          <input name="manager_account_ids" value="" placeholder="ID менеджеров в Max" />
-          <button
-            type="button"
-            class="manager-row-send-btn"
-            name="send_manager_id"
-            value=""
-            formaction="{{ manager_invite_send_action or '/app/settings/send-manager-link' }}"
-            aria-label="Отправить ссылку менеджеру"
-            title="Отправить ссылку менеджеру"
-          >➤</button>
-          <button
-            type="button"
-            class="manager-row-copy-btn"
-            name="copy_manager_id"
-            value=""
-            data-copy-action="{{ manager_invite_copy_action or '/app/settings/copy-manager-link' }}"
-            aria-label="Скопировать ссылку приглашения"
-            title="Скопировать ссылку приглашения"
-          >⧉</button>
-        `;
-        rowsWrap.insertBefore(row, addRow);
-        const created = row.querySelector("input[name='manager_account_ids']");
-        if (created instanceof HTMLInputElement) created.focus();
-      });
+      if (!rowsWrap) return;
       rowsWrap.addEventListener("input", (event) => {
         const target = event.target;
         if (!(target instanceof HTMLInputElement)) return;
@@ -665,6 +610,42 @@
       rowsWrap.addEventListener("click", (event) => {
         const target = event.target;
         if (!(target instanceof Element)) return;
+        const removeBtn = target.closest("button.manager-remove-btn");
+        if (removeBtn instanceof HTMLButtonElement) {
+          const removeAction = removeBtn.getAttribute("data-remove-action") || "{{ manager_remove_action or '/app/settings/remove-manager' }}";
+          const removeManagerId = (removeBtn.getAttribute("data-remove-manager-id") || "").trim();
+          if (!removeManagerId) {
+            alert("Не удалось определить ID менеджера для удаления.");
+            return;
+          }
+          const settingsForm = rowsWrap.closest("form");
+          if (!(settingsForm instanceof HTMLFormElement)) {
+            alert("Не удалось определить форму настроек.");
+            return;
+          }
+          const confirmed = window.confirm(`Удалить менеджера ${removeManagerId}?`);
+          if (!confirmed) {
+            return;
+          }
+          const payload = new FormData(settingsForm);
+          payload.set("remove_manager_id", removeManagerId);
+          fetch(removeAction, { method: "POST", body: payload })
+            .then((resp) => resp.json().catch(() => ({ ok: false, error: "Некорректный ответ сервера." })))
+            .then((data) => {
+              if (!data || !data.ok) {
+                alert((data && data.error) ? data.error : "Не удалось удалить менеджера.");
+                return;
+              }
+              if (data.message) {
+                alert(String(data.message));
+              }
+              window.location.reload();
+            })
+            .catch(() => {
+              alert("Не удалось удалить менеджера.");
+            });
+          return;
+        }
         const sendBtn = target.closest("button.manager-row-send-btn");
         const copyBtn = target.closest("button.manager-row-copy-btn");
         const actionBtn = (sendBtn instanceof HTMLButtonElement) ? sendBtn : ((copyBtn instanceof HTMLButtonElement) ? copyBtn : null);
@@ -704,37 +685,6 @@
             })
             .catch(() => {
               alert("Не удалось сформировать ссылку.");
-            });
-          return;
-        }
-        const removeBtn = target.closest("button.manager-remove-btn");
-        if (removeBtn instanceof HTMLButtonElement) {
-          const removeAction = removeBtn.getAttribute("data-remove-action") || "{{ manager_remove_action or '/app/settings/remove-manager' }}";
-          const removeManagerId = (removeBtn.getAttribute("data-remove-manager-id") || "").trim();
-          if (!removeManagerId) {
-            alert("Не удалось определить ID менеджера для удаления.");
-            return;
-          }
-          const confirmed = window.confirm(`Удалить менеджера ${removeManagerId}?`);
-          if (!confirmed) {
-            return;
-          }
-          const payload = new FormData(settingsForm);
-          payload.set("remove_manager_id", removeManagerId);
-          fetch(removeAction, { method: "POST", body: payload })
-            .then((resp) => resp.json().catch(() => ({ ok: false, error: "Некорректный ответ сервера." })))
-            .then((data) => {
-              if (!data || !data.ok) {
-                alert((data && data.error) ? data.error : "Не удалось удалить менеджера.");
-                return;
-              }
-              if (data.message) {
-                alert(String(data.message));
-              }
-              window.location.reload();
-            })
-            .catch(() => {
-              alert("Не удалось удалить менеджера.");
             });
           return;
         }
