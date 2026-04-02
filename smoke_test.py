@@ -70,6 +70,14 @@ def run() -> None:
         assert superadmin_workspaces.status_code == 200
         assert "Default Workspace" not in superadmin_workspaces.text
         assert "Открыть чаты клиента" not in superadmin_workspaces.text
+        with SessionLocal() as db:
+            assert (
+                db.query(ServiceUser)
+                .filter(ServiceUser.workspace_id == 1, ServiceUser.role == "manager")
+                .count()
+            ) == 0
+            default_settings = get_or_create_settings(db, workspace_id=1)
+            assert (default_settings.manager_account_id or "").strip() == ""
 
         superadmin_system = client.get("/app/superadmin/system", cookies=superadmin_cookies)
         assert superadmin_system.status_code == 200

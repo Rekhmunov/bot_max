@@ -175,6 +175,72 @@ def _parse_manager_ids(raw: str) -> list[str]:
     return [item.strip() for item in (raw or "").split(",") if item.strip()]
 
 
+def _purge_default_workspace_manager_data(db: Session) -> int:
+    """
+    Default workspace belongs to the platform/system scope.
+    It must not keep tenant managers or manager onboarding artifacts.
+    """
+    manager_ids = [
+        row[0]
+        for row in db.query(ServiceUser.id)
+        .filter(
+            ServiceUser.workspace_id == DEFAULT_WORKSPACE_ID,
+            ServiceUser.role == "manager",
+        )
+        .all()
+    ]
+    changed = False
+    removed = len(manager_ids)
+
+    if manager_ids:
+        db.query(UserSession).filter(UserSession.user_id.in_(manager_ids)).delete(synchronize_session=False)
+        db.query(ManagerInvite).filter(ManagerInvite.used_by_user_id.in_(manager_ids)).update(
+            {ManagerInvite.used_by_user_id: None},
+            synchronize_session=False,
+        )
+        db.query(AuditLog).filter(AuditLog.actor_user_id.in_(manager_ids)).update(
+            {AuditLog.actor_user_id: None},
+            synchronize_session=False,
+        )
+        db.query(ServiceUser).filter(ServiceUser.id.in_(manager_ids)).delete(synchronize_session=False)
+        changed = True
+
+    deleted_invites = (
+        db.query(ManagerInvite)
+        .filter(ManagerInvite.workspace_id == DEFAULT_WORKSPACE_ID)
+        .delete(synchronize_session=False)
+    )
+    deleted_dispatches = (
+        db.query(ManagerDispatch)
+        .filter(ManagerDispatch.workspace_id == DEFAULT_WORKSPACE_ID)
+        .delete(synchronize_session=False)
+    )
+    deleted_manager_audits = (
+        db.query(AuditLog)
+        .filter(
+            AuditLog.workspace_id == DEFAULT_WORKSPACE_ID,
+            AuditLog.action.like("manager_%"),
+        )
+        .delete(synchronize_session=False)
+    )
+    if deleted_invites or deleted_dispatches or deleted_manager_audits:
+        changed = True
+
+    default_settings = (
+        db.query(BotSettings)
+        .filter(BotSettings.workspace_id == DEFAULT_WORKSPACE_ID)
+        .first()
+    )
+    if default_settings is not None and (default_settings.manager_account_id or "").strip():
+        default_settings.manager_account_id = ""
+        db.add(default_settings)
+        changed = True
+
+    if changed:
+        db.commit()
+    return removed
+
+
 def _safe_json_dict(raw: str) -> dict:
     try:
         parsed = json.loads(raw or "{}")
@@ -368,6 +434,34 @@ def _manager_rows_limit(db: Session, *, workspace_id: int) -> int:
     return max(1, int(sub.manager_limit or 0))
 
 
+def _is_system_workspace(workspace_id: int) -> bool:
+    return int(workspace_id) == int(DEFAULT_WORKSPACE_ID)
+
+
+def _purge_workspace_manager_data(db: Session, *, workspace_id: int) -> None:
+    manager_rows = (
+        db.query(ServiceUser)
+        .filter(
+            ServiceUser.workspace_id == workspace_id,
+            ServiceUser.role == "manager",
+        )
+        .all()
+    )
+    manager_user_ids = [int(row.id) for row in manager_rows]
+    if manager_user_ids:
+        db.query(UserSession).filter(UserSession.user_id.in_(manager_user_ids)).delete(synchronize_session=False)
+    db.query(ManagerInvite).filter(ManagerInvite.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(ServiceUser).filter(
+        ServiceUser.workspace_id == workspace_id,
+        ServiceUser.role == "manager",
+    ).delete(synchronize_session=False)
+    settings_row = get_or_create_settings(db, workspace_id=workspace_id)
+    if (settings_row.manager_account_id or "").strip():
+        settings_row.manager_account_id = ""
+        db.add(settings_row)
+    db.commit()
+
+
 def _build_manager_username(db: Session, *, workspace_id: int, manager_id: str) -> str:
     seed = re.sub(r"[^a-z0-9_.-]+", "_", (manager_id or "").strip().lower()).strip("._-")
     if not seed:
@@ -390,6 +484,8 @@ def _get_or_create_manager_by_max_id(
     manager_id: str,
     actor_user_id: int | None,
 ) -> ServiceUser:
+    if workspace_id == DEFAULT_WORKSPACE_ID:
+        raise ValueError("managers_disabled_for_system_workspace")
     manager = (
         db.query(ServiceUser)
         .filter(
@@ -459,6 +555,8 @@ async def _send_manager_invite_link_to_max(
     except ValueError as exc:
         if str(exc) == "manager_limit_exceeded":
             return False, "Ваш тарифный план не позволяет добавлять больше менеджеров."
+        if str(exc) == "managers_disabled_for_system_workspace":
+            return False, "Для системного workspace создание менеджеров отключено."
         return False, "Менеджер не активен или заблокирован."
 
     links = _build_manager_invite_links(
@@ -534,6 +632,8 @@ def _build_manager_invite_link_for_copy(
     except ValueError as exc:
         if str(exc) == "manager_limit_exceeded":
             return False, "Ваш тарифный план не позволяет добавлять больше менеджеров.", ""
+        if str(exc) == "managers_disabled_for_system_workspace":
+            return False, "Для системного workspace создание менеджеров отключено.", ""
         return False, "Менеджер не активен или заблокирован.", ""
 
     links = _build_manager_invite_links(
@@ -1276,6 +1376,7 @@ def _ensure_superadmin_credentials(db: Session) -> ServiceUser:
         db.add(super_user)
         db.commit()
         db.refresh(super_user)
+    _purge_default_workspace_manager_data(db)
     return super_user
 
 
