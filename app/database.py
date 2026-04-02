@@ -147,6 +147,10 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(text("ALTER TABLE bot_settings ADD COLUMN routing_mode VARCHAR(20) DEFAULT 'round_robin'"))
             if "routing_rr_cursor" not in settings_columns:
                 conn.execute(text("ALTER TABLE bot_settings ADD COLUMN routing_rr_cursor INTEGER DEFAULT 0"))
+            if "request_customer_phone" not in settings_columns:
+                conn.execute(
+                    text("ALTER TABLE bot_settings ADD COLUMN request_customer_phone INTEGER DEFAULT 1")
+                )
 
         if "quick_replies" in table_names:
             quick_columns = {col["name"] for col in inspector.get_columns("quick_replies")}

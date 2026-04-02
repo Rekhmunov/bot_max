@@ -8,6 +8,7 @@ from typing import Optional
 from urllib.parse import quote_plus
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.auth import create_manager_mini_token
@@ -209,6 +210,8 @@ def _get_or_create_conversation(
         if existing:
             return existing
         raise ValueError("dialogs_limit_exceeded")
+    # chat_id can be globally unique in legacy DBs; prefer workspace row but
+    # fallback to any existing chat_id to preserve historical continuity.
     conversation = (
         db.query(Conversation)
         .filter(
@@ -217,6 +220,8 @@ def _get_or_create_conversation(
         )
         .first()
     )
+    if conversation is None:
+        conversation = db.query(Conversation).filter(Conversation.chat_id == chat_id).first()
     if conversation:
         return conversation
     conversation = Conversation(
@@ -263,9 +268,19 @@ def _get_or_create_meta(
         start_prompt_sent=False,
     )
     db.add(meta)
-    db.commit()
-    db.refresh(meta)
-    return meta
+    try:
+        db.commit()
+        db.refresh(meta)
+        return meta
+    except IntegrityError:
+        # Legacy DB snapshots may keep global UNIQUE(ticket_no). Retry with next global value.
+        db.rollback()
+        global_max_ticket = db.query(func.max(ConversationMeta.ticket_no)).scalar() or 1000
+        meta.ticket_no = int(global_max_ticket) + 1
+        db.add(meta)
+        db.commit()
+        db.refresh(meta)
+        return meta
 
 
 def _upsert_customer_profile(
@@ -1439,6 +1454,7 @@ async def handle_customer_event(
     event: MaxWebhookEvent,
 ) -> dict:
     workspace_id = settings.workspace_id or DEFAULT_WORKSPACE_ID
+    require_phone = bool(getattr(settings, "request_customer_phone", True))
     try:
         conversation = _get_or_create_conversation(
             db,
@@ -1540,16 +1556,27 @@ async def handle_customer_event(
             )
             await process_outbox_queue(db, limit=20)
             return {"ok": True, "flow": "start_prompt_skipped_phone"}
-        start_text = get_template_text(db, TEMPLATE_START, workspace_id=workspace_id)
-        await _send_contact_request_prompt(
-            db=db,
+        if require_phone:
+            start_text = get_template_text(db, TEMPLATE_START, workspace_id=workspace_id)
+            await _send_contact_request_prompt(
+                db=db,
+                conversation_id=conversation.id,
+                client=client,
+                chat_id=event.chat_id,
+                user_id=event.sender_id,
+                text=start_text,
+            )
+            return {"ok": True, "flow": "start_prompt"}
+        await queue_only_send_text(
+            db,
             conversation_id=conversation.id,
-            client=client,
-            chat_id=event.chat_id,
-            user_id=event.sender_id,
-            text=start_text,
+            target_chat_id=event.chat_id,
+            target_user_id=event.sender_id,
+            text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
+            source="bot_system",
         )
-        return {"ok": True, "flow": "start_prompt"}
+        await process_outbox_queue(db, limit=20)
+        return {"ok": True, "flow": "start_prompt_phone_not_required"}
 
     if phone_just_verified:
         intro_steps = (
@@ -1591,11 +1618,20 @@ async def handle_customer_event(
         await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "phone_verified"}
 
-    if not meta.phone_verified and event.text.strip():
+    if require_phone and not meta.phone_verified and event.text.strip():
         return {"ok": True, "flow": "waiting_contact_confirmation"}
 
+    # If phone request is disabled and conversation came from legacy state where
+    # phone wasn't verified yet, mark it verified to keep downstream stats/status aligned.
+    if not require_phone and not meta.phone_verified:
+        meta.phone_verified = True
+        if meta.status == "new":
+            meta.status = "waiting_manager"
+        db.add(meta)
+        db.commit()
+
     # Customer message stays in thread for manager mini-app.
-    if meta.phone_verified and event.text.strip():
+    if (meta.phone_verified or not require_phone) and event.text.strip():
         manager_id = _pick_manager_for_workspace(db, workspace_id=workspace_id, settings=settings)
         if manager_id:
             meta.manager_owner_id = manager_id

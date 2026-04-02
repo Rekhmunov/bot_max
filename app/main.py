@@ -1217,6 +1217,7 @@ async def update_settings(
     manager_account_id_2: str = Form(""),
     admin_account_id: str = Form(""),
     routing_mode: str = Form("round_robin"),
+    request_customer_phone: str = Form(""),
     _admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -1271,6 +1272,12 @@ async def update_settings(
     if mode not in {"round_robin", "random"}:
         mode = "round_robin"
     bot_settings.routing_mode = mode
+    bot_settings.request_customer_phone = str(request_customer_phone or "").strip().lower() in {
+        "1",
+        "true",
+        "on",
+        "yes",
+    }
     db.add(bot_settings)
     set_template_text(db, TEMPLATE_PRESTART, prestart_message, workspace_id=workspace_id)
     set_template_text(db, TEMPLATE_START, start_message, workspace_id=workspace_id)
@@ -1371,6 +1378,7 @@ async def admin_send_manager_link(
 @app.post("/admin/settings/copy-manager-link", response_class=JSONResponse)
 async def admin_copy_manager_link(
     request: Request,
+    request_customer_phone: str = Form(""),
     _admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
@@ -1399,6 +1407,12 @@ async def admin_copy_manager_link(
     if mode not in {"round_robin", "random"}:
         mode = "round_robin"
     bot_settings.routing_mode = mode
+    bot_settings.request_customer_phone = str(request_customer_phone or "").strip().lower() in {
+        "1",
+        "true",
+        "on",
+        "yes",
+    }
     db.add(bot_settings)
     db.commit()
     ok, msg, invite_link = _build_manager_invite_link_for_copy(
@@ -3189,6 +3203,7 @@ async def app_update_settings(
     manager_account_id: str = Form(""),
     admin_account_id: str = Form(""),
     routing_mode: str = Form("round_robin"),
+    request_customer_phone: str = Form(""),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -3220,6 +3235,12 @@ async def app_update_settings(
     if mode not in {"round_robin", "random"}:
         mode = "round_robin"
     settings_row.routing_mode = mode
+    settings_row.request_customer_phone = str(request_customer_phone or "").strip().lower() in {
+        "1",
+        "true",
+        "on",
+        "yes",
+    }
     db.add(settings_row)
     _drop_legacy_template_unique_index(db)
     _upsert_template_values_single_commit(
@@ -3237,6 +3258,7 @@ async def app_update_settings(
 async def app_send_manager_link(
     request: Request,
     send_manager_id: str = Form(""),
+    request_customer_phone: str = Form(""),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -3270,6 +3292,12 @@ async def app_send_manager_link(
     if mode not in {"round_robin", "random"}:
         mode = "round_robin"
     settings_row.routing_mode = mode
+    settings_row.request_customer_phone = str(request_customer_phone or "").strip().lower() in {
+        "1",
+        "true",
+        "on",
+        "yes",
+    }
     db.add(settings_row)
     db.commit()
 
@@ -3292,6 +3320,7 @@ async def app_send_manager_link(
 async def app_copy_manager_link(
     request: Request,
     copy_manager_id: str = Form(""),
+    request_customer_phone: str = Form(""),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
@@ -3326,6 +3355,12 @@ async def app_copy_manager_link(
     if mode not in {"round_robin", "random"}:
         mode = "round_robin"
     settings_row.routing_mode = mode
+    settings_row.request_customer_phone = str(request_customer_phone or "").strip().lower() in {
+        "1",
+        "true",
+        "on",
+        "yes",
+    }
     db.add(settings_row)
     db.commit()
 

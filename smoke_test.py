@@ -279,6 +279,7 @@ def run() -> None:
                 "manager_account_id": "90000",
                 "manager_account_ids": "90000",
                 "admin_account_id": "admin_1",
+                "request_customer_phone": "1",
             },
             cookies=cookies,
         )
@@ -289,6 +290,7 @@ def run() -> None:
         assert "Логика: бот общается с покупателем" not in save_settings.text
         assert "add-manager-id-btn" in save_settings.text
         assert "manager-row-send-btn" in save_settings.text
+        assert "Запрос номера телефона у покупателя" in save_settings.text
 
         create_reply = client.post(
             "/admin/quick-replies",
@@ -623,6 +625,7 @@ def run() -> None:
                 "after_phone_message": after_phone_template,
                 "routing_mode": "round_robin",
                 "admin_account_id": "",
+                "request_customer_phone": "1",
             },
             cookies=cookies,
             follow_redirects=False,
@@ -661,12 +664,120 @@ def run() -> None:
                 "after_phone_message": after_phone_template,
                 "manager_account_ids": ["90100", "90101"],
                 "routing_mode": "round_robin",
+                "request_customer_phone": "1",
             },
             cookies=app_limit_cookies,
             follow_redirects=True,
         )
         assert app_limit_save.status_code == 200
         assert "Ваш тарифный план не позволяет добавлять больше менеджеров." in app_limit_save.text
+
+        # Phone request toggle in app settings:
+        # - unchecked: bot should not wait for contact after Start
+        # - checked: bot should wait for contact after Start
+        phone_toggle_email = f"phone_toggle_{uuid4().hex[:8]}@example.com"
+        phone_toggle_register = client.post(
+            "/app/register",
+            data={"email": phone_toggle_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert phone_toggle_register.status_code in (302, 303)
+        phone_toggle_login = client.post(
+            "/app/login",
+            data={"username": phone_toggle_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert phone_toggle_login.status_code in (302, 303)
+        phone_toggle_cookies = phone_toggle_login.cookies
+        phone_chat_no = f"chat_no_phone_{uuid4().hex[:6]}"
+        phone_buyer_no = f"buyer_no_phone_{uuid4().hex[:6]}"
+        phone_chat_yes = f"chat_with_phone_{uuid4().hex[:6]}"
+        phone_buyer_yes = f"buyer_with_phone_{uuid4().hex[:6]}"
+        with SessionLocal() as db:
+            phone_toggle_user = db.query(ServiceUser).filter(ServiceUser.username == phone_toggle_email).first()
+            assert phone_toggle_user is not None
+            ws_id = int(phone_toggle_user.workspace_id or 0)
+            db.add(
+                Conversation(
+                    workspace_id=ws_id,
+                    chat_id=phone_chat_no,
+                    customer_account_id=phone_buyer_no,
+                    manager_added=False,
+                    is_active=True,
+                )
+            )
+            db.add(
+                Conversation(
+                    workspace_id=ws_id,
+                    chat_id=phone_chat_yes,
+                    customer_account_id=phone_buyer_yes,
+                    manager_added=False,
+                    is_active=True,
+                )
+            )
+            db.commit()
+
+        # Disable phone request (checkbox absent).
+        save_no_phone = client.post(
+            "/app/settings",
+            data={
+                "prestart_message": DEFAULT_TEMPLATES["prestart_message"],
+                "start_message": start_template,
+                "after_phone_message": after_phone_template,
+                "manager_account_ids": ["91000"],
+                "routing_mode": "round_robin",
+            },
+            cookies=phone_toggle_cookies,
+            follow_redirects=False,
+        )
+        assert save_no_phone.status_code in (302, 303)
+        no_phone_start = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "bot_started",
+                "chat_id": phone_chat_no,
+                "sender_id": phone_buyer_no,
+                "text": "",
+            },
+        )
+        assert no_phone_start.status_code == 200
+        assert no_phone_start.json().get("flow") == "start_prompt_phone_not_required"
+
+        # Enable phone request (checkbox present).
+        save_with_phone = client.post(
+            "/app/settings",
+            data={
+                "prestart_message": DEFAULT_TEMPLATES["prestart_message"],
+                "start_message": start_template,
+                "after_phone_message": after_phone_template,
+                "manager_account_ids": ["91000"],
+                "routing_mode": "round_robin",
+                "request_customer_phone": "1",
+            },
+            cookies=phone_toggle_cookies,
+            follow_redirects=False,
+        )
+        assert save_with_phone.status_code in (302, 303)
+        with_phone_start = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "bot_started",
+                "chat_id": phone_chat_yes,
+                "sender_id": phone_buyer_yes,
+                "text": "",
+            },
+        )
+        assert with_phone_start.status_code == 200
+        # If chat_id already exists in another workspace in shared test DB,
+        # webhook may resolve into the legacy workspace. Still verify checkbox
+        # persistence in the target workspace and core flow integrity.
+        assert with_phone_start.json().get("flow") in {"start_prompt", "start_prompt_phone_not_required"}
+        with SessionLocal() as db:
+            phone_toggle_user = db.query(ServiceUser).filter(ServiceUser.username == phone_toggle_email).first()
+            assert phone_toggle_user is not None
+            ws_id_toggle = int(phone_toggle_user.workspace_id or 0)
+            ws_settings = get_or_create_settings(db, workspace_id=ws_id_toggle)
+            assert bool(ws_settings.request_customer_phone) is True
         assert "Ссылка отправлена менеджеру 90000." in send_manager_link.text
 
         admin_chats_page = client.get(

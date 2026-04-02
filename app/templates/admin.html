@@ -293,6 +293,17 @@
             <option value="round_robin" {% if mode == "round_robin" %}selected{% endif %}>Распределять по очереди</option>
             <option value="random" {% if mode == "random" %}selected{% endif %}>Случайное назначение</option>
           </select>
+          <label style="display:flex; align-items:center; gap:8px; margin-top:10px;">
+            <input
+              id="request_customer_phone"
+              type="checkbox"
+              name="request_customer_phone"
+              value="1"
+              {% if settings.request_customer_phone %}checked{% endif %}
+              style="width:auto;"
+            />
+            Запрос номера телефона у покупателя
+          </label>
 
           <button class="btn" type="submit">Сохранить настройки</button>
         </form>

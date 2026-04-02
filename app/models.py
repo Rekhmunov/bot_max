@@ -148,6 +148,7 @@ class BotSettings(Base):
         Text,
         default="Менеджер подключен к диалогу.",
     )
+    request_customer_phone: Mapped[bool] = mapped_column(Boolean, default=True)
     routing_mode: Mapped[str] = mapped_column(String(20), default="round_robin")
     routing_rr_cursor: Mapped[int] = mapped_column(Integer, default=0)
 
