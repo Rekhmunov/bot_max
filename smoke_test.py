@@ -613,7 +613,7 @@ def run() -> None:
             assert parsed_ids == ["90000", "90001"]
 
         send_manager_link = client.post(
-            "/admin/settings/send-manager-link",
+            "/app/settings/send-manager-link",
             data={
                 "manager_account_id": "90000",
                 "manager_account_ids": "90000,90001",
@@ -628,6 +628,7 @@ def run() -> None:
             follow_redirects=False,
         )
         assert send_manager_link.status_code == 200
+        assert "Ссылка отправлена менеджеру 90000." in send_manager_link.text
 
         admin_chats_page = client.get(
             f"/admin/chats?conversation_id={conversation_id}",

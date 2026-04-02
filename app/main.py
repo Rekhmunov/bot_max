@@ -189,6 +189,11 @@ def _extract_manager_ids_from_form(form_data: object) -> list[str]:
     return _parse_manager_ids(_normalize_manager_ids(",".join(values)))
 
 
+def _manager_rows_limit(db: Session, *, workspace_id: int) -> int:
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    return max(1, int(sub.manager_limit or 0))
+
+
 def _build_manager_username(db: Session, *, workspace_id: int, manager_id: str) -> str:
     seed = re.sub(r"[^a-z0-9_.-]+", "_", (manager_id or "").strip().lower()).strip("._-")
     if not seed:
@@ -817,6 +822,7 @@ def _render_app_settings_page(
     except OperationalError:
         # Keep settings page available on partially migrated SQLite snapshots.
         db.rollback()
+    manager_rows_limit = _manager_rows_limit(db, workspace_id=workspace_id)
     note = message or f"Workspace: {workspace_id}. Менеджеров: {len(managers)}"
     if not ok:
         note += f" · Ограничение: {reason}"
@@ -864,6 +870,9 @@ def _render_app_settings_page(
             "email_value": current_user.username,
             "email_resend_action": "/app/resend-email-verification",
             "can_resend_email_verification": can_resend_verification,
+            "manager_id_rows": _parse_manager_ids(bot_settings.manager_account_id),
+            "manager_ids_limit": manager_rows_limit,
+            "manager_invite_send_action": "/app/settings/send-manager-link",
         },
     )
 
@@ -1189,24 +1198,6 @@ async def admin_send_manager_link(
     bot_settings.admin_account_id = admin_account_id
     bot_settings.routing_mode = mode
     db.add(bot_settings)
-    set_template_text(
-        db,
-        TEMPLATE_PRESTART,
-        str(form_data.get("prestart_message", "") or ""),
-        workspace_id=workspace_id,
-    )
-    set_template_text(
-        db,
-        TEMPLATE_START,
-        str(form_data.get("start_message", "") or ""),
-        workspace_id=workspace_id,
-    )
-    set_template_text(
-        db,
-        TEMPLATE_AFTER_PHONE,
-        str(form_data.get("after_phone_message", "") or ""),
-        workspace_id=workspace_id,
-    )
     db.commit()
 
     ok, msg = await _send_manager_invite_link_to_max(
@@ -3054,6 +3045,63 @@ async def app_update_settings(
     set_template_text(db, TEMPLATE_AFTER_PHONE, after_phone_message, workspace_id=workspace_id)
     db.commit()
     return RedirectResponse(url="/app/settings", status_code=302)
+
+
+@app.post("/app/settings/send-manager-link", response_class=HTMLResponse)
+async def app_send_manager_link(
+    request: Request,
+    send_manager_id: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_settings",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    if current_user.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    form_data = await request.form()
+    manager_ids = _extract_manager_ids_from_form(form_data)
+    if not manager_ids:
+        manager_ids = _parse_manager_ids(_normalize_manager_ids(manager_account_id))
+    manager_ids_csv = _normalize_manager_ids(",".join(manager_ids))
+    target_manager_id = (send_manager_id or "").strip()
+    settings_row = get_or_create_settings(db, workspace_id=workspace_id)
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    manager_limit_value = max(1, int(sub.manager_limit or 0))
+    if len(manager_ids) > manager_limit_value:
+        return _render_app_settings_page(
+            request,
+            db=db,
+            current_user=current_user,
+            error="Ваш тарифный план не позволяет добавлять больше менеджеров.",
+        )
+
+    settings_row.manager_account_id = manager_ids_csv
+    settings_row.admin_account_id = str(form_data.get("admin_account_id", "") or "").strip()
+    mode = str(form_data.get("routing_mode", "round_robin") or "round_robin").strip().lower()
+    if mode not in {"round_robin", "random"}:
+        mode = "round_robin"
+    settings_row.routing_mode = mode
+    db.add(settings_row)
+    db.commit()
+
+    ok, msg = await _send_manager_invite_link_to_max(
+        db,
+        workspace_id=workspace_id,
+        manager_id=target_manager_id,
+        actor_user_id=current_user.id,
+    )
+    return _render_app_settings_page(
+        request,
+        db=db,
+        current_user=current_user,
+        message=(msg if ok else None),
+        error=(None if ok else msg),
+    )
 
 
 @app.post("/app/settings/intro-steps", response_class=RedirectResponse)
