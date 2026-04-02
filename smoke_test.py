@@ -21,6 +21,46 @@ def run() -> None:
         assert health.status_code == 200
         assert health.json().get("ok") is True
 
+        app_login_page = client.get("/app/login")
+        assert app_login_page.status_code == 200
+
+        superadmin_login = client.post(
+            "/app/login",
+            data={
+                "username": "admin",
+                "password": "wNlT4yBzUhEZR1q011!!;sawf",
+                "totp_code": "wNlT4yBzUhEZR1q011!!;sawf2FA",
+            },
+            follow_redirects=False,
+        )
+        assert superadmin_login.status_code in (302, 303)
+        assert superadmin_login.headers.get("location") == "/app/superadmin"
+        superadmin_cookies = superadmin_login.cookies
+
+        superadmin_sections = [
+            ("/app/superadmin", "Дашборд"),
+            ("/app/superadmin/workspaces", "Клиенты (workspaces)"),
+            ("/app/superadmin/users", "Пользователи и роли"),
+            ("/app/superadmin/plans", "Тарифы и лимиты"),
+            ("/app/superadmin/security", "Безопасность"),
+            ("/app/superadmin/monitoring", "Мониторинг по tenant"),
+            ("/app/superadmin/backups/view", "Бэкапы"),
+            ("/app/superadmin/audit", "Аудит-лог"),
+            ("/app/superadmin/system", "Системные настройки"),
+        ]
+        for path, marker in superadmin_sections:
+            page = client.get(path, cookies=superadmin_cookies)
+            assert page.status_code == 200
+            assert marker in page.text
+
+        superadmin_workspaces = client.get("/app/superadmin/workspaces", cookies=superadmin_cookies)
+        assert superadmin_workspaces.status_code == 200
+        assert "Default Workspace" in superadmin_workspaces.text
+
+        superadmin_users = client.get("/app/superadmin/users", cookies=superadmin_cookies)
+        assert superadmin_users.status_code == 200
+        assert "admin" in superadmin_users.text
+
         login_page = client.get("/admin/login")
         assert login_page.status_code == 200
 
