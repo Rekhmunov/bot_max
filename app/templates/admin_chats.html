@@ -1533,6 +1533,25 @@
         document.documentElement.style.setProperty("--app-height", `${viewportHeight}px`);
         document.documentElement.style.setProperty("--keyboard-offset", `${keyboard}px`);
       };
+      let keyboardSyncTimer = null;
+      const stopKeyboardSync = () => {
+        if (keyboardSyncTimer) {
+          clearInterval(keyboardSyncTimer);
+          keyboardSyncTimer = null;
+        }
+      };
+      const startKeyboardSyncBurst = (durationMs = 900) => {
+        stopKeyboardSync();
+        const startedAt = Date.now();
+        setKeyboardInset();
+        keyboardSyncTimer = setInterval(() => {
+          setKeyboardInset();
+          const stillFocused = document.activeElement === messageInput;
+          if (!stillFocused || (Date.now() - startedAt) >= durationMs) {
+            stopKeyboardSync();
+          }
+        }, 40);
+      };
 
       const placeFixedMenu = (menuEl, x, y) => {
         const pad = 8;
@@ -1624,16 +1643,29 @@
       });
       window.addEventListener("resize", () => {
         closeScheduleMenu();
+        setKeyboardInset();
+        if (document.activeElement === messageInput) {
+          startKeyboardSyncBurst(700);
+        }
         syncSendVisibility();
       });
       window.visualViewport?.addEventListener("resize", setKeyboardInset);
       window.visualViewport?.addEventListener("scroll", setKeyboardInset);
+      window.addEventListener("orientationchange", () => {
+        setTimeout(setKeyboardInset, 40);
+      });
       messageInput.addEventListener("focus", () => {
-        setTimeout(() => {
-          setKeyboardInset();
-        }, 20);
+        startKeyboardSyncBurst(1000);
+      });
+      messageInput.addEventListener("touchstart", () => {
+        // iOS can apply keyboard + accessory bar in multiple phases on first focus.
+        startKeyboardSyncBurst(1000);
+      }, { passive: true });
+      messageInput.addEventListener("click", () => {
+        startKeyboardSyncBurst(700);
       });
       messageInput.addEventListener("blur", () => {
+        stopKeyboardSync();
         setTimeout(setKeyboardInset, 20);
       });
 
