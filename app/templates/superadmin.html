@@ -246,6 +246,8 @@
     "workspace_resumed": "Клиент возобновлен",
     "workspace_sessions_revoked": "Сессии клиента сброшены",
     "workspace_plan_updated": "План клиента обновлен",
+    "workspace_deleted": "Клиент удален",
+    "user_deleted": "Пользователь удален",
     "backup_created": "Резервная копия создана",
     "backup_restored": "Резервная копия восстановлена",
     "superadmin_2fa_updated": "Настройки 2FA суперадмина обновлены"
@@ -344,12 +346,17 @@
                   <td>{{ row.metrics.managers_active }} / {{ row.metrics.dialogs_total }} / {{ row.metrics.messages_month }}</td>
                   <td>
                     <div class="row-actions">
-                      {% if row.workspace.is_suspended %}
-                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/resume"><button class="btn" type="submit">Возобновить</button></form>
+                      {% if row.workspace.id != 1 %}
+                        {% if row.workspace.is_suspended %}
+                          <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/resume"><button class="btn" type="submit">Возобновить</button></form>
+                        {% else %}
+                          <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/suspend"><button class="btn danger" type="submit">Приостановить</button></form>
+                        {% endif %}
+                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/revoke-sessions"><button class="btn" type="submit">Сбросить сессии</button></form>
+                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/delete"><button class="btn danger" type="submit">Удалить клиента</button></form>
                       {% else %}
-                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/suspend"><button class="btn danger" type="submit">Приостановить</button></form>
+                        <span class="muted">Системный клиент не удаляется</span>
                       {% endif %}
-                      <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/revoke-sessions"><button class="btn" type="submit">Сбросить сессии</button></form>
                     </div>
                   </td>
                 </tr>
@@ -400,6 +407,9 @@
                         </form>
                         <form method="post" action="/app/superadmin/users/{{ user.id }}/revoke-sessions">
                           <button class="btn" type="submit">Сбросить сессии</button>
+                        </form>
+                        <form method="post" action="/app/superadmin/users/{{ user.id }}/delete">
+                          <button class="btn danger" type="submit">Удалить пользователя</button>
                         </form>
                       </div>
                     {% endif %}

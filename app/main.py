@@ -77,6 +77,7 @@ from app.email_utils import send_email_verification
 from app.models import (
     AuditLog,
     BillingEvent,
+    BotSettings,
     ChatMessage,
     ChatFolder,
     Conversation,
@@ -86,6 +87,7 @@ from app.models import (
     ManagerInvite,
     ManagerDispatch,
     MessageLog,
+    MessageTemplate,
     OutboxMessage,
     QuickReply,
     ServiceUser,
@@ -3067,6 +3069,51 @@ def app_superadmin_revoke_user_sessions(
     return RedirectResponse(url="/app/superadmin/users", status_code=302)
 
 
+@app.post("/app/superadmin/users/{user_id}/delete")
+def app_superadmin_delete_user(
+    request: Request,
+    user_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    _require_superadmin(current_user)
+    user = db.query(ServiceUser).filter(ServiceUser.id == user_id).first()
+    if user is None:
+        return RedirectResponse(url="/app/superadmin/users", status_code=302)
+    if user.role == "superadmin":
+        return RedirectResponse(url="/app/superadmin/users", status_code=302)
+    workspace_id = user.workspace_id
+    username = user.username
+    db.query(UserSession).filter(UserSession.user_id == user_id).delete(synchronize_session=False)
+    db.query(ManagerInvite).filter(ManagerInvite.used_by_user_id == user_id).update(
+        {ManagerInvite.used_by_user_id: None},
+        synchronize_session=False,
+    )
+    db.query(AuditLog).filter(AuditLog.actor_user_id == user_id).update(
+        {AuditLog.actor_user_id: None},
+        synchronize_session=False,
+    )
+    db.delete(user)
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=current_user.id,
+            action="user_deleted",
+            object_type="service_user",
+            object_id=str(user_id),
+            details_json=f'{{"username":"{username}"}}',
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/superadmin/users", status_code=302)
+
+
 @app.post("/app/billing/hook")
 def app_billing_hook(
     request: Request,
@@ -3191,6 +3238,71 @@ def app_superadmin_revoke_workspace_sessions(
             object_type="workspace",
             object_id=str(workspace_id),
             details_json="{}",
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/superadmin/workspaces", status_code=302)
+
+
+@app.post("/app/superadmin/workspaces/{workspace_id}/delete")
+def app_superadmin_delete_workspace(
+    request: Request,
+    workspace_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    _require_superadmin(current_user)
+    if workspace_id == DEFAULT_WORKSPACE_ID:
+        return RedirectResponse(url="/app/superadmin/workspaces", status_code=302)
+    ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if ws is None:
+        return RedirectResponse(url="/app/superadmin/workspaces", status_code=302)
+    ws_name = ws.name
+    user_ids = [
+        row[0]
+        for row in db.query(ServiceUser.id)
+        .filter(ServiceUser.workspace_id == workspace_id, ServiceUser.role != "superadmin")
+        .all()
+    ]
+    if user_ids:
+        db.query(UserSession).filter(UserSession.user_id.in_(user_ids)).delete(synchronize_session=False)
+        db.query(AuditLog).filter(AuditLog.actor_user_id.in_(user_ids)).update(
+            {AuditLog.actor_user_id: None},
+            synchronize_session=False,
+        )
+    db.query(ManagerInvite).filter(ManagerInvite.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(OutboxMessage).filter(OutboxMessage.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(ManagerDispatch).filter(ManagerDispatch.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(ConversationMeta).filter(ConversationMeta.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(MessageLog).filter(MessageLog.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(ChatMessage).filter(ChatMessage.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(Conversation).filter(Conversation.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(CustomerProfile).filter(CustomerProfile.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(ChatFolder).filter(ChatFolder.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(IntroStep).filter(IntroStep.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(QuickReply).filter(QuickReply.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(MessageTemplate).filter(MessageTemplate.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(BotSettings).filter(BotSettings.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(Subscription).filter(Subscription.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(TenantAlert).filter(TenantAlert.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(BillingEvent).filter(BillingEvent.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(ServiceUser).filter(ServiceUser.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(AuditLog).filter(AuditLog.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.delete(ws)
+    db.add(
+        AuditLog(
+            workspace_id=None,
+            actor_user_id=current_user.id,
+            action="workspace_deleted",
+            object_type="workspace",
+            object_id=str(workspace_id),
+            details_json=f'{{"name":"{ws_name}"}}',
         )
     )
     db.commit()

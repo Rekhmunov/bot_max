@@ -73,6 +73,59 @@ def run() -> None:
         superadmin_users = client.get("/app/superadmin/users", cookies=superadmin_cookies)
         assert superadmin_users.status_code == 200
         assert "admin" in superadmin_users.text
+        with SessionLocal() as db:
+            superadmin_row = (
+                db.query(ServiceUser)
+                .filter(ServiceUser.role == "superadmin")
+                .order_by(ServiceUser.id.asc())
+                .first()
+            )
+            assert superadmin_row is not None
+            superadmin_user_id = int(superadmin_row.id)
+        assert f"/app/superadmin/users/{superadmin_user_id}/delete" not in superadmin_users.text
+
+        # User deletion from superadmin panel.
+        delete_temp_email = f"delete_{uuid4().hex[:8]}@example.com"
+        delete_temp_register = client.post(
+            "/app/register",
+            data={"email": delete_temp_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert delete_temp_register.status_code in (302, 303)
+        with SessionLocal() as db:
+            delete_temp_user = db.query(ServiceUser).filter(ServiceUser.username == delete_temp_email).first()
+            assert delete_temp_user is not None
+            delete_temp_user_id = int(delete_temp_user.id)
+        delete_temp_user_resp = client.post(
+            f"/app/superadmin/users/{delete_temp_user_id}/delete",
+            cookies=superadmin_cookies,
+            follow_redirects=False,
+        )
+        assert delete_temp_user_resp.status_code in (302, 303)
+        with SessionLocal() as db:
+            assert db.query(ServiceUser).filter(ServiceUser.id == delete_temp_user_id).first() is None
+
+        # Workspace deletion from superadmin panel.
+        delete_ws_email = f"deletews_{uuid4().hex[:8]}@example.com"
+        delete_ws_register = client.post(
+            "/app/register",
+            data={"email": delete_ws_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert delete_ws_register.status_code in (302, 303)
+        with SessionLocal() as db:
+            delete_ws_owner = db.query(ServiceUser).filter(ServiceUser.username == delete_ws_email).first()
+            assert delete_ws_owner is not None
+            delete_ws_id = int(delete_ws_owner.workspace_id or 0)
+            assert delete_ws_id > 0
+        delete_ws_resp = client.post(
+            f"/app/superadmin/workspaces/{delete_ws_id}/delete",
+            cookies=superadmin_cookies,
+            follow_redirects=False,
+        )
+        assert delete_ws_resp.status_code in (302, 303)
+        with SessionLocal() as db:
+            assert db.query(Workspace).filter(Workspace.id == delete_ws_id).first() is None
 
         orphan_seed = uuid4().hex[:8]
         first_register = client.post(
