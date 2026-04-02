@@ -39,7 +39,7 @@
       background: var(--panel);
       min-width: 0;
       display: grid;
-      grid-template-rows: auto auto auto 1fr;
+      grid-template-rows: auto auto minmax(0, 1fr);
       overflow: hidden;
     }
     .list-head {
@@ -169,7 +169,7 @@
       background: #fbfcff;
       min-width: 0;
       display: grid;
-      grid-template-rows: 1fr auto;
+      grid-template-rows: minmax(0, 1fr) auto auto;
     }
     .folder-rail-scroll {
       overflow-y: auto;
