@@ -296,8 +296,7 @@ def run() -> None:
         assert 'name="routing_mode"' in save_settings.text
         assert "Логика: бот общается с покупателем" not in save_settings.text
         assert "add-manager-id-btn" not in save_settings.text
-        assert "manager-row-send-btn" in save_settings.text
-        assert "manager-row-send-btn" in save_settings.text
+        assert "manager-row-copy-btn" in save_settings.text
         assert 'name="routing_mode"' in save_settings.text
         assert "Запрос номера телефона у покупателя" in save_settings.text
 
@@ -652,49 +651,17 @@ def run() -> None:
             invite_flow_workspace_id = int(invite_flow_user.workspace_id or 0)
             assert invite_flow_workspace_id > 0
 
-        send_manager_link = client.post(
-            "/app/settings/send-manager-link",
-            data={
-                "manager_account_id": "90000",
-                "manager_account_ids": "90000,90001",
-                "send_manager_id": "90000",
-                "prestart_message": DEFAULT_TEMPLATES["prestart_message"],
-                "start_message": start_template,
-                "after_phone_message": after_phone_template,
-                "routing_mode": "round_robin",
-                "admin_account_id": "",
-                "request_customer_phone": "1",
-            },
-            cookies=invite_flow_cookies,
-            follow_redirects=False,
-        )
-        assert send_manager_link.status_code == 200
-        assert "Менеджеры: статусы подключения" in send_manager_link.text
-        assert "Ожидает подключения" in send_manager_link.text or "Подключен" in send_manager_link.text
-        assert "Быстрые ответы: <b>0</b> / <b>10</b>" in send_manager_link.text
-        assert "Папки: <b>0</b> / <b>10</b>" in send_manager_link.text
-        with SessionLocal() as db:
-            manager_90000 = (
-                db.query(ServiceUser)
-                .filter(
-                    ServiceUser.workspace_id == invite_flow_workspace_id,
-                    ServiceUser.role == "manager",
-                    ServiceUser.max_account_id == "90000",
-                )
-                .first()
-            )
-            assert manager_90000 is not None
-            # Invite flow must require password set by link, not auto-consume.
-            assert (manager_90000.password_hash or "").strip() == ""
-
+        settings_page = client.get("/app/settings", cookies=invite_flow_cookies, follow_redirects=False)
+        assert settings_page.status_code == 200
+        assert "Менеджеры: статусы подключения" in settings_page.text
+        assert "Быстрые ответы: <b>0</b> / <b>10</b>" in settings_page.text
+        assert "Папки: <b>0</b> / <b>10</b>" in settings_page.text
         copy_manager_link = client.post(
             "/app/settings/copy-manager-link",
             data={
-                "manager_account_ids": "90000,90001",
                 "copy_manager_id": "90000",
                 "routing_mode": "round_robin",
                 "admin_account_id": "",
-                "request_customer_phone": "1",
             },
             cookies=invite_flow_cookies,
             follow_redirects=False,
@@ -898,7 +865,9 @@ def run() -> None:
             ws_id_toggle = int(phone_toggle_user.workspace_id or 0)
             ws_settings = get_or_create_settings(db, workspace_id=ws_id_toggle)
             assert bool(ws_settings.request_customer_phone) is True
-        assert "Ссылка отправлена менеджеру 90000." in send_manager_link.text
+        app_settings_after_copy = client.get("/app/settings", cookies=invite_flow_cookies, follow_redirects=False)
+        assert app_settings_after_copy.status_code == 200
+        assert "Ожидает подключения" in app_settings_after_copy.text or "Подключен" in app_settings_after_copy.text
 
         admin_chats_page = client.get(
             f"/admin/chats?conversation_id={conversation_id}",

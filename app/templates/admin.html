@@ -145,21 +145,6 @@
       gap: 8px;
       align-items: center;
     }
-    .manager-row-send-btn {
-      border: 1px solid var(--line);
-      background: #fff;
-      color: #3b4d74;
-      border-radius: 8px;
-      width: 34px;
-      height: 34px;
-      font-size: 16px;
-      line-height: 1;
-      font-weight: 700;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-    }
     .manager-row-copy-btn {
       border: 1px solid var(--line);
       background: #fff;
@@ -402,15 +387,6 @@
           />
           <button
             type="button"
-            class="manager-row-send-btn"
-            name="send_manager_id"
-            value="{{ single_manager_id }}"
-            formaction="{{ manager_invite_send_action or '/app/settings/send-manager-link' }}"
-            aria-label="Отправить ссылку менеджеру"
-            title="Отправить ссылку менеджеру"
-          >➤</button>
-          <button
-            type="button"
             class="manager-row-copy-btn"
             name="copy_manager_id"
             value="{{ single_manager_id }}"
@@ -600,11 +576,7 @@
         if (!(target instanceof HTMLInputElement)) return;
         if (target.name !== "manager_account_ids") return;
         const row = target.closest(".manager-id-row");
-        const sendBtn = row?.querySelector("button[name='send_manager_id']");
         const copyBtn = row?.querySelector("button[name='copy_manager_id']");
-        if (sendBtn instanceof HTMLButtonElement) {
-          sendBtn.value = target.value.trim();
-        }
         if (copyBtn instanceof HTMLButtonElement) {
           copyBtn.value = target.value.trim();
         }
@@ -648,16 +620,13 @@
             });
           return;
         }
-        const sendBtn = target.closest("button.manager-row-send-btn");
         const copyBtn = target.closest("button.manager-row-copy-btn");
-        const actionBtn = (sendBtn instanceof HTMLButtonElement) ? sendBtn : ((copyBtn instanceof HTMLButtonElement) ? copyBtn : null);
-        if (!(actionBtn instanceof HTMLButtonElement)) return;
-        const settingsForm = actionBtn.closest("form");
-        if (!(settingsForm instanceof HTMLFormElement)) return;
-        const row = actionBtn.closest(".manager-id-row");
-        const managerInput = row?.querySelector("input[name='manager_account_ids']");
-        const managerId = managerInput instanceof HTMLInputElement ? managerInput.value.trim() : "";
         if (copyBtn instanceof HTMLButtonElement) {
+          const settingsForm = copyBtn.closest("form");
+          if (!(settingsForm instanceof HTMLFormElement)) return;
+          const row = copyBtn.closest(".manager-id-row");
+          const managerInput = row?.querySelector("input[name='manager_account_ids']");
+          const managerId = managerInput instanceof HTMLInputElement ? managerInput.value.trim() : "";
           const copyAction = copyBtn.getAttribute("data-copy-action") || "{{ manager_invite_copy_action or '/app/settings/copy-manager-link' }}";
           const payload = new FormData(settingsForm);
           payload.set("copy_manager_id", managerId);
@@ -690,22 +659,6 @@
             });
           return;
         }
-        const action = sendBtn.getAttribute("formaction") || settingsForm.action;
-        const payload = new FormData(settingsForm);
-        payload.set("send_manager_id", managerId);
-        const tempForm = document.createElement("form");
-        tempForm.method = "post";
-        tempForm.action = action;
-        tempForm.style.display = "none";
-        for (const [key, value] of payload.entries()) {
-          const hidden = document.createElement("input");
-          hidden.type = "hidden";
-          hidden.name = key;
-          hidden.value = String(value ?? "");
-          tempForm.appendChild(hidden);
-        }
-        document.body.appendChild(tempForm);
-        tempForm.submit();
       });
     })();
   </script>

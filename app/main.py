@@ -1451,7 +1451,6 @@ def _render_app_settings_page(
             "settings_action": "/app/settings",
             "manager_id_rows": manager_id_rows,
             "manager_ids_limit": _manager_limit_for_workspace(db, workspace_id=workspace_id),
-            "manager_invite_send_action": "/app/settings/send-manager-link",
             "manager_invite_copy_action": "/app/settings/copy-manager-link",
             "manager_remove_action": "/app/settings/remove-manager",
             "quick_reply_create_action": "/app/quick-replies",
@@ -1465,7 +1464,6 @@ def _render_app_settings_page(
             "can_resend_email_verification": can_resend_verification,
             "manager_id_rows": manager_id_rows,
             "manager_ids_limit": manager_rows_limit,
-            "manager_invite_send_action": "/app/settings/send-manager-link",
             "manager_invite_copy_action": "/app/settings/copy-manager-link",
             "manager_remove_action": "/app/settings/remove-manager",
             "manager_status_rows": manager_status_rows,
@@ -1645,7 +1643,6 @@ def admin_page(
             "usage_remaining": usage_remaining,
             "manager_id_rows": _parse_manager_ids(bot_settings.manager_account_id),
             "manager_ids_limit": int(sub.manager_limit or 0),
-            "manager_invite_send_action": "/admin/settings/send-manager-link",
             "manager_invite_copy_action": "/admin/settings/copy-manager-link",
             "manager_status_rows": [],
             "manager_status_summary": {
@@ -1717,7 +1714,6 @@ async def update_settings(
                 "tenant_metrics": tenant_metrics,
                 "manager_id_rows": manager_ids,
                 "manager_ids_limit": manager_limit_value,
-                "manager_invite_send_action": "/admin/settings/send-manager-link",
                 "manager_invite_copy_action": "/admin/settings/copy-manager-link",
                 "manager_status_rows": [],
                 "manager_status_summary": {
@@ -1782,7 +1778,6 @@ async def update_settings(
             "tenant_metrics": tenant_metrics,
             "manager_id_rows": manager_ids,
             "manager_ids_limit": manager_limit_value,
-            "manager_invite_send_action": "/admin/settings/send-manager-link",
             "manager_invite_copy_action": "/admin/settings/copy-manager-link",
             "manager_status_rows": [],
             "manager_status_summary": {
@@ -1849,7 +1844,6 @@ async def admin_send_manager_link(
                 _normalize_manager_ids(get_or_create_settings(db, workspace_id=workspace_id).manager_account_id)
             ),
             "manager_ids_limit": _manager_limit_for_workspace(db, workspace_id=workspace_id),
-            "manager_invite_send_action": "/admin/settings/send-manager-link",
             "manager_invite_copy_action": "/admin/settings/copy-manager-link",
             "manager_status_rows": [],
             "manager_status_summary": {
@@ -3779,65 +3773,6 @@ async def app_update_settings(
     db.commit()
     # Manager add/remove is now handled in the manager status block actions.
     return RedirectResponse(url="/app/settings", status_code=302)
-
-
-@app.post("/app/settings/send-manager-link", response_class=HTMLResponse)
-async def app_send_manager_link(
-    request: Request,
-    send_manager_id: str = Form(""),
-    current_user: ServiceUser = Depends(require_service_user),
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    _enforce_same_origin(request)
-    _check_rate_limit_or_raise(
-        request,
-        scope="app_settings",
-        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
-    )
-    if current_user.role not in {"owner", "admin"}:
-        raise HTTPException(status_code=403, detail="Недостаточно прав")
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
-    target_manager_id = (send_manager_id or "").strip()
-    if not target_manager_id:
-        return _render_app_settings_page(
-            request,
-            db=db,
-            current_user=current_user,
-            error='Введите ID менеджера в поле "Добавление нового менеджера".',
-        )
-
-    settings_row = get_or_create_settings(db, workspace_id=workspace_id)
-    existing_ids = _parse_manager_ids(settings_row.manager_account_id)
-    merged_ids = list(existing_ids)
-    if target_manager_id not in merged_ids:
-        merged_ids.append(target_manager_id)
-
-    manager_limit_value = _manager_limit_for_workspace(db, workspace_id=workspace_id)
-    if len(merged_ids) > manager_limit_value:
-        return _render_app_settings_page(
-            request,
-            db=db,
-            current_user=current_user,
-            error="Ваш тарифный план не позволяет добавлять больше менеджеров.",
-        )
-
-    settings_row.manager_account_id = _normalize_manager_ids(",".join(merged_ids))
-    db.add(settings_row)
-    db.commit()
-
-    ok, msg = await _send_manager_invite_link_to_max(
-        db,
-        workspace_id=workspace_id,
-        manager_id=target_manager_id,
-        actor_user_id=current_user.id,
-    )
-    return _render_app_settings_page(
-        request,
-        db=db,
-        current_user=current_user,
-        message=(msg if ok else None),
-        error=(None if ok else msg),
-    )
 
 
 @app.post("/app/settings/copy-manager-link", response_class=JSONResponse)
