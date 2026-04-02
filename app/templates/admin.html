@@ -151,6 +151,10 @@
       color: #35425f;
       cursor: pointer;
     }
+    .format-btn[disabled] {
+      opacity: .55;
+      cursor: not-allowed;
+    }
     code { background: #eef1f8; padding: 2px 6px; border-radius: 6px; }
   </style>
 </head>
@@ -197,17 +201,18 @@
 
           <label for="start_message">Сообщение после Start (просим номер)</label>
           <div class="format-row">
-            <button type="button" class="format-btn" data-format-target="start_message" data-format-kind="bold">Жирный</button>
-            <button type="button" class="format-btn" data-format-target="start_message" data-format-kind="link">Ссылка</button>
+            <button type="button" class="format-btn" data-format-target="start_message" data-format-kind="bold" disabled title="Пока недоступно в Max">Жирный</button>
+            <button type="button" class="format-btn" data-format-target="start_message" data-format-kind="link" disabled title="Пока недоступно в Max">Ссылка</button>
           </div>
           <textarea id="start_message" name="start_message" required>{{ template_start }}</textarea>
 
           <label for="after_phone_message">Сообщение после подтверждения номера</label>
           <div class="format-row">
-            <button type="button" class="format-btn" data-format-target="after_phone_message" data-format-kind="bold">Жирный</button>
-            <button type="button" class="format-btn" data-format-target="after_phone_message" data-format-kind="link">Ссылка</button>
+            <button type="button" class="format-btn" data-format-target="after_phone_message" data-format-kind="bold" disabled title="Пока недоступно в Max">Жирный</button>
+            <button type="button" class="format-btn" data-format-target="after_phone_message" data-format-kind="link" disabled title="Пока недоступно в Max">Ссылка</button>
           </div>
           <textarea id="after_phone_message" name="after_phone_message" required>{{ template_after_phone }}</textarea>
+          <div class="hint">Форматирование (жирный/ссылки) пока не применяется Max API и временно отключено.</div>
 
           <label for="manager_account_id">ID чата менеджер-бот в Max</label>
           <input id="manager_account_id" name="manager_account_id" value="{{ settings.manager_account_id }}" required />
@@ -247,6 +252,44 @@
           <button class="btn" type="submit">Добавить быстрый ответ</button>
         </form>
         <div class="hint">Менеджер вызывает ответ в чате командой вида <code>/price</code>.</div>
+
+        <h2 style="margin-top:16px;">Список быстрых ответов</h2>
+        {% if quick_replies %}
+          <table>
+            <thead>
+              <tr>
+                <th>Команда</th>
+                <th>Название</th>
+                <th>Текст</th>
+                <th>Фото</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in quick_replies %}
+                <tr>
+                  <td><code>/{{ item.command }}</code></td>
+                  <td>{{ item.title }}</td>
+                  <td>{{ item.text }}</td>
+                  <td>
+                    {% if item.image_path %}
+                      <img class="preview" src="{{ item.image_path }}" alt="{{ item.title }}" />
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td>
+                    <form method="post" action="{{ quick_reply_delete_action_prefix or '/admin/quick-replies/' }}{{ item.id }}/delete">
+                      <button class="delete" type="submit">Удалить</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="hint">Быстрые ответы пока не созданы.</div>
+        {% endif %}
       </section>
     </div>
 
@@ -342,45 +385,6 @@
     </section>
     {% endif %}
 
-    <section class="card" style="margin-top:16px;">
-      <h2>Список быстрых ответов</h2>
-      {% if quick_replies %}
-        <table>
-          <thead>
-            <tr>
-              <th>Команда</th>
-              <th>Название</th>
-              <th>Текст</th>
-              <th>Фото</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for item in quick_replies %}
-              <tr>
-                <td><code>/{{ item.command }}</code></td>
-                <td>{{ item.title }}</td>
-                <td>{{ item.text }}</td>
-                <td>
-                  {% if item.image_path %}
-                    <img class="preview" src="{{ item.image_path }}" alt="{{ item.title }}" />
-                  {% else %}
-                    —
-                  {% endif %}
-                </td>
-                <td>
-                  <form method="post" action="{{ quick_reply_delete_action_prefix or '/admin/quick-replies/' }}{{ item.id }}/delete">
-                    <button class="delete" type="submit">Удалить</button>
-                  </form>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      {% else %}
-        <div class="hint">Быстрые ответы пока не созданы.</div>
-      {% endif %}
-    </section>
   </div>
   <script>
     (() => {
