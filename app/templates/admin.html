@@ -246,7 +246,7 @@
                 placeholder="ID менеджеров в Max"
               />
               <button
-                type="submit"
+                type="button"
                 class="manager-row-send-btn"
                 name="send_manager_id"
                 value="{{ manager_id }}"
@@ -445,7 +445,7 @@
         row.innerHTML = `
           <input name="manager_account_ids" value="" placeholder="ID менеджеров в Max" />
           <button
-            type="submit"
+            type="button"
             class="manager-row-send-btn"
             name="send_manager_id"
             value=""
@@ -467,6 +467,33 @@
         if (sendBtn instanceof HTMLButtonElement) {
           sendBtn.value = target.value.trim();
         }
+      });
+      rowsWrap.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const sendBtn = target.closest("button.manager-row-send-btn");
+        if (!(sendBtn instanceof HTMLButtonElement)) return;
+        const settingsForm = sendBtn.closest("form");
+        if (!(settingsForm instanceof HTMLFormElement)) return;
+        const row = sendBtn.closest(".manager-id-row");
+        const managerInput = row?.querySelector("input[name='manager_account_ids']");
+        const managerId = managerInput instanceof HTMLInputElement ? managerInput.value.trim() : "";
+        const action = sendBtn.getAttribute("formaction") || settingsForm.action;
+        const payload = new FormData(settingsForm);
+        payload.set("send_manager_id", managerId);
+        const tempForm = document.createElement("form");
+        tempForm.method = "post";
+        tempForm.action = action;
+        tempForm.style.display = "none";
+        for (const [key, value] of payload.entries()) {
+          const hidden = document.createElement("input");
+          hidden.type = "hidden";
+          hidden.name = key;
+          hidden.value = String(value ?? "");
+          tempForm.appendChild(hidden);
+        }
+        document.body.appendChild(tempForm);
+        tempForm.submit();
       });
     })();
   </script>

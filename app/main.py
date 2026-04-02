@@ -1215,50 +1215,7 @@ async def admin_send_manager_link(
         return RedirectResponse(url="/admin/login", status_code=302)
     form_data = await request.form()
     workspace_id = DEFAULT_WORKSPACE_ID
-    manager_ids = _extract_manager_ids_from_form(form_data)
-    manager_ids_csv = _normalize_manager_ids(",".join(manager_ids))
     target_manager_id = str(form_data.get("send_manager_id", "") or "").strip()
-    admin_account_id = str(form_data.get("admin_account_id", "") or "").strip()
-    mode = str(form_data.get("routing_mode", "round_robin") or "round_robin").strip().lower()
-    if mode not in {"round_robin", "random"}:
-        mode = "round_robin"
-    bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
-    sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    manager_limit_value = max(1, int(sub.manager_limit or 0))
-    if len(manager_ids) > manager_limit_value:
-        return templates.TemplateResponse(
-            request,
-            "admin.html",
-            {
-                "request": request,
-                "settings": bot_settings,
-                "template_prestart": str(form_data.get("prestart_message", "") or ""),
-                "template_start": str(form_data.get("start_message", "") or ""),
-                "template_after_phone": str(form_data.get("after_phone_message", "") or ""),
-                "quick_replies": (
-                    db.query(QuickReply)
-                    .filter(QuickReply.workspace_id == workspace_id)
-                    .order_by(QuickReply.command.asc())
-                    .all()
-                ),
-                "webhook_path": webhook_path,
-                "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
-                "chat_metrics": get_chat_metrics(db, workspace_id=workspace_id),
-                "delivery_metrics": get_delivery_metrics(db, workspace_id=workspace_id),
-                "manager_id_rows": manager_ids,
-                "manager_ids_limit": manager_limit_value,
-                "manager_invite_send_action": "/admin/settings/send-manager-link",
-                "message": None,
-                "error": "Ваш тарифный план не позволяет добавлять больше менеджеров.",
-            },
-            status_code=400,
-        )
-
-    bot_settings.manager_account_id = manager_ids_csv
-    bot_settings.admin_account_id = admin_account_id
-    bot_settings.routing_mode = mode
-    db.add(bot_settings)
-    db.commit()
 
     ok, msg = await _send_manager_invite_link_to_max(
         db,
@@ -1289,8 +1246,10 @@ async def admin_send_manager_link(
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
             "chat_metrics": get_chat_metrics(db, workspace_id=workspace_id),
             "delivery_metrics": get_delivery_metrics(db, workspace_id=workspace_id),
-            "manager_id_rows": manager_ids,
-            "manager_ids_limit": manager_limit_value,
+            "manager_id_rows": _parse_manager_ids(
+                _normalize_manager_ids(get_or_create_settings(db, workspace_id=workspace_id).manager_account_id)
+            ),
+            "manager_ids_limit": _manager_limit_for_workspace(db, workspace_id=workspace_id),
             "manager_invite_send_action": "/admin/settings/send-manager-link",
             "message": (msg if ok else None),
             "error": (None if ok else msg),
