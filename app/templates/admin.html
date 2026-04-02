@@ -496,7 +496,11 @@
       <div class="hint">Лимит быстрых ответов: <b>{{ subscription.quick_replies_limit }}</b></div>
       <div class="hint">Лимит папок: <b>{{ subscription.folders_limit }}</b></div>
       {% if tenant_metrics %}
-        <div class="hint">Активных менеджеров: <b>{{ tenant_metrics.managers_active }}</b></div>
+        {% if ui_mode == "app" and manager_status_summary is defined %}
+          <div class="hint">Активных менеджеров: <b>{{ manager_status_summary.connected or 0 }}</b></div>
+        {% else %}
+          <div class="hint">Активных менеджеров: <b>{{ tenant_metrics.managers_active }}</b></div>
+        {% endif %}
         <div class="hint">Диалогов: <b>{{ tenant_metrics.dialogs_total }}</b></div>
         <div class="hint">Сообщений в текущем месяце: <b>{{ tenant_metrics.messages_month }}</b></div>
       {% endif %}
