@@ -53,7 +53,7 @@ def run() -> None:
         superadmin_sections = [
             ("/app/superadmin", "Дашборд"),
             ("/app/superadmin/workspaces", "Клиенты (рабочие пространства)"),
-            ("/app/superadmin/users", "Пользователи и роли"),
+            ("/app/superadmin/users", "Пользователи"),
             ("/app/superadmin/plans", "Тарифы и лимиты"),
             ("/app/superadmin/security", "Безопасность"),
             ("/app/superadmin/monitoring", "Мониторинг по клиентам"),

@@ -334,7 +334,7 @@ def _build_superadmin_context(
     page_title_map = {
         "dashboard": "Панель суперадмина",
         "workspaces": "Клиенты (рабочие пространства)",
-        "users": "Пользователи и роли",
+        "users": "Пользователи",
         "plans": "Тарифы и лимиты",
         "security": "Безопасность",
         "monitoring": "Мониторинг",

@@ -268,7 +268,7 @@
       <nav class="nav">
         <a class="{% if section == 'dashboard' %}active{% endif %}" href="/app/superadmin">Дашборд</a>
         <a class="{% if section == 'workspaces' %}active{% endif %}" href="/app/superadmin/workspaces">Клиенты</a>
-        <a class="{% if section == 'users' %}active{% endif %}" href="/app/superadmin/users">Пользователи и роли</a>
+        <a class="{% if section == 'users' %}active{% endif %}" href="/app/superadmin/users">Пользователи</a>
         <a class="{% if section == 'plans' %}active{% endif %}" href="/app/superadmin/plans">Тарифы и лимиты</a>
         <a class="{% if section == 'security' %}active{% endif %}" href="/app/superadmin/security">Безопасность</a>
         <a class="{% if section == 'monitoring' %}active{% endif %}" href="/app/superadmin/monitoring">Мониторинг</a>
@@ -368,7 +368,7 @@
 
       {% if section == "users" %}
         <section class="card">
-          <h2>Пользователи и роли</h2>
+          <h2>Пользователи</h2>
           <table>
             <thead><tr><th>ID</th><th>Клиент</th><th>Логин</th><th>Роль</th><th>Статус</th><th>Email</th><th>Последний вход</th><th>Действия</th></tr></thead>
             <tbody>
