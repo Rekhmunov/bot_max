@@ -550,6 +550,19 @@ def run() -> None:
         assert "id=\"edit-message-id\"" in admin_chats_page_after_send.text
         assert "Режим редактирования сообщения" in admin_chats_page_after_send.text
         assert "клиент | mid:" not in admin_chats_page_after_send.text
+        assert 'id="send-btn"' in admin_chats_page_after_send.text
+        assert 'id="schedule-btn-mobile"' in admin_chats_page_after_send.text
+        assert 'id="schedule-pop"' in admin_chats_page_after_send.text
+        assert 'name="scheduled_at"' in admin_chats_page_after_send.text
+
+        scheduled_send = client.post(
+            f"/admin/chats/{conversation_id}/send",
+            data={"text": "scheduled message", "schedule_at": "2999-01-01T12:30"},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert scheduled_send.status_code in (302, 303)
+        assert "scheduled=1" in scheduled_send.headers.get("location", "")
 
         mobile_list_page = client.get("/admin/chats", cookies=cookies)
         assert mobile_list_page.status_code == 200

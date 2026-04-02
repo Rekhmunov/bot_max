@@ -1321,6 +1321,7 @@ async def admin_chats_send_message(
     photo: UploadFile | None = File(default=None),
     q: str = Form(""),
     view: str = Form(""),
+    schedule_at: str = Form(""),
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -1378,9 +1379,13 @@ async def admin_chats_send_message(
         text=text_value,
         image_path=image_path,
         workspace_id=workspace_id,
+        schedule_at_iso=schedule_at,
     )
+    scheduled_at_clean = schedule_at.strip()
+    is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"
-    redirect_url = f"/admin/chats?conversation_id={conversation_id}&sent={suffix}"
+    flag_name = "scheduled" if is_scheduled else "sent"
+    redirect_url = f"/admin/chats?conversation_id={conversation_id}&{flag_name}={suffix}"
     if q.strip():
         redirect_url += f"&q={quote_plus(q.strip())}"
     if view_value == "chat":
@@ -3612,6 +3617,7 @@ async def app_chats_send_message(
     photo: UploadFile | None = File(default=None),
     q: str = Form(""),
     view: str = Form(""),
+    schedule_at: str = Form(""),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -3669,9 +3675,13 @@ async def app_chats_send_message(
         text=text_value,
         image_path=image_path,
         workspace_id=workspace_id,
+        schedule_at_iso=schedule_at,
     )
+    scheduled_at_clean = schedule_at.strip()
+    is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"
-    redirect_url = f"/app/chats?conversation_id={conversation_id}&sent={suffix}"
+    flag_name = "scheduled" if is_scheduled else "sent"
+    redirect_url = f"/app/chats?conversation_id={conversation_id}&{flag_name}={suffix}"
     if q.strip():
         redirect_url += f"&q={quote_plus(q.strip())}"
     if view_value == "chat":
@@ -3811,6 +3821,7 @@ def app_chats_rename_user(
 
 def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
     sent_flag = request.query_params.get("sent")
+    scheduled_flag = request.query_params.get("scheduled")
     quick_flag = request.query_params.get("quick")
     edited_flag = request.query_params.get("edited")
     deleted_flag = request.query_params.get("deleted")
@@ -3822,6 +3833,10 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
         op_message = "Сообщение отправлено"
     if sent_flag == "0":
         op_error = "Не удалось отправить сообщение"
+    if scheduled_flag == "1":
+        op_message = "Сообщение запланировано"
+    if scheduled_flag == "0":
+        op_error = "Не удалось запланировать сообщение"
     if quick_flag == "1":
         op_message = "Быстрый ответ отправлен"
     if quick_flag == "0":
@@ -4093,6 +4108,7 @@ async def manager_mini_send_message(
     photo: UploadFile | None = File(default=None),
     q: str = Form(""),
     view: str = Form(""),
+    schedule_at: str = Form(""),
     folder_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -4139,8 +4155,12 @@ async def manager_mini_send_message(
         text=text_value,
         image_path=image_path,
         workspace_id=workspace_id,
+        schedule_at_iso=schedule_at,
     )
+    scheduled_at_clean = schedule_at.strip()
+    is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"
+    flag_name = "scheduled" if is_scheduled else "sent"
     return RedirectResponse(
         url=_manager_mini_url(
             token=token,
@@ -4148,7 +4168,7 @@ async def manager_mini_send_message(
             q=q,
             view=view_value,
             folder_id=folder_id,
-            extra=f"sent={suffix}",
+            extra=f"{flag_name}={suffix}",
         ),
         status_code=302,
     )

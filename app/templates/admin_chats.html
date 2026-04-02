@@ -554,13 +554,41 @@
     }
     .send-btn {
       border: 0;
-      border-radius: 18px;
-      background: var(--accent);
-      color: #fff;
+      border-radius: 50%;
+      background: #fff;
+      border: 1px solid var(--line);
+      color: var(--accent);
       font-weight: 800;
-      padding: 10px 14px;
+      width: 36px;
+      height: 36px;
+      padding: 0;
       cursor: pointer;
-      font-size: 14px;
+      font-size: 18px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+    }
+    .send-btn.is-visible {
+      display: inline-flex;
+    }
+    .schedule-btn {
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: #fff;
+      color: #6f7b93;
+      width: 36px;
+      height: 36px;
+      padding: 0;
+      cursor: pointer;
+      font-size: 16px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+    }
+    .schedule-btn.is-visible {
+      display: inline-flex;
     }
     .slash-menu {
       display: none;
@@ -923,9 +951,107 @@
       .compose {
         padding-bottom: max(10px, env(safe-area-inset-bottom));
       }
+      .schedule-btn.mobile-visible {
+        display: inline-flex;
+      }
       .bubble {
         max-width: 92%;
       }
+    .schedule-pop {
+      position: fixed;
+      inset: 0;
+      z-index: 1200;
+      background: rgba(10, 18, 34, 0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .schedule-pop-card {
+      width: min(420px, 100%);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+    .schedule-pop-card h3 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 800;
+    }
+    .schedule-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .schedule-grid label {
+      display: grid;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .schedule-grid input {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 14px;
+      font: inherit;
+      background: #fff;
+      color: var(--text);
+    }
+    .schedule-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .schedule-cancel {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: #40506d;
+      padding: 9px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .schedule-submit {
+      border: 0;
+      border-radius: 10px;
+      background: var(--accent);
+      color: #fff;
+      padding: 9px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .schedule-trigger-menu {
+      position: fixed;
+      z-index: 1201;
+      min-width: 190px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      display: none;
+      padding: 6px;
+    }
+    .schedule-trigger-menu button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      padding: 9px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 14px;
+      color: #1f2a45;
+    }
+    .schedule-trigger-menu button:hover {
+      background: #f2f6ff;
+    }
       .danger-btn {
         padding: 7px 9px;
       }
@@ -1183,8 +1309,10 @@
                 autocomplete="off"
                 placeholder="Введите сообщение или / для быстрых ответов"
               />
-              <button class="send-btn" type="submit">Отправить</button>
+              <button class="schedule-btn" id="schedule-btn-mobile" type="button" title="Отложенная отправка" aria-label="Отложенная отправка">⏰</button>
+              <button class="send-btn" id="send-btn" type="submit" title="Отправить" aria-label="Отправить">✉</button>
             </div>
+            <input type="hidden" id="scheduled-at-input" name="scheduled_at" value="" />
             {% if allow_message_edit_actions %}
               <div id="edit-mode-hint" class="thread-meta" style="display:none; padding: 0 4px;">
                 Режим редактирования сообщения
@@ -1277,7 +1405,163 @@
     {% endif %}
   {% endif %}
 
+  <div class="schedule-trigger-menu" id="schedule-trigger-menu"></div>
+  <div class="schedule-pop" id="schedule-pop">
+    <div class="schedule-pop-card">
+      <h3>Отправить позже</h3>
+      <div class="schedule-grid">
+        <label>
+          Дата
+          <input id="schedule-date" type="date" />
+        </label>
+        <label>
+          Время
+          <input id="schedule-time" type="time" />
+        </label>
+      </div>
+      <div class="thread-meta" id="schedule-hint">Выберите дату и время отправки</div>
+      <div class="schedule-actions">
+        <button type="button" class="schedule-cancel" data-schedule-cancel>Отмена</button>
+        <button type="button" class="schedule-submit" id="schedule-submit-btn">Запланировать отправку</button>
+      </div>
+    </div>
+  </div>
+
   <script>
+    (() => {
+      const messageInput = document.getElementById("message-input");
+      const photoInput = document.querySelector(".attach-wrap input[type='file']");
+      const sendBtn = document.getElementById("send-btn");
+      const scheduleBtnMobile = document.getElementById("schedule-btn-mobile");
+      const scheduleTriggerMenu = document.getElementById("schedule-trigger-menu");
+      const schedulePopup = document.getElementById("schedule-pop");
+      const scheduleDateInput = document.getElementById("schedule-date");
+      const scheduleTimeInput = document.getElementById("schedule-time");
+      const scheduleHint = document.getElementById("schedule-hint");
+      const scheduleSubmitBtn = document.getElementById("schedule-submit-btn");
+      const scheduledAtInput = document.getElementById("scheduled-at-input");
+      const composeForm = document.querySelector(".compose form");
+      if (!messageInput || !photoInput || !sendBtn || !scheduleBtnMobile || !scheduleTriggerMenu || !schedulePopup || !scheduleDateInput || !scheduleTimeInput || !scheduleHint || !scheduleSubmitBtn || !scheduledAtInput || !composeForm) return;
+
+      const isTouchLikeViewport = () => (
+        window.matchMedia("(max-width: 900px), (hover: none) and (pointer: coarse)").matches
+      );
+
+      const hasPayload = () => {
+        const text = (messageInput.value || "").trim();
+        const hasFile = Boolean(photoInput.files && photoInput.files.length);
+        return Boolean(text || hasFile);
+      };
+
+      const syncSendVisibility = () => {
+        const visible = hasPayload();
+        sendBtn.classList.toggle("is-visible", visible);
+        scheduleBtnMobile.classList.toggle("is-visible", visible);
+        scheduleBtnMobile.classList.toggle("mobile-visible", visible && isTouchLikeViewport());
+      };
+
+      const placeFixedMenu = (menuEl, x, y) => {
+        const pad = 8;
+        menuEl.style.visibility = "hidden";
+        menuEl.style.display = "block";
+        const width = menuEl.offsetWidth || 0;
+        const height = menuEl.offsetHeight || 0;
+        const maxLeft = Math.max(pad, window.innerWidth - width - pad);
+        const maxTop = Math.max(pad, window.innerHeight - height - pad);
+        const left = Math.min(Math.max(pad, x), maxLeft);
+        const top = Math.min(Math.max(pad, y), maxTop);
+        menuEl.style.left = `${left}px`;
+        menuEl.style.top = `${top}px`;
+        menuEl.style.visibility = "visible";
+      };
+
+      const closeScheduleMenu = () => {
+        scheduleTriggerMenu.style.display = "none";
+        scheduleTriggerMenu.innerHTML = "";
+      };
+
+      const openSchedulePopup = () => {
+        const now = new Date();
+        const pad = (v) => String(v).padStart(2, "0");
+        scheduleDateInput.value = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+        scheduleTimeInput.value = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+        scheduleHint.textContent = "Выберите дату и время отправки";
+        schedulePopup.style.display = "flex";
+      };
+
+      const closeSchedulePopup = () => {
+        schedulePopup.style.display = "none";
+      };
+
+      sendBtn.addEventListener("contextmenu", (event) => {
+        if (isTouchLikeViewport()) return;
+        event.preventDefault();
+        if (!hasPayload()) return;
+        scheduleTriggerMenu.innerHTML = "";
+        const laterBtn = document.createElement("button");
+        laterBtn.type = "button";
+        laterBtn.textContent = "Отправить позже";
+        laterBtn.addEventListener("click", () => {
+          closeScheduleMenu();
+          openSchedulePopup();
+        });
+        scheduleTriggerMenu.appendChild(laterBtn);
+        placeFixedMenu(scheduleTriggerMenu, event.clientX, event.clientY);
+      });
+
+      scheduleBtnMobile.addEventListener("click", (event) => {
+        event.preventDefault();
+        if (!hasPayload()) return;
+        openSchedulePopup();
+      });
+
+      scheduleSubmitBtn.addEventListener("click", () => {
+        const dateValue = (scheduleDateInput.value || "").trim();
+        const timeValue = (scheduleTimeInput.value || "").trim();
+        if (!dateValue || !timeValue) {
+          scheduleHint.textContent = "Укажите дату и время.";
+          return;
+        }
+        const iso = `${dateValue}T${timeValue}:00`;
+        const when = new Date(iso);
+        if (Number.isNaN(when.getTime())) {
+          scheduleHint.textContent = "Некорректная дата или время.";
+          return;
+        }
+        if (when.getTime() <= Date.now() + 5000) {
+          scheduleHint.textContent = "Время отправки должно быть в будущем.";
+          return;
+        }
+        scheduledAtInput.value = iso;
+        closeSchedulePopup();
+        composeForm.requestSubmit();
+      });
+
+      schedulePopup.querySelectorAll("[data-schedule-cancel]").forEach((btn) => {
+        btn.addEventListener("click", closeSchedulePopup);
+      });
+      schedulePopup.addEventListener("click", (event) => {
+        if (event.target === schedulePopup) closeSchedulePopup();
+      });
+      document.addEventListener("click", (event) => {
+        if (scheduleTriggerMenu.contains(event.target)) return;
+        if (event.target === sendBtn) return;
+        closeScheduleMenu();
+      });
+      window.addEventListener("resize", () => {
+        closeScheduleMenu();
+        syncSendVisibility();
+      });
+
+      messageInput.addEventListener("input", syncSendVisibility);
+      photoInput.addEventListener("change", syncSendVisibility);
+      composeForm.addEventListener("submit", () => {
+        if (!scheduledAtInput.value) return;
+        scheduleHint.textContent = "Запланировано";
+      });
+      syncSendVisibility();
+    })();
+
     (() => {
       const SOFT_NAV_ATTR = "data-soft-nav";
 

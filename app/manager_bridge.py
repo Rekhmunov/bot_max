@@ -310,6 +310,24 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+def _parse_schedule_at_iso(value: str) -> datetime | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        scheduled = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if scheduled.tzinfo is None:
+        scheduled = scheduled.replace(tzinfo=UTC)
+    else:
+        scheduled = scheduled.astimezone(UTC)
+    # Tiny leeway: if time is effectively "now", send immediately.
+    if scheduled <= _utc_now() + timedelta(seconds=5):
+        return None
+    return scheduled
+
+
 def _as_naive_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value
@@ -428,6 +446,7 @@ def _enqueue_outbox_message(
     operation: str,
     payload: dict,
     workspace_id: int | None = None,
+    next_retry_at: datetime | None = None,
 ) -> OutboxMessage:
     resolved_workspace_id = workspace_id
     if resolved_workspace_id is None and conversation_id is not None:
@@ -448,7 +467,7 @@ def _enqueue_outbox_message(
         payload_json=json.dumps(payload, ensure_ascii=False),
         state="queued",
         retry_count=0,
-        next_retry_at=_as_naive_utc(_utc_now()),
+        next_retry_at=_as_naive_utc(next_retry_at or _utc_now()),
         last_error="",
     )
     db.add(item)
@@ -761,7 +780,9 @@ async def queue_only_send_text(
     text: str,
     source: str,
     link_mid: str | None = None,
+    scheduled_for: datetime | None = None,
 ) -> None:
+    next_retry_at = _as_naive_utc(scheduled_for or _utc_now())
     msg = _store_chat_message(
         db,
         conversation_id=conversation_id,
@@ -772,7 +793,7 @@ async def queue_only_send_text(
         delivery_state="queued",
         delivery_error="",
         delivery_retry_count=0,
-        delivery_next_retry_at=_as_naive_utc(_utc_now()),
+        delivery_next_retry_at=next_retry_at,
     )
     _enqueue_outbox_message(
         db,
@@ -782,6 +803,43 @@ async def queue_only_send_text(
         target_user_id=target_user_id,
         operation="send_text",
         payload={"text": text},
+        next_retry_at=next_retry_at,
+    )
+
+
+async def queue_only_send_photo(
+    db: Session,
+    *,
+    conversation_id: int,
+    target_chat_id: str,
+    target_user_id: str | None = None,
+    photo_url: str,
+    caption: str,
+    source: str,
+    scheduled_for: datetime | None = None,
+) -> None:
+    next_retry_at = _as_naive_utc(scheduled_for or _utc_now())
+    msg = _store_chat_message(
+        db,
+        conversation_id=conversation_id,
+        direction="bot",
+        source=source,
+        text=caption,
+        image_url=photo_url,
+        delivery_state="queued",
+        delivery_error="",
+        delivery_retry_count=0,
+        delivery_next_retry_at=next_retry_at,
+    )
+    _enqueue_outbox_message(
+        db,
+        conversation_id=conversation_id,
+        chat_message_id=msg.id,
+        target_chat_id=target_chat_id,
+        target_user_id=target_user_id,
+        operation="send_photo",
+        payload={"photo_url": photo_url, "caption": caption},
+        next_retry_at=next_retry_at,
     )
 
 
@@ -2131,35 +2189,62 @@ async def send_admin_chat_message(
     text: str,
     image_path: str | None,
     workspace_id: int | None = None,
+    schedule_at_iso: str = "",
 ) -> bool:
     conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
     if conversation is None:
         return False
+    scheduled_for = _parse_schedule_at_iso(schedule_at_iso)
     sent_any = False
 
     if text:
-        ok = await enqueue_and_process_send_text(
-            db,
-            conversation_id=conversation_id,
-            target_chat_id=conversation.chat_id,
-            target_user_id=conversation.customer_account_id,
-            text=text,
-            source="bot_system",
-        )
+        if scheduled_for:
+            await queue_only_send_text(
+                db,
+                conversation_id=conversation_id,
+                target_chat_id=conversation.chat_id,
+                target_user_id=conversation.customer_account_id,
+                text=text,
+                source="bot_system",
+                scheduled_for=scheduled_for,
+            )
+            ok = True
+        else:
+            ok = await enqueue_and_process_send_text(
+                db,
+                conversation_id=conversation_id,
+                target_chat_id=conversation.chat_id,
+                target_user_id=conversation.customer_account_id,
+                text=text,
+                source="bot_system",
+            )
         if ok:
             sent_any = True
 
     if image_path:
         image_url = f"{app_settings.public_base_url.rstrip('/')}{image_path}"
-        ok = await enqueue_and_process_send_photo(
-            db,
-            conversation_id=conversation_id,
-            target_chat_id=conversation.chat_id,
-            target_user_id=conversation.customer_account_id,
-            photo_url=image_url,
-            caption="Изображение от оператора",
-            source="bot_system",
-        )
+        if scheduled_for:
+            await queue_only_send_photo(
+                db,
+                conversation_id=conversation_id,
+                target_chat_id=conversation.chat_id,
+                target_user_id=conversation.customer_account_id,
+                photo_url=image_url,
+                caption="Изображение от оператора",
+                source="bot_system",
+                scheduled_for=scheduled_for,
+            )
+            ok = True
+        else:
+            ok = await enqueue_and_process_send_photo(
+                db,
+                conversation_id=conversation_id,
+                target_chat_id=conversation.chat_id,
+                target_user_id=conversation.customer_account_id,
+                photo_url=image_url,
+                caption="Изображение от оператора",
+                source="bot_system",
+            )
         if ok:
             sent_any = True
 
