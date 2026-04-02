@@ -163,7 +163,6 @@ def _superadmin_dashboard_snapshot(db: Session) -> dict:
     inactive = sum(1 for ws in workspaces if not ws.is_active)
     roles = {
         "superadmin": sum(1 for u in users if u.role == "superadmin"),
-        "owner": sum(1 for u in users if u.role == "owner"),
         "admin": sum(1 for u in users if u.role == "admin"),
         "manager": sum(1 for u in users if u.role == "manager"),
     }
@@ -227,10 +226,7 @@ def _build_superadmin_context(
 
     workspace_rows: list[dict] = []
     for ws in workspaces:
-        owner = next(
-            (u for u in users if u.workspace_id == ws.id and u.role in {"owner", "admin"}),
-            None,
-        )
+        owner = next((u for u in users if u.workspace_id == ws.id and u.role == "admin"), None)
         sub = subs.get(ws.id) or get_or_create_subscription(db, workspace_id=ws.id)
         m = workspace_metrics.get(ws.id, {})
         status = "suspended" if ws.is_suspended else ("inactive" if not ws.is_active else "active")
@@ -2985,7 +2981,6 @@ def app_superadmin_system_page(
 def app_superadmin_update_user_role(
     request: Request,
     user_id: int,
-    role: str = Form("manager"),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -2996,26 +2991,8 @@ def app_superadmin_update_user_role(
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
     _require_superadmin(current_user)
-    user = db.query(ServiceUser).filter(ServiceUser.id == user_id).first()
-    if user is None:
-        return RedirectResponse(url="/app/superadmin/users", status_code=302)
-    allowed = {"owner", "admin", "manager"}
-    normalized = (role or "").strip().lower()
-    if normalized not in allowed:
-        normalized = "manager"
-    user.role = normalized
-    db.add(user)
-    db.add(
-        AuditLog(
-            workspace_id=user.workspace_id,
-            actor_user_id=current_user.id,
-            action="user_role_updated",
-            object_type="service_user",
-            object_id=str(user.id),
-            details_json=f'{{"role":"{normalized}"}}',
-        )
-    )
-    db.commit()
+    # Role editing is disabled by business rules.
+    _ = (request, user_id, db)
     return RedirectResponse(url="/app/superadmin/users", status_code=302)
 
 
@@ -3035,6 +3012,8 @@ def app_superadmin_toggle_user_block(
     _require_superadmin(current_user)
     user = db.query(ServiceUser).filter(ServiceUser.id == user_id).first()
     if user is None:
+        return RedirectResponse(url="/app/superadmin/users", status_code=302)
+    if user.role == "superadmin":
         return RedirectResponse(url="/app/superadmin/users", status_code=302)
     user.is_blocked = not bool(user.is_blocked)
     if user.is_blocked:
@@ -3070,6 +3049,8 @@ def app_superadmin_revoke_user_sessions(
     _require_superadmin(current_user)
     user = db.query(ServiceUser).filter(ServiceUser.id == user_id).first()
     if user is None:
+        return RedirectResponse(url="/app/superadmin/users", status_code=302)
+    if user.role == "superadmin":
         return RedirectResponse(url="/app/superadmin/users", status_code=302)
     revoked = revoke_user_sessions(db, user_id=user_id)
     db.add(

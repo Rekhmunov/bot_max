@@ -82,6 +82,14 @@ def run() -> None:
         )
         assert first_register.status_code in (302, 303)
         with SessionLocal() as db:
+            created_user = (
+                db.query(ServiceUser)
+                .filter(ServiceUser.username == f"dupe_{orphan_seed}@example.com")
+                .first()
+            )
+            assert created_user is not None
+            assert created_user.role == "admin"
+        with SessionLocal() as db:
             workspace_count_before = db.query(Workspace).count()
             user_count_before = db.query(ServiceUser).count()
         second_register = client.post(

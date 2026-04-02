@@ -91,7 +91,7 @@ def create_service_user(
         raise ValueError("username_exists")
     user = ServiceUser(
         workspace_id=workspace_id,
-        role=(role or "owner").strip().lower(),
+        role=(role or "admin").strip().lower(),
         username=normalized,
         password_hash=hash_password(password.strip()),
         display_name=(display_name or "").strip(),
@@ -129,7 +129,7 @@ def create_workspace_with_owner(
         is_suspended=False,
     )
     owner = ServiceUser(
-        role="owner",
+        role="admin",
         username=normalized,
         password_hash=hash_password(password.strip()),
         display_name=(display_name or "").strip(),

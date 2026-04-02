@@ -191,6 +191,16 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(text("ALTER TABLE service_users ADD COLUMN email_verified_at DATETIME"))
             if "email_verification_sent_at" not in service_user_columns:
                 conn.execute(text("ALTER TABLE service_users ADD COLUMN email_verification_sent_at DATETIME"))
+            # Role model migration:
+            # - keep only one owner (superadmin with no workspace)
+            # - all workspace-bound owners become admins
+            conn.execute(
+                text(
+                    "UPDATE service_users "
+                    "SET role = 'admin' "
+                    "WHERE role = 'owner' AND workspace_id IS NOT NULL"
+                )
+            )
 
         if "intro_steps" in table_names:
             intro_columns = {col["name"] for col in inspector.get_columns("intro_steps")}

@@ -389,24 +389,20 @@
                   </td>
                   <td>{{ user.last_login_at or "-" }}</td>
                   <td>
-                    <div class="row-actions">
-                      <form method="post" action="/app/superadmin/users/{{ user.id }}/role">
-                        <select name="role">
-                          {% for code, title in [("owner","Владелец"), ("admin","Администратор"), ("manager","Менеджер")] %}
-                            <option value="{{ code }}" {% if user.role == code %}selected{% endif %}>{{ title }}</option>
-                          {% endfor %}
-                        </select>
-                        <button class="btn" type="submit">Применить роль</button>
-                      </form>
-                      <form method="post" action="/app/superadmin/users/{{ user.id }}/toggle-block">
-                        <button class="btn {% if user.is_blocked %}primary{% else %}danger{% endif %}" type="submit">
-                          {% if user.is_blocked %}Разблокировать{% else %}Заблокировать{% endif %}
-                        </button>
-                      </form>
-                      <form method="post" action="/app/superadmin/users/{{ user.id }}/revoke-sessions">
-                        <button class="btn" type="submit">Сбросить сессии</button>
-                      </form>
-                    </div>
+                    {% if user.role == "superadmin" %}
+                      <span class="muted">Недоступно для владельца (суперадмина)</span>
+                    {% else %}
+                      <div class="row-actions">
+                        <form method="post" action="/app/superadmin/users/{{ user.id }}/toggle-block">
+                          <button class="btn {% if user.is_blocked %}primary{% else %}danger{% endif %}" type="submit">
+                            {% if user.is_blocked %}Разблокировать{% else %}Заблокировать{% endif %}
+                          </button>
+                        </form>
+                        <form method="post" action="/app/superadmin/users/{{ user.id }}/revoke-sessions">
+                          <button class="btn" type="submit">Сбросить сессии</button>
+                        </form>
+                      </div>
+                    {% endif %}
                   </td>
                 </tr>
               {% endfor %}
