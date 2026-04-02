@@ -735,6 +735,58 @@ def _workspace_id_for_user(user: ServiceUser | None) -> int:
     return int(user.workspace_id or DEFAULT_WORKSPACE_ID)
 
 
+def _manager_ids_from_settings_row(settings_row: BotSettings | None) -> set[str]:
+    if settings_row is None:
+        return set()
+    return {item.strip() for item in _parse_manager_ids(settings_row.manager_account_id) if item.strip()}
+
+
+def _resolve_workspace_id_from_event(db: Session, event: MaxWebhookEvent) -> int:
+    sender_id = (event.sender_id or "").strip()
+    chat_id = (event.chat_id or "").strip()
+    if sender_id:
+        manager_row = (
+            db.query(ServiceUser.workspace_id)
+            .filter(
+                ServiceUser.role == "manager",
+                ServiceUser.max_account_id == sender_id,
+            )
+            .first()
+        )
+        if manager_row and manager_row[0]:
+            return int(manager_row[0])
+        # Fallback for manager IDs configured in settings before/without local manager row.
+        for settings_row in db.query(BotSettings).order_by(BotSettings.id.asc()).all():
+            if sender_id in _manager_ids_from_settings_row(settings_row):
+                return int(settings_row.workspace_id or DEFAULT_WORKSPACE_ID)
+    if chat_id:
+        conversation_row = (
+            db.query(Conversation.workspace_id)
+            .filter(Conversation.chat_id == chat_id)
+            .first()
+        )
+        if conversation_row and conversation_row[0]:
+            return int(conversation_row[0])
+        profile_by_chat = (
+            db.query(CustomerProfile.workspace_id)
+            .filter(CustomerProfile.source_chat_id == chat_id)
+            .order_by(CustomerProfile.id.desc())
+            .first()
+        )
+        if profile_by_chat and profile_by_chat[0]:
+            return int(profile_by_chat[0])
+    if sender_id:
+        profile_row = (
+            db.query(CustomerProfile.workspace_id)
+            .filter(CustomerProfile.customer_account_id == sender_id)
+            .order_by(CustomerProfile.id.desc())
+            .first()
+        )
+        if profile_row and profile_row[0]:
+            return int(profile_row[0])
+    return DEFAULT_WORKSPACE_ID
+
+
 def _sha256(value: str) -> str:
     return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
 
@@ -4899,16 +4951,18 @@ async def max_webhook(
     if event.update_type and event.update_type not in accepted_update_types:
         return {"ok": True, "ignored": event.update_type}
 
-    settings_db = get_or_create_settings(db)
+    workspace_id = _resolve_workspace_id_from_event(db, event)
+    settings_db = get_or_create_settings(db, workspace_id=workspace_id)
     max_client = MaxClient()
 
     if event.sender_id == settings.max_bot_account_id:
         return {"ok": True}
 
-    if settings_db.admin_account_id and event.sender_id == settings_db.admin_account_id:
+    sender_id = (event.sender_id or "").strip()
+    if settings_db.admin_account_id and sender_id == (settings_db.admin_account_id or "").strip():
         return {"ok": True, "ignored": "admin"}
 
-    if event.sender_id == settings_db.manager_account_id:
+    if sender_id in _manager_ids_from_settings_row(settings_db):
         return await handle_manager_message(
             db=db,
             client=max_client,

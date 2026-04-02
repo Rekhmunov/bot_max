@@ -1524,7 +1524,8 @@ async def handle_customer_event(
             await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "prestart"}
 
-    if not meta.start_prompt_sent and (is_bot_started or is_message_event):
+    # Strict flow: Start prompt is unlocked only by explicit bot_started event.
+    if not meta.start_prompt_sent and is_bot_started:
         meta.start_prompt_sent = True
         db.add(meta)
         db.commit()
