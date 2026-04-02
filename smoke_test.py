@@ -671,6 +671,8 @@ def run() -> None:
         assert "Менеджеры: статусы подключения" in send_manager_link.text
         assert "Ожидает подключения" in send_manager_link.text
         assert "Ссылка не отправлялась" in send_manager_link.text
+        assert "Быстрые ответы: <b>0</b> / <b>10</b>" in send_manager_link.text
+        assert "Папки: <b>0</b> / <b>10</b>" in send_manager_link.text
         with SessionLocal() as db:
             manager_90000 = (
                 db.query(ServiceUser)
@@ -726,6 +728,16 @@ def run() -> None:
             invite_flow_settings = get_or_create_settings(db, workspace_id=invite_flow_workspace_id)
             current_ids = [item.strip() for item in (invite_flow_settings.manager_account_id or "").split(",") if item.strip()]
             assert current_ids == ["90000"]
+
+        # Usage counters in "Тариф и лимиты" must reflect quick reply consumption.
+        add_quick_reply_for_invite_ws = client.post(
+            "/app/quick-replies",
+            data={"command": "faq", "title": "FAQ", "text": "Ответ"},
+            cookies=invite_flow_cookies,
+            follow_redirects=True,
+        )
+        assert add_quick_reply_for_invite_ws.status_code == 200
+        assert "Быстрые ответы: <b>1</b> / <b>10</b>" in add_quick_reply_for_invite_ws.text
 
         # App settings must also enforce manager IDs limit on plain save.
         app_limit_email = f"limit_{uuid4().hex[:8]}@example.com"

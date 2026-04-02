@@ -522,13 +522,32 @@
       <div class="hint">Лимит быстрых ответов: <b>{{ subscription.quick_replies_limit }}</b></div>
       <div class="hint">Лимит папок: <b>{{ subscription.folders_limit }}</b></div>
       {% if tenant_metrics %}
-        {% if ui_mode == "app" and manager_status_summary is defined %}
-          <div class="hint">Активных менеджеров: <b>{{ manager_status_summary.connected or 0 }}</b></div>
-        {% else %}
-          <div class="hint">Активных менеджеров: <b>{{ tenant_metrics.managers_active }}</b></div>
+        {% set usage_remaining_safe = usage_remaining if usage_remaining is defined else {
+          "quick_replies": "—",
+          "folders": "—",
+          "dialogs": "—",
+          "messages_month": "—",
+          "managers": "—"
+        } %}
+        {% set connected_managers_total = (manager_status_summary.connected or 0) if (ui_mode == "app" and manager_status_summary is defined) else tenant_metrics.managers_active %}
+        {% set pending_managers_total = (manager_status_summary.pending or 0) if (ui_mode == "app" and manager_status_summary is defined) else 0 %}
+        <div class="hint">Менеджеры (подключено): <b>{{ connected_managers_total }}</b> / <b>{{ subscription.manager_limit }}</b></div>
+        {% if pending_managers_total %}
+          <div class="hint">Менеджеры (ожидают подключения): <b>{{ pending_managers_total }}</b></div>
         {% endif %}
-        <div class="hint">Диалогов: <b>{{ tenant_metrics.dialogs_total }}</b></div>
-        <div class="hint">Сообщений в текущем месяце: <b>{{ tenant_metrics.messages_month }}</b></div>
+        <div class="hint">Диалоги: <b>{{ tenant_metrics.dialogs_total }}</b> / <b>{{ subscription.dialogs_limit }}</b></div>
+        <div class="hint">Сообщения в текущем месяце: <b>{{ tenant_metrics.messages_month }}</b> / <b>{{ subscription.messages_per_month_limit }}</b></div>
+        <div class="hint">Быстрые ответы: <b>{{ tenant_metrics.quick_replies_total }}</b> / <b>{{ subscription.quick_replies_limit }}</b></div>
+        <div class="hint">Папки: <b>{{ tenant_metrics.folders_total }}</b> / <b>{{ subscription.folders_limit }}</b></div>
+        <div class="hint">Осталось быстрых ответов: <b>{{ usage_remaining_safe.quick_replies }}</b></div>
+        <div class="hint">Осталось папок: <b>{{ usage_remaining_safe.folders }}</b></div>
+        <div class="hint">Осталось диалогов: <b>{{ usage_remaining_safe.dialogs }}</b></div>
+        <div class="hint">Осталось сообщений/мес: <b>{{ usage_remaining_safe.messages_month }}</b></div>
+        {% if ui_mode == "app" and manager_status_summary is defined %}
+          <div class="hint">Осталось слотов менеджеров (подключенных): <b>{{ usage_remaining_safe.managers }}</b></div>
+        {% else %}
+          <div class="hint">Осталось слотов менеджеров: <b>{{ usage_remaining_safe.managers }}</b></div>
+        {% endif %}
       {% endif %}
       {% if tenant_alerts %}
         <div class="hint" style="margin-top:8px;"><b>Алерты:</b></div>

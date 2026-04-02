@@ -381,6 +381,44 @@ def _collect_manager_status_rows(
     return status_rows, summary
 
 
+def _build_usage_context(
+    *,
+    subscription: Subscription | None,
+    tenant_metrics: dict[str, int] | None,
+    manager_status_summary: dict[str, int] | None,
+) -> tuple[dict[str, int], dict[str, int], dict[str, str]]:
+    sub = subscription
+    metrics = tenant_metrics or {}
+    manager_summary = manager_status_summary or {}
+    limit_managers = max(0, int(sub.manager_limit or 0)) if sub is not None else 0
+    limit_dialogs = max(0, int(sub.dialogs_limit or 0)) if sub is not None else 0
+    limit_messages = max(0, int(sub.messages_per_month_limit or 0)) if sub is not None else 0
+    limit_quick = max(0, int(getattr(sub, "quick_replies_limit", 0) or 0)) if sub is not None else 0
+    limit_folders = max(0, int(getattr(sub, "folders_limit", 0) or 0)) if sub is not None else 0
+    usage_limits = {
+        "managers": limit_managers,
+        "dialogs": limit_dialogs,
+        "messages_month": limit_messages,
+        "quick_replies": limit_quick,
+        "folders": limit_folders,
+    }
+    usage_used = {
+        "managers": max(0, int(manager_summary.get("connected", metrics.get("managers_active", 0)) or 0)),
+        "dialogs": max(0, int(metrics.get("dialogs_total", 0) or 0)),
+        "messages_month": max(0, int(metrics.get("messages_month", 0) or 0)),
+        "quick_replies": max(0, int(metrics.get("quick_replies_total", 0) or 0)),
+        "folders": max(0, int(metrics.get("folders_total", 0) or 0)),
+    }
+    usage_remaining: dict[str, str] = {}
+    for key, limit_value in usage_limits.items():
+        used_value = usage_used.get(key, 0)
+        if limit_value >= 1_000_000_000:
+            usage_remaining[key] = "∞"
+        else:
+            usage_remaining[key] = str(max(0, int(limit_value) - int(used_value)))
+    return usage_limits, usage_used, usage_remaining
+
+
 def _manager_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
     if (sub.plan_code or "").strip().lower() == "unlimited":
@@ -1287,6 +1325,12 @@ def _render_app_settings_page(
     if not current_user.email_verified and current_user.email_verification_sent_at:
         elapsed = (datetime.now(UTC).replace(tzinfo=None) - current_user.email_verification_sent_at).total_seconds()
         can_resend_verification = elapsed >= cooldown_seconds
+    usage_limits, usage_used, usage_remaining = _build_usage_context(
+        subscription=sub,
+        tenant_metrics=tenant_metrics,
+        manager_status_summary=manager_status_summary,
+    )
+
     return templates.TemplateResponse(
         request,
         "admin.html",
@@ -1337,6 +1381,9 @@ def _render_app_settings_page(
             "manager_remove_action": "/app/settings/remove-manager",
             "manager_status_rows": manager_status_rows,
             "manager_status_summary": manager_status_summary,
+            "usage_limits": usage_limits,
+            "usage_used": usage_used,
+            "usage_remaining": usage_remaining,
         },
     )
 
@@ -1470,6 +1517,12 @@ def admin_page(
     workspace_id = DEFAULT_WORKSPACE_ID
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
+    usage_limits, usage_used, usage_remaining = _build_usage_context(
+        subscription=sub,
+        tenant_metrics=tenant_metrics,
+        manager_status_summary=None,
+    )
     replies = (
         db.query(QuickReply)
         .filter(QuickReply.workspace_id == workspace_id)
@@ -1496,6 +1549,11 @@ def admin_page(
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
+            "subscription": sub,
+            "tenant_metrics": tenant_metrics,
+            "usage_limits": usage_limits,
+            "usage_used": usage_used,
+            "usage_remaining": usage_remaining,
             "manager_id_rows": _parse_manager_ids(bot_settings.manager_account_id),
             "manager_ids_limit": int(sub.manager_limit or 0),
             "manager_invite_send_action": "/admin/settings/send-manager-link",
@@ -1540,6 +1598,7 @@ async def update_settings(
     workspace_id = DEFAULT_WORKSPACE_ID
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
     manager_limit_value = max(1, int(sub.manager_limit or 0))
     if len(manager_ids) > manager_limit_value:
         replies = (
@@ -1565,6 +1624,8 @@ async def update_settings(
                 "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
                 "chat_metrics": chat_metrics,
                 "delivery_metrics": delivery_metrics,
+                "subscription": sub,
+                "tenant_metrics": tenant_metrics,
                 "manager_id_rows": manager_ids,
                 "manager_ids_limit": manager_limit_value,
                 "manager_invite_send_action": "/admin/settings/send-manager-link",
@@ -1609,6 +1670,7 @@ async def update_settings(
     )
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
+    tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
     return templates.TemplateResponse(
         request,
         "admin.html",
@@ -1627,6 +1689,8 @@ async def update_settings(
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
+            "subscription": sub,
+            "tenant_metrics": tenant_metrics,
             "manager_id_rows": manager_ids,
             "manager_ids_limit": manager_limit_value,
             "manager_invite_send_action": "/admin/settings/send-manager-link",
@@ -1657,6 +1721,8 @@ async def admin_send_manager_link(
         return RedirectResponse(url="/admin/login", status_code=302)
     form_data = await request.form()
     workspace_id = DEFAULT_WORKSPACE_ID
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
     target_manager_id = str(form_data.get("send_manager_id", "") or "").strip()
 
     ok, msg = await _send_manager_invite_link_to_max(
@@ -1688,6 +1754,8 @@ async def admin_send_manager_link(
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
             "chat_metrics": get_chat_metrics(db, workspace_id=workspace_id),
             "delivery_metrics": get_delivery_metrics(db, workspace_id=workspace_id),
+            "subscription": sub,
+            "tenant_metrics": tenant_metrics,
             "manager_id_rows": _parse_manager_ids(
                 _normalize_manager_ids(get_or_create_settings(db, workspace_id=workspace_id).manager_account_id)
             ),
@@ -1794,6 +1862,7 @@ async def create_quick_reply(
     if _admin is None:
         return RedirectResponse(url="/admin/login", status_code=302)
     workspace_id = DEFAULT_WORKSPACE_ID
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
 
     normalized = command.strip().lstrip("/")
     normalized = normalized.lower()
@@ -1817,6 +1886,7 @@ async def create_quick_reply(
         )
         chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
         delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
+        tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
         return templates.TemplateResponse(
             request,
             "admin.html",
@@ -1835,6 +1905,8 @@ async def create_quick_reply(
                 "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
                 "chat_metrics": chat_metrics,
                 "delivery_metrics": delivery_metrics,
+                "subscription": sub,
+                "tenant_metrics": tenant_metrics,
                 "manager_status_rows": [],
                 "manager_status_summary": {
                     "connected": 0,
@@ -1877,6 +1949,7 @@ async def create_quick_reply(
     )
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
+    tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
     return templates.TemplateResponse(
         request,
         "admin.html",
@@ -1895,6 +1968,8 @@ async def create_quick_reply(
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
+            "subscription": sub,
+            "tenant_metrics": tenant_metrics,
             "manager_status_rows": [],
             "manager_status_summary": {
                 "connected": 0,
