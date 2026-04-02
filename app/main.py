@@ -17,7 +17,7 @@ from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, 
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
-from sqlalchemy import func
+from sqlalchemy import func, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from itsdangerous import URLSafeTimedSerializer, BadData, SignatureExpired
@@ -273,6 +273,8 @@ async def _send_manager_invite_link_to_max(
     manager_id_clean = (manager_id or "").strip()
     if not manager_id_clean:
         return False, "Укажите ID менеджера."
+    if not manager_id_clean.isdigit():
+        return False, "Указан некорректный ID менеджера в Max."
 
     ok_ws, _ = ensure_workspace_limits_and_state(db, workspace_id=workspace_id)
     if not ok_ws:
@@ -304,6 +306,11 @@ async def _send_manager_invite_link_to_max(
     send_result = await MaxClient().send_text_to_user(user_id=manager_id_clean, text=message_text)
     sent_ok = bool(send_result.get("success", True) or send_result.get("message") or send_result.get("mock"))
     if not sent_ok:
+        status_code = send_result.get("status_code")
+        if status_code == 404:
+            return False, "Указан неверный ID менеджера в Max."
+        if status_code == 400:
+            return False, "Не удалось отправить ссылку: проверьте корректность ID менеджера."
         return False, "Не удалось отправить ссылку в Max."
 
     db.add(
@@ -318,6 +325,51 @@ async def _send_manager_invite_link_to_max(
     )
     db.commit()
     return True, f"Ссылка отправлена менеджеру {manager_id_clean}."
+
+
+def _upsert_template_values_single_commit(
+    db: Session,
+    *,
+    workspace_id: int,
+    prestart_message: str,
+    start_message: str,
+    after_phone_message: str,
+) -> None:
+    # Some legacy SQLite snapshots still have unique(template_key) without workspace scope.
+    # Update existing rows first and insert only missing rows to avoid insertmany conflicts.
+    values = {
+        TEMPLATE_PRESTART: (prestart_message or "").strip(),
+        TEMPLATE_START: (start_message or "").strip(),
+        TEMPLATE_AFTER_PHONE: (after_phone_message or "").strip(),
+    }
+    existing_rows = (
+        db.query(MessageTemplate)
+        .filter(
+            MessageTemplate.workspace_id == workspace_id,
+            MessageTemplate.template_key.in_(list(values.keys())),
+        )
+        .all()
+    )
+    existing_by_key = {row.template_key: row for row in existing_rows}
+    for key, text_value in values.items():
+        row = existing_by_key.get(key)
+        if row is not None:
+            row.template_text = text_value
+            db.add(row)
+            continue
+        db.add(
+            MessageTemplate(
+                workspace_id=workspace_id,
+                template_key=key,
+                template_text=text_value,
+            )
+        )
+
+
+def _drop_legacy_template_unique_index(db: Session) -> None:
+    # Old single-tenant snapshots may keep global unique(template_key) index.
+    # Drop it in runtime to avoid 500 during /app/settings save for new workspaces.
+    db.execute(text("DROP INDEX IF EXISTS ix_message_templates_template_key"))
 
 
 def _superadmin_dashboard_snapshot(db: Session) -> dict:
@@ -3056,9 +3108,14 @@ async def app_update_settings(
         mode = "round_robin"
     settings_row.routing_mode = mode
     db.add(settings_row)
-    set_template_text(db, TEMPLATE_PRESTART, prestart_message, workspace_id=workspace_id)
-    set_template_text(db, TEMPLATE_START, start_message, workspace_id=workspace_id)
-    set_template_text(db, TEMPLATE_AFTER_PHONE, after_phone_message, workspace_id=workspace_id)
+    _drop_legacy_template_unique_index(db)
+    _upsert_template_values_single_commit(
+        db,
+        workspace_id=workspace_id,
+        prestart_message=prestart_message,
+        start_message=start_message,
+        after_phone_message=after_phone_message,
+    )
     db.commit()
     return RedirectResponse(url="/app/settings", status_code=302)
 
@@ -3081,8 +3138,6 @@ async def app_send_manager_link(
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     form_data = await request.form()
     manager_ids = _extract_manager_ids_from_form(form_data)
-    if not manager_ids:
-        manager_ids = _parse_manager_ids(_normalize_manager_ids(manager_account_id))
     manager_ids_csv = _normalize_manager_ids(",".join(manager_ids))
     target_manager_id = (send_manager_id or "").strip()
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)

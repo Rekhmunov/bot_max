@@ -259,6 +259,13 @@ def _ensure_lightweight_migrations() -> None:
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tenant_alerts_severity ON tenant_alerts (severity)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tenant_alerts_is_resolved ON tenant_alerts (is_resolved)"))
 
+        # Drop legacy global unique indexes left from single-tenant schema.
+        # They conflict with new workspace-scoped unique constraints.
+        conn.execute(text("DROP INDEX IF EXISTS ix_quick_replies_command"))
+        conn.execute(text("DROP INDEX IF EXISTS ix_message_templates_template_key"))
+        conn.execute(text("DROP INDEX IF EXISTS ix_chat_folders_name"))
+        conn.execute(text("DROP INDEX IF EXISTS ix_customer_profiles_customer_account_id"))
+
         # Workspace-scoped uniqueness for fresh deployments.
         conn.execute(
             text(
