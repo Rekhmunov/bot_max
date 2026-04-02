@@ -254,6 +254,13 @@
     {% if error %}
       <div class="notice error">{{ error }}</div>
     {% endif %}
+    {% if ui_mode == "app" %}
+      <section class="card" style="margin-bottom:16px;">
+        <h2>Подключение покупателей к общему боту Max</h2>
+        <div class="hint"><b>Ссылка на общий бот Max для покупателей:</b> <code>{{ customer_bot_link or "—" }}</code></div>
+        <div class="hint" style="margin-top:6px;"><b>Как определяется клиент (tenant):</b> система автоматически определяет рабочее пространство по данным события (ID менеджера, чат/профиль покупателя). Для каждого клиента отдельный бот не создается — используется один общий бот Max.</div>
+      </section>
+    {% endif %}
 
     <div class="grid">
       <section class="card">
@@ -467,11 +474,6 @@
       <h2>Тариф и лимиты</h2>
       <div class="hint">План: <b>{{ subscription.plan_code }}</b></div>
       <div class="hint">Статус: <b>{{ subscription.status }}</b></div>
-      <div class="hint">Лимит менеджеров: <b>{{ subscription.manager_limit }}</b></div>
-      <div class="hint">Лимит диалогов: <b>{{ subscription.dialogs_limit }}</b></div>
-      <div class="hint">Лимит сообщений/мес: <b>{{ subscription.messages_per_month_limit }}</b></div>
-      <div class="hint">Лимит быстрых ответов: <b>{{ subscription.quick_replies_limit }}</b></div>
-      <div class="hint">Лимит папок: <b>{{ subscription.folders_limit }}</b></div>
       {% if tenant_metrics %}
         {% set usage_remaining_safe = usage_remaining if usage_remaining is defined else {
           "quick_replies": "—",
@@ -499,21 +501,6 @@
         {% else %}
           <div class="hint">Осталось слотов менеджеров: <b>{{ usage_remaining_safe.managers }}</b></div>
         {% endif %}
-      {% endif %}
-      {% if tenant_alerts %}
-        <div class="hint" style="margin-top:8px;"><b>Алерты:</b></div>
-        {% for alert in tenant_alerts %}
-          {% set severity_label = "Критично" if alert.severity == "critical" else ("Предупреждение" if alert.severity == "warning" else alert.severity) %}
-          {% set alert_label = {
-            "managers_limit": "Лимит менеджеров",
-            "dialogs_limit": "Лимит диалогов",
-            "messages_month_limit": "Лимит сообщений в месяц",
-            "quick_replies_limit": "Лимит быстрых ответов",
-            "folders_limit": "Лимит папок"
-          }.get(alert.alert_key, alert.alert_key) %}
-          {% set alert_metric = alert.message.split(": ", 1)[1] if ": " in alert.message else alert.message %}
-          <div class="hint">- [{{ severity_label }}] {{ alert_label }}: {{ alert_metric }}</div>
-        {% endfor %}
       {% endif %}
     </section>
     {% endif %}

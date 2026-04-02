@@ -429,6 +429,13 @@ def _build_usage_context(
     return usage_limits, usage_used, usage_remaining
 
 
+def _manager_routing_mode_label(mode: str) -> str:
+    normalized = (mode or "round_robin").strip().lower()
+    if normalized == "random":
+        return "Случайно"
+    return "По очереди"
+
+
 def _localized_alert_entry(alert: TenantAlert) -> dict[str, str]:
     severity_labels = {
         "critical": "Критично",
@@ -1401,11 +1408,7 @@ def _render_app_settings_page(
         workspace_id=workspace_id,
         manager_ids=manager_id_rows,
     )
-    note = (
-        message
-        or f"Workspace: {workspace_id}. Подключено: {manager_status_summary['connected']}, "
-        f"ожидает подключения: {manager_status_summary['pending']}"
-    )
+    note = message or ""
     if not ok:
         note += f" · Ограничение: {reason}"
     email_status = "подтверждена" if bool(current_user.email_verified) else "не подтверждена"
@@ -1418,6 +1421,21 @@ def _render_app_settings_page(
         subscription=sub,
         tenant_metrics=tenant_metrics,
         manager_status_summary=manager_status_summary,
+    )
+    bot_profile_url = ""
+    bot_profile_label = ""
+    bot_account_id = (settings.max_bot_account_id or "").strip()
+    if bot_account_id:
+        if bot_account_id.isdigit():
+            bot_profile_url = f"https://max.ru/{bot_account_id}"
+        else:
+            bot_profile_url = f"https://max.ru/{bot_account_id.lstrip('@')}"
+        bot_profile_label = bot_account_id
+    tenant_resolution_hint = (
+        "Один общий бот Max используется для всех клиентов. "
+        "Система автоматически определяет клиента по входящему событию "
+        "(sender_id менеджера, chat_id, профили/история) и направляет диалоги "
+        "в нужный workspace."
     )
 
     return templates.TemplateResponse(
@@ -1471,6 +1489,10 @@ def _render_app_settings_page(
             "usage_limits": usage_limits,
             "usage_used": usage_used,
             "usage_remaining": usage_remaining,
+            "bot_profile_url": bot_profile_url,
+            "bot_profile_label": bot_profile_label,
+            "tenant_resolution_hint": tenant_resolution_hint,
+            "routing_mode_label": _manager_routing_mode_label(bot_settings.routing_mode or "round_robin"),
         },
     )
 

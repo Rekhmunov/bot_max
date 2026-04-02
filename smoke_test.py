@@ -654,8 +654,10 @@ def run() -> None:
         settings_page = client.get("/app/settings", cookies=invite_flow_cookies, follow_redirects=False)
         assert settings_page.status_code == 200
         assert "Менеджеры: статусы подключения" in settings_page.text
-        assert "Быстрые ответы: <b>0</b> / <b>10</b>" in settings_page.text
-        assert "Папки: <b>0</b> / <b>10</b>" in settings_page.text
+        assert "Осталось быстрых ответов:" in settings_page.text
+        assert "Осталось папок:" in settings_page.text
+        assert "Ссылка на общий бот Max для покупателей" in settings_page.text
+        assert "Как определяется клиент (tenant)" in settings_page.text
         copy_manager_link = client.post(
             "/app/settings/copy-manager-link",
             data={
@@ -708,7 +710,7 @@ def run() -> None:
                 assert bool(removed_manager.is_active) is False
                 assert bool(removed_manager.is_blocked) is True
 
-        # Usage counters in "Тариф и лимиты" must reflect quick reply consumption.
+        # Remaining counters in "Тариф и лимиты" must reflect quick reply consumption.
         add_quick_reply_for_invite_ws = client.post(
             "/app/quick-replies",
             data={"command": "faq", "title": "FAQ", "text": "Ответ"},
@@ -716,7 +718,7 @@ def run() -> None:
             follow_redirects=True,
         )
         assert add_quick_reply_for_invite_ws.status_code == 200
-        assert "Быстрые ответы: <b>1</b> / <b>10</b>" in add_quick_reply_for_invite_ws.text
+        assert "Осталось быстрых ответов: <b>9</b>" in add_quick_reply_for_invite_ws.text
 
         # App settings must also enforce manager IDs limit on plain save.
         app_limit_email = f"limit_{uuid4().hex[:8]}@example.com"
@@ -758,6 +760,7 @@ def run() -> None:
         assert app_limit_save.status_code == 200
         # Alerts can be absent when no threshold is reached; just verify the block remains renderable.
         assert "Тариф и лимиты" in app_limit_save.text
+        assert "Workspace:" not in app_limit_save.text
 
         # Phone request toggle in app settings:
         # - unchecked: bot should not wait for contact after Start
