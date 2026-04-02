@@ -552,8 +552,29 @@
         <section class="card">
           <h2>Системные настройки</h2>
           <div class="muted">Базовые параметры работы платформы.</div>
+          <form class="inline-form" method="post" action="/app/superadmin/support-contacts" style="margin-top:12px;">
+            <label style="display:grid; gap:6px;">
+              <span class="muted">Email технического отдела</span>
+              <input
+                name="support_tech_email"
+                value="{{ support_contacts.tech_email }}"
+                placeholder="tech@company.ru"
+              />
+            </label>
+            <label style="display:grid; gap:6px;">
+              <span class="muted">Email финансового отдела</span>
+              <input
+                name="support_billing_email"
+                value="{{ support_contacts.billing_email }}"
+                placeholder="finance@company.ru"
+              />
+            </label>
+            <button class="btn primary" type="submit">Сохранить контакты</button>
+          </form>
           <table style="min-width: 0; width:auto; margin-top:10px;">
             <tbody>
+              <tr><th>Email техподдержки</th><td>{{ support_contacts.tech_email }}</td></tr>
+              <tr><th>Email финподдержки</th><td>{{ support_contacts.billing_email }}</td></tr>
               <tr><th>SMTP-сервер</th><td>{{ smtp.host }}</td></tr>
               <tr><th>SMTP-порт</th><td>{{ smtp.port }}</td></tr>
               <tr><th>Отправитель SMTP</th><td>{{ smtp.sender }}</td></tr>

@@ -71,6 +71,11 @@ def run() -> None:
         assert "Default Workspace" not in superadmin_workspaces.text
         assert "Открыть чаты клиента" not in superadmin_workspaces.text
 
+        superadmin_system = client.get("/app/superadmin/system", cookies=superadmin_cookies)
+        assert superadmin_system.status_code == 200
+        assert "Email технического отдела" in superadmin_system.text
+        assert "Email финансового отдела" in superadmin_system.text
+
         superadmin_users = client.get("/app/superadmin/users", cookies=superadmin_cookies)
         assert superadmin_users.status_code == 200
         assert "admin" in superadmin_users.text
@@ -111,6 +116,17 @@ def run() -> None:
         assert superadmin_settings_page.status_code == 403
         superadmin_managers_page = client.get("/app/managers", cookies=superadmin_cookies, follow_redirects=False)
         assert superadmin_managers_page.status_code == 403
+
+        update_support_contacts = client.post(
+            "/app/superadmin/support-contacts",
+            data={
+                "support_tech_email": "tech@example.com",
+                "support_billing_email": "billing@example.com",
+            },
+            cookies=superadmin_cookies,
+            follow_redirects=False,
+        )
+        assert update_support_contacts.status_code in (302, 303)
         delete_temp_user_resp = client.post(
             f"/app/superadmin/users/{delete_temp_user_id}/delete",
             cookies=superadmin_cookies,
@@ -145,7 +161,9 @@ def run() -> None:
             follow_redirects=True,
         )
         assert suspended_login.status_code == 200
-        assert "Неверный логин или пароль." in suspended_login.text
+        assert "Действия вашего профиля ограничены" in suspended_login.text
+        assert "tech@example.com" in suspended_login.text
+        assert "billing@example.com" in suspended_login.text
 
         # Workspace deletion from superadmin panel.
         delete_ws_email = f"deletews_{uuid4().hex[:8]}@example.com"
@@ -194,7 +212,7 @@ def run() -> None:
             follow_redirects=False,
         )
         assert blocked_login.status_code == 200
-        assert "Неверный логин или пароль." in blocked_login.text
+        assert "Действия вашего профиля ограничены" in blocked_login.text
 
         orphan_seed = uuid4().hex[:8]
         first_register = client.post(

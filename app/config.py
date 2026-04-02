@@ -46,6 +46,8 @@ class AppSettings(BaseSettings):
     smtp_timeout_seconds: int = 20
     email_verification_token_ttl_seconds: int = 24 * 60 * 60
     email_verification_resend_cooldown_seconds: int = 60
+    support_tech_email: str = ""
+    support_finance_email: str = ""
     billing_hook_secret: str = ""
     webhook_secret: str = ""
     default_grace_days: int = 7

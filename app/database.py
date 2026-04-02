@@ -207,6 +207,31 @@ def _ensure_lightweight_migrations() -> None:
                 )
             )
 
+        if "platform_settings" in table_names:
+            platform_cols = {col["name"] for col in inspector.get_columns("platform_settings")}
+            if "settings_key" in platform_cols and "settings_value" in platform_cols:
+                # Legacy key/value schema is incompatible with the new dedicated columns.
+                conn.execute(text("DROP TABLE platform_settings"))
+                conn.execute(
+                    text(
+                        "CREATE TABLE platform_settings ("
+                        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                        "technical_support_email VARCHAR(255) DEFAULT '', "
+                        "billing_support_email VARCHAR(255) DEFAULT '', "
+                        "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+                        "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                    )
+                )
+                platform_cols = {col["name"] for col in inspector.get_columns("platform_settings")}
+            if "technical_support_email" not in platform_cols:
+                conn.execute(
+                    text("ALTER TABLE platform_settings ADD COLUMN technical_support_email VARCHAR(255) DEFAULT ''")
+                )
+            if "billing_support_email" not in platform_cols:
+                conn.execute(
+                    text("ALTER TABLE platform_settings ADD COLUMN billing_support_email VARCHAR(255) DEFAULT ''")
+                )
+
         if "intro_steps" in table_names:
             intro_columns = {col["name"] for col in inspector.get_columns("intro_steps")}
             if "created_at" not in intro_columns:

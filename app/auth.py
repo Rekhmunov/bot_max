@@ -7,7 +7,7 @@ import os
 import secrets
 import struct
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from fastapi import Depends, HTTPException, Request, status
 from itsdangerous import BadData, SignatureExpired, URLSafeTimedSerializer
@@ -22,6 +22,12 @@ _MANAGER_INVITE_SALT = "manager-onboarding-link"
 _PASSWORD_SCHEME = "pbkdf2_sha256"
 _PASSWORD_ITERATIONS = 120_000
 _SERVICE_SESSION_COOKIE = "tenant_session"
+
+
+class ServiceSignInResult(TypedDict):
+    status: Literal["ok", "invalid_credentials", "workspace_suspended", "workspace_inactive", "blocked"]
+    user: ServiceUser | None
+    workspace: Workspace | None
 
 
 def validate_admin_credentials(username: str, password: str) -> bool:
@@ -196,26 +202,40 @@ def sign_in_service_user(
     username: str,
     password: str,
 ) -> ServiceUser | None:
+    result = sign_in_service_user_with_reason(db, username=username, password=password)
+    return result["user"] if result["status"] == "ok" else None
+
+
+def sign_in_service_user_with_reason(
+    db: Session,
+    *,
+    username: str,
+    password: str,
+) -> ServiceSignInResult:
     normalized = (username or "").strip().lower()
     if not normalized:
-        return None
+        return {"status": "invalid_credentials", "user": None, "workspace": None}
     user = (
         db.query(ServiceUser)
         .filter(ServiceUser.username == normalized, ServiceUser.is_active.is_(True))
         .first()
     )
     if user is None or user.is_blocked:
-        return None
+        return {"status": "invalid_credentials", "user": None, "workspace": None}
     if not verify_password(password=password, password_hash=user.password_hash):
-        return None
+        return {"status": "invalid_credentials", "user": None, "workspace": None}
     if user.role != "superadmin" and user.workspace_id:
         workspace = db.query(Workspace).filter(Workspace.id == user.workspace_id).first()
-        if workspace is None or not workspace.is_active or workspace.is_suspended:
-            return None
+        if workspace is None:
+            return {"status": "workspace_inactive", "user": None, "workspace": None}
+        if workspace.is_suspended:
+            return {"status": "workspace_suspended", "user": None, "workspace": workspace}
+        if not workspace.is_active:
+            return {"status": "workspace_inactive", "user": None, "workspace": workspace}
     user.last_login_at = _now()
     db.add(user)
     db.commit()
-    return user
+    return {"status": "ok", "user": user, "workspace": None}
 
 
 def revoke_user_sessions(db: Session, *, user_id: int) -> int:

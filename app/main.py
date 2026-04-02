@@ -39,6 +39,7 @@ from app.auth import (
     set_service_session_cookie,
     sign_in_admin,
     sign_in_service_user,
+    sign_in_service_user_with_reason,
     verify_manager_invite_token,
     verify_manager_mini_claims,
     verify_manager_mini_token,
@@ -89,6 +90,7 @@ from app.models import (
     MessageLog,
     MessageTemplate,
     OutboxMessage,
+    PlatformSettings,
     QuickReply,
     ServiceUser,
     Subscription,
@@ -357,6 +359,17 @@ def _build_superadmin_context(
         "rate_billing": settings.rate_limit_billing_per_minute,
         "force_https": "включен" if settings.force_https else "выключен",
     }
+    support_row = db.query(PlatformSettings).order_by(PlatformSettings.id.asc()).first()
+    support_contacts = {
+        "tech_email": (
+            (support_row.technical_support_email if support_row else "")
+            or (settings.support_tech_email or "").strip()
+        ),
+        "billing_email": (
+            (support_row.billing_support_email if support_row else "")
+            or (settings.support_finance_email or "").strip()
+        ),
+    }
 
     return {
         "request": request,
@@ -390,6 +403,7 @@ def _build_superadmin_context(
         "backup_rows": backups,
         "smtp": smtp_info,
         "security": security_info,
+        "support_contacts": support_contacts,
         "superadmin_static_2fa_code_enabled": bool((settings.superadmin_static_2fa_code or "").strip()),
         "system_flags": {
             "smtp_enabled": bool((settings.smtp_host or "").strip()),
@@ -1920,6 +1934,36 @@ def _sanitize_message_for_ui(value: str) -> str:
     return (value or "").strip()[:500]
 
 
+def _workspace_restricted_login_error(db: Session, username: str) -> str | None:
+    normalized = (username or "").strip().lower()
+    if not normalized:
+        return None
+    user = db.query(ServiceUser).filter(ServiceUser.username == normalized).first()
+    if user is None or user.role == "superadmin" or not user.workspace_id:
+        return None
+    workspace = db.query(Workspace).filter(Workspace.id == user.workspace_id).first()
+    if workspace is None:
+        return None
+    if not workspace.is_active or workspace.is_suspended:
+        support_row = db.query(PlatformSettings).order_by(PlatformSettings.id.asc()).first()
+        tech_email = (
+            (support_row.technical_support_email if support_row else "")
+            or (settings.support_tech_email or "").strip()
+            or "support@example.com"
+        )
+        finance_email = (
+            (support_row.billing_support_email if support_row else "")
+            or (settings.support_finance_email or "").strip()
+            or "billing@example.com"
+        )
+        return (
+            "Действия вашего профиля ограничены. "
+            f"Обратитесь в технический отдел: {tech_email} "
+            f"или в финансовый отдел: {finance_email}."
+        )
+    return None
+
+
 def _is_password_complex(password: str) -> tuple[bool, list[str]]:
     value = (password or "").strip()
     missing: list[str] = []
@@ -2141,8 +2185,18 @@ def app_login(
         scope="login",
         limit=max(int(settings.rate_limit_login_per_minute), 1),
     )
-    user = sign_in_service_user(db, username=username, password=password)
+    login_result = sign_in_service_user_with_reason(db, username=username, password=password)
+    user = login_result.get("user")
     if user is None:
+        if login_result.get("status") in {"workspace_suspended", "workspace_inactive"}:
+            restricted_message = _workspace_restricted_login_error(db, username)
+            if restricted_message:
+                return _render_app_landing(
+                    request,
+                    login_error=restricted_message,
+                    default_username=username.strip().lower(),
+                    view="login",
+                )
         return _render_app_landing(
             request,
             login_error="Неверный логин или пароль.",
@@ -3232,10 +3286,10 @@ def app_superadmin_suspend_workspace(
         raise HTTPException(status_code=403, detail="Только для superadmin")
     ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
     if ws:
-        ws.manual_suspended = True
+        ws.suspended_by_admin = True
         ws.is_suspended = True
         db.add(ws)
-        revoke_workspace_sessions(db, workspace_id=workspace_id)
+        revoked_count = revoke_workspace_sessions(db, workspace_id=workspace_id)
         db.add(
             AuditLog(
                 workspace_id=workspace_id,
@@ -3243,7 +3297,7 @@ def app_superadmin_suspend_workspace(
                 action="workspace_suspended",
                 object_type="workspace",
                 object_id=str(workspace_id),
-                details_json="{}",
+                details_json=f'{{"sessions_revoked":{revoked_count}}}',
             )
         )
         db.commit()
@@ -3267,7 +3321,7 @@ def app_superadmin_resume_workspace(
         raise HTTPException(status_code=403, detail="Только для superadmin")
     ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
     if ws:
-        ws.manual_suspended = False
+        ws.suspended_by_admin = False
         ws.is_suspended = False
         db.add(ws)
         db.add(
@@ -3282,6 +3336,51 @@ def app_superadmin_resume_workspace(
         )
         db.commit()
     return RedirectResponse(url="/app/superadmin/workspaces", status_code=302)
+
+
+@app.post("/app/superadmin/support-contacts", response_class=RedirectResponse)
+def app_superadmin_update_support_contacts(
+    request: Request,
+    support_tech_email: str = Form(""),
+    support_billing_email: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    _require_superadmin(current_user)
+    tech_email = (support_tech_email or "").strip().lower()
+    billing_email = (support_billing_email or "").strip().lower()
+    if tech_email and not _EMAIL_RE.fullmatch(tech_email):
+        raise HTTPException(status_code=400, detail="Некорректный email технического отдела")
+    if billing_email and not _EMAIL_RE.fullmatch(billing_email):
+        raise HTTPException(status_code=400, detail="Некорректный email финансового отдела")
+    row = db.query(PlatformSettings).order_by(PlatformSettings.id.asc()).first()
+    if row is None:
+        row = PlatformSettings(
+            technical_support_email=tech_email,
+            billing_support_email=billing_email,
+        )
+    else:
+        row.technical_support_email = tech_email
+        row.billing_support_email = billing_email
+    db.add(row)
+    db.add(
+        AuditLog(
+            workspace_id=None,
+            actor_user_id=current_user.id,
+            action="support_contacts_updated",
+            object_type="platform_settings",
+            object_id=str(row.id or 0),
+            details_json=f'{{"tech_email":"{tech_email}","billing_email":"{billing_email}"}}',
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/superadmin/system", status_code=302)
 
 
 @app.post("/app/superadmin/workspaces/{workspace_id}/revoke-sessions")

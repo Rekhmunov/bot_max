@@ -112,6 +112,16 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+class PlatformSettings(Base):
+    __tablename__ = "platform_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    technical_support_email: Mapped[str] = mapped_column(String(255), default="")
+    billing_support_email: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class BillingEvent(Base):
     __tablename__ = "billing_events"
 
