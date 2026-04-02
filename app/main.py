@@ -514,6 +514,10 @@ def _get_or_create_manager_by_max_id(
         display_name=f"Менеджер {manager_id}",
         max_account_id=manager_id,
     )
+    # Manager invite flow must require explicit password setup from invite page.
+    # Keep password empty here so opening the link never auto-consumes it.
+    manager.password_hash = ""
+    db.add(manager)
     db.add(
         AuditLog(
             workspace_id=workspace_id,
@@ -3857,32 +3861,6 @@ def app_accept_manager_invite(
         return _render_app_landing(request, manager_error="Менеджер не активен или не найден.")
     if workspace is None or workspace.is_suspended or not workspace.is_active:
         return _render_app_landing(request, manager_error="Workspace недоступен.")
-    if manager_user.password_hash:
-        invite_row.is_used = True
-        invite_row.used_by_user_id = manager_user.id
-        invite_row.used_at = now
-        db.add(invite_row)
-        db.add(
-            AuditLog(
-                workspace_id=workspace_id,
-                actor_user_id=manager_user.id,
-                action="manager_invite_consumed",
-                object_type="manager_invite",
-                object_id=str(invite_row.id),
-                details_json=f'{{"manager_id":{manager_user.id},"mode":"auto_login"}}',
-            )
-        )
-        db.commit()
-
-        raw_session = create_service_session(
-            db,
-            user_id=manager_user.id,
-            ip_address=request.client.host if request.client else "",
-            user_agent=request.headers.get("user-agent", ""),
-        )
-        response = RedirectResponse(url="/app/chats", status_code=302)
-        set_service_session_cookie(response, raw_session)
-        return response
 
     return _render_app_landing(
         request,

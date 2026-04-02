@@ -1,4 +1,4 @@
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -631,6 +631,26 @@ def run() -> None:
             parsed_ids = [item.strip() for item in (settings_row.manager_account_id or "").split(",") if item.strip()]
             assert parsed_ids == ["90000", "90001"]
 
+        invite_flow_email = f"invite_flow_{uuid4().hex[:8]}@example.com"
+        invite_flow_register = client.post(
+            "/app/register",
+            data={"email": invite_flow_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert invite_flow_register.status_code in (302, 303)
+        invite_flow_login = client.post(
+            "/app/login",
+            data={"username": invite_flow_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert invite_flow_login.status_code in (302, 303)
+        invite_flow_cookies = invite_flow_login.cookies
+        with SessionLocal() as db:
+            invite_flow_user = db.query(ServiceUser).filter(ServiceUser.username == invite_flow_email).first()
+            assert invite_flow_user is not None
+            invite_flow_workspace_id = int(invite_flow_user.workspace_id or 0)
+            assert invite_flow_workspace_id > 0
+
         send_manager_link = client.post(
             "/app/settings/send-manager-link",
             data={
@@ -644,13 +664,48 @@ def run() -> None:
                 "admin_account_id": "",
                 "request_customer_phone": "1",
             },
-            cookies=cookies,
+            cookies=invite_flow_cookies,
             follow_redirects=False,
         )
         assert send_manager_link.status_code == 200
         assert "Менеджеры: статусы подключения" in send_manager_link.text
         assert "Ожидает подключения" in send_manager_link.text
         assert "Ссылка не отправлялась" in send_manager_link.text
+        with SessionLocal() as db:
+            manager_90000 = (
+                db.query(ServiceUser)
+                .filter(
+                    ServiceUser.workspace_id == invite_flow_workspace_id,
+                    ServiceUser.role == "manager",
+                    ServiceUser.max_account_id == "90000",
+                )
+                .first()
+            )
+            assert manager_90000 is not None
+            # Invite flow must require password set by link, not auto-consume.
+            assert (manager_90000.password_hash or "").strip() == ""
+
+        copy_manager_link = client.post(
+            "/app/settings/copy-manager-link",
+            data={
+                "manager_account_ids": "90000,90001",
+                "copy_manager_id": "90000",
+                "routing_mode": "round_robin",
+                "admin_account_id": "",
+                "request_customer_phone": "1",
+            },
+            cookies=invite_flow_cookies,
+            follow_redirects=False,
+        )
+        assert copy_manager_link.status_code == 200
+        copy_payload = copy_manager_link.json()
+        assert copy_payload.get("ok") is True
+        copied_link = str(copy_payload.get("link", "")).strip()
+        assert copied_link
+        invite_path = urlsplit(copied_link).path
+        invite_page = client.get(invite_path, follow_redirects=False)
+        assert invite_page.status_code == 200
+        assert "Создание пароля менеджера" in invite_page.text
 
         # App settings must also enforce manager IDs limit on plain save.
         app_limit_email = f"limit_{uuid4().hex[:8]}@example.com"
