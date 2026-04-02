@@ -329,6 +329,7 @@
             <thead><tr><th>ID</th><th>Название</th><th>Код клиента</th><th>Статус</th><th>План</th><th>Менеджеры/Диалоги/Сообщения</th><th>Действия</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
+                {% if row.workspace.id != 1 %}
                 <tr>
                   <td>{{ row.workspace.id }}</td>
                   <td>{{ row.workspace.name }}</td>
@@ -360,6 +361,7 @@
                     </div>
                   </td>
                 </tr>
+                {% endif %}
               {% endfor %}
             </tbody>
           </table>
@@ -428,6 +430,7 @@
             <thead><tr><th>Клиент</th><th>План</th><th>Статус</th><th>Менеджеры</th><th>Диалоги</th><th>Сообщения/мес</th><th>Изменить</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
+                {% if row.workspace.id != 1 %}
                 <tr>
                   <td>{{ row.workspace.id }} · {{ row.workspace.name }}</td>
                   <td>{{ row.subscription.plan_code }}</td>
@@ -452,6 +455,7 @@
                     </form>
                   </td>
                 </tr>
+                {% endif %}
               {% endfor %}
             </tbody>
           </table>
