@@ -343,6 +343,7 @@
       display: grid;
       grid-template-rows: auto minmax(0, 1fr) auto;
       overflow: hidden;
+      position: relative;
     }
     .chat-header {
       padding: 10px 12px;
@@ -426,13 +427,43 @@
       overscroll-behavior: contain;
       -webkit-overflow-scrolling: touch;
     }
-    .notice {
-      border-radius: 10px;
-      padding: 8px 10px;
-      font-size: 13px;
+    .chat-toast-stack {
+      position: absolute;
+      left: 50%;
+      bottom: calc(82px + env(safe-area-inset-bottom));
+      transform: translateX(-50%);
+      width: min(560px, calc(100% - 22px));
+      display: grid;
+      gap: 8px;
+      z-index: 30;
+      pointer-events: none;
+      transition: opacity .25s ease, transform .25s ease;
+      opacity: 1;
     }
-    .notice.ok { background: var(--ok-soft); color: var(--ok); }
-    .notice.err { background: var(--danger-soft); color: var(--danger); }
+    .chat-toast-stack.is-hidden {
+      opacity: 0;
+      transform: translateX(-50%) translateY(8px);
+    }
+    .chat-toast {
+      border-radius: 11px;
+      padding: 9px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      box-shadow: var(--shadow);
+      border: 1px solid transparent;
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+    }
+    .chat-toast.ok {
+      background: color-mix(in srgb, var(--ok-soft) 88%, #fff 12%);
+      color: var(--ok);
+      border-color: #ccead9;
+    }
+    .chat-toast.err {
+      background: color-mix(in srgb, var(--danger-soft) 90%, #fff 10%);
+      color: var(--danger);
+      border-color: #f4cccc;
+    }
     .bubble {
       max-width: 82%;
       border: 1px solid var(--line);
@@ -1238,19 +1269,6 @@
         </div>
 
         <div class="messages-wrap">
-          {% if removed == "1" %}
-            <div class="notice ok">Пользователь и его чат удалены</div>
-          {% elif removed == "0" %}
-            <div class="notice err">Не удалось удалить пользователя</div>
-          {% endif %}
-
-          {% if message %}
-            <div class="notice ok">{{ message }}</div>
-          {% endif %}
-          {% if error %}
-            <div class="notice err">{{ error }}</div>
-          {% endif %}
-
           {% if messages %}
             {% set shown = namespace(count=0) %}
             {% for msg in messages %}
@@ -1348,6 +1366,22 @@
       {% endif %}
     </main>
   </div>
+
+  {% if active_thread and (removed == "1" or removed == "0" or message or error) %}
+    <div class="chat-toast-stack" id="chat-toast-stack">
+      {% if removed == "1" %}
+        <div class="chat-toast ok">Пользователь и его чат удалены</div>
+      {% elif removed == "0" %}
+        <div class="chat-toast err">Не удалось удалить пользователя</div>
+      {% endif %}
+      {% if message %}
+        <div class="chat-toast ok">{{ message }}</div>
+      {% endif %}
+      {% if error %}
+        <div class="chat-toast err">{{ error }}</div>
+      {% endif %}
+    </div>
+  {% endif %}
 
   <div class="folder-create-pop" id="folder-create-pop">
     <div class="folder-create-pop-card">
@@ -1480,6 +1514,11 @@
         scheduleBtnMobile.classList.toggle("is-visible", visible);
         scheduleBtnMobile.classList.toggle("mobile-visible", visible && isTouchLikeViewport());
       };
+      const scrollMessagesToBottom = () => {
+        const wrap = document.querySelector(".messages-wrap");
+        if (!wrap) return;
+        wrap.scrollTop = wrap.scrollHeight;
+      };
       const setKeyboardInset = () => {
         const vv = window.visualViewport;
         const fallbackHeight = window.innerHeight || document.documentElement.clientHeight || 0;
@@ -1489,7 +1528,7 @@
           document.documentElement.style.setProperty("--keyboard-offset", "0px");
           return;
         }
-        const viewportHeight = Math.max(320, Math.round(vv.height));
+        const viewportHeight = Math.max(320, Math.round(vv.height + Math.max(0, vv.offsetTop || 0)));
         const keyboard = Math.max(0, Math.round(fallbackHeight - vv.height - vv.offsetTop));
         document.documentElement.style.setProperty("--app-height", `${viewportHeight}px`);
         document.documentElement.style.setProperty("--keyboard-offset", `${keyboard}px`);
@@ -1592,7 +1631,6 @@
       messageInput.addEventListener("focus", () => {
         setTimeout(() => {
           setKeyboardInset();
-          messageInput.scrollIntoView({ block: "nearest", inline: "nearest" });
         }, 20);
       });
       messageInput.addEventListener("blur", () => {
@@ -1606,7 +1644,20 @@
         scheduleHint.textContent = "Запланировано";
       });
       setKeyboardInset();
+      scrollMessagesToBottom();
+      setTimeout(scrollMessagesToBottom, 90);
       syncSendVisibility();
+    })();
+
+    (() => {
+      const stack = document.getElementById("chat-toast-stack");
+      if (!stack) return;
+      setTimeout(() => {
+        stack.classList.add("is-hidden");
+      }, 2200);
+      setTimeout(() => {
+        stack.remove();
+      }, 2600);
     })();
 
     (() => {
