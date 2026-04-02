@@ -700,7 +700,7 @@
     .bubble-head {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-start;
       gap: 8px;
       margin-bottom: 6px;
       font-size: 12px;
@@ -715,7 +715,7 @@
     .delivery-wrap {
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 0;
     }
     .delivery-toggle {
       border: 0;
@@ -1269,7 +1269,7 @@
                       <span class="delivery {{ state }}">
                         {% if state == "sent" %}доставлено{% elif state == "failed" %}ошибка{% else %}в очереди{% endif %}
                       </span>
-                      <button class="delivery-toggle" type="button" aria-label="Показать детали">›</button>
+                      <button class="delivery-toggle" type="button" aria-label="Показать детали" style="display:none;" tabindex="-1" aria-hidden="true">›</button>
                     </span>
                   {% endif %}
                 </div>
