@@ -19,6 +19,7 @@
       --ok-soft: #eaf8f0;
       --shadow: 0 10px 28px rgba(12, 31, 66, 0.08);
       --radius: 14px;
+      --keyboard-offset: 0px;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; }
@@ -546,7 +547,7 @@
       display: grid;
       gap: 8px;
       position: sticky;
-      bottom: 0;
+      bottom: var(--keyboard-offset, 0px);
       z-index: 6;
     }
     .compose-row {
@@ -988,6 +989,7 @@
         padding-top: max(10px, env(safe-area-inset-top));
       }
       .compose {
+        bottom: var(--keyboard-offset, 0px);
         padding-bottom: max(10px, env(safe-area-inset-bottom));
       }
       .schedule-btn.mobile-visible {
@@ -1519,17 +1521,32 @@
         if (!wrap) return;
         wrap.scrollTop = wrap.scrollHeight;
       };
+      let baselineVisualHeight = Math.max(
+        320,
+        Math.round(window.innerHeight || document.documentElement.clientHeight || 0),
+      );
       const setKeyboardInset = () => {
         const vv = window.visualViewport;
-        const fallbackHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        const fallbackHeight = Math.max(
+          320,
+          Math.round(window.innerHeight || document.documentElement.clientHeight || 0),
+        );
         if (!vv) {
-          const fallbackPx = `${Math.max(320, Math.round(fallbackHeight))}px`;
+          baselineVisualHeight = Math.max(baselineVisualHeight, fallbackHeight);
+          const fallbackPx = `${fallbackHeight}px`;
           document.documentElement.style.setProperty("--app-height", fallbackPx);
           document.documentElement.style.setProperty("--keyboard-offset", "0px");
           return;
         }
-        const viewportHeight = Math.max(320, Math.round(vv.height + Math.max(0, vv.offsetTop || 0)));
-        const keyboard = Math.max(0, Math.round(fallbackHeight - vv.height - vv.offsetTop));
+        const safeVisualTop = Math.max(0, Math.round(vv.offsetTop || 0));
+        const viewportHeight = Math.max(320, Math.round(vv.height + safeVisualTop));
+        const isInputFocused = document.activeElement === messageInput;
+
+        if (!isInputFocused || viewportHeight >= baselineVisualHeight - 6) {
+          baselineVisualHeight = Math.max(baselineVisualHeight, viewportHeight, fallbackHeight);
+        }
+
+        const keyboard = Math.max(0, baselineVisualHeight - viewportHeight);
         document.documentElement.style.setProperty("--app-height", `${viewportHeight}px`);
         document.documentElement.style.setProperty("--keyboard-offset", `${keyboard}px`);
       };
