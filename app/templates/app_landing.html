@@ -556,14 +556,12 @@
               <h3>Авторизация</h3>
               <button type="button" class="close-btn" data-close-modal aria-label="Закрыть">✕</button>
             </div>
-            <p class="muted">Вход для клиента, менеджера и superadmin.</p>
+            <p class="muted">Вход для клиента и менеджера.</p>
             <form method="post" action="/app/login">
               <label for="login_username">Логин (email / admin / Max ID)</label>
               <input id="login_username" name="username" type="text" value="{{ default_username or '' }}" autocomplete="username" required />
               <label for="login_password">Пароль</label>
               <input id="login_password" type="password" name="password" required />
-              <label for="login_totp">2FA код (только для superadmin)</label>
-              <input id="login_totp" name="totp_code" placeholder="123456" />
               <button class="btn" type="submit">Войти</button>
             </form>
           </div>

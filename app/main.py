@@ -1944,6 +1944,64 @@ def app_login_page(
     return _render_app_landing(request, view="login")
 
 
+@app.get("/sa/login", response_class=HTMLResponse)
+def superadmin_login_page(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    current_user = get_current_service_user(request=request, db=db)
+    if current_user is not None:
+        if current_user.role == "superadmin":
+            return RedirectResponse(url="/app/superadmin", status_code=302)
+        return RedirectResponse(url="/app/chats", status_code=302)
+    return templates.TemplateResponse(
+        request,
+        "login.html",
+        {"request": request, "error": None},
+    )
+
+
+@app.post("/sa/login", response_class=HTMLResponse)
+def superadmin_login_submit(
+    request: Request,
+    username: str = Form(""),
+    password: str = Form(""),
+    totp_code: str = Form(""),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_login",
+        limit=max(int(settings.rate_limit_login_per_minute), 1),
+    )
+    user = sign_in_service_user(db, username=username, password=password)
+    if user is None or user.role != "superadmin":
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"request": request, "error": "Неверный логин или пароль"},
+            status_code=401,
+        )
+    if settings.admin_totp_secret.strip() or settings.superadmin_static_2fa_code.strip():
+        if not _verify_superadmin_2fa_code(user=user, code=totp_code):
+            return templates.TemplateResponse(
+                request,
+                "login.html",
+                {"request": request, "error": "Неверный 2FA код"},
+                status_code=401,
+            )
+    token = create_service_session(
+        db,
+        user_id=user.id,
+        ip_address=request.client.host if request.client else "",
+        user_agent=request.headers.get("user-agent", ""),
+    )
+    response = RedirectResponse(url="/app/superadmin", status_code=302)
+    set_service_session_cookie(response, token)
+    return response
+
+
 @app.post("/app/register", response_class=HTMLResponse)
 def app_register(
     request: Request,
@@ -2046,7 +2104,6 @@ def app_login(
     request: Request,
     username: str = Form(""),
     password: str = Form(""),
-    totp_code: str = Form(""),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     _enforce_same_origin(request)
@@ -2063,16 +2120,13 @@ def app_login(
             default_username=username.strip().lower(),
             view="login",
         )
-    if user.role == "superadmin" and (
-        settings.admin_totp_secret.strip() or settings.superadmin_static_2fa_code.strip()
-    ):
-        if not _verify_superadmin_2fa_code(user=user, code=totp_code):
-            return _render_app_landing(
-                request,
-                login_error="Неверный 2FA код.",
-                default_username=username.strip().lower(),
-                view="login",
-            )
+    if user.role == "superadmin":
+        return _render_app_landing(
+            request,
+            login_error="Для superadmin используйте отдельный вход: /sa/login",
+            default_username="",
+            view="login",
+        )
     token = create_service_session(
         db,
         user_id=user.id,

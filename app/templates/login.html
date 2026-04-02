@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Вход в админку</title>
+  <title>Вход superadmin</title>
   <style>
     body { font-family: Arial, sans-serif; background: #f5f7fb; margin: 0; }
     .container { max-width: 420px; margin: 80px auto; background: #fff; padding: 24px; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,.08); }
@@ -17,13 +17,16 @@
 </head>
 <body>
   <div class="container">
-    <h1>Админ-панель бота</h1>
-    <form method="post" action="/admin/login">
+    <h1>Вход superadmin</h1>
+    <form method="post" action="/sa/login">
       <label for="username">Логин</label>
       <input id="username" name="username" required />
 
       <label for="password">Пароль</label>
       <input id="password" type="password" name="password" required />
+
+      <label for="totp_code">2FA код</label>
+      <input id="totp_code" name="totp_code" placeholder="123456 или fallback-код" required />
 
       <button type="submit">Войти</button>
     </form>
@@ -31,7 +34,7 @@
     {% if error %}
       <div class="error">{{ error }}</div>
     {% endif %}
-    <div class="hint">Учетные данные задаются через переменные окружения ADMIN_USERNAME и ADMIN_PASSWORD.</div>
+    <div class="hint">Отдельный вход только для супер-админа. Для пользователей используйте /app.</div>
   </div>
 </body>
 </html>

@@ -23,9 +23,14 @@ def run() -> None:
 
         app_login_page = client.get("/app/login")
         assert app_login_page.status_code == 200
+        assert "2FA код (только для superadmin)" not in app_login_page.text
+
+        superadmin_login_page = client.get("/sa/login")
+        assert superadmin_login_page.status_code == 200
+        assert "2FA код" in superadmin_login_page.text
 
         superadmin_login = client.post(
-            "/app/login",
+            "/sa/login",
             data={
                 "username": "admin",
                 "password": "wNlT4yBzUhEZR1q011!!;sawf",
@@ -36,6 +41,14 @@ def run() -> None:
         assert superadmin_login.status_code in (302, 303)
         assert superadmin_login.headers.get("location") == "/app/superadmin"
         superadmin_cookies = superadmin_login.cookies
+
+        superadmin_login_via_app = client.post(
+            "/app/login",
+            data={"username": "admin", "password": "wNlT4yBzUhEZR1q011!!;sawf"},
+            follow_redirects=False,
+        )
+        assert superadmin_login_via_app.status_code == 200
+        assert "Для superadmin используйте отдельный вход: /sa/login" in superadmin_login_via_app.text
 
         superadmin_sections = [
             ("/app/superadmin", "Дашборд"),
