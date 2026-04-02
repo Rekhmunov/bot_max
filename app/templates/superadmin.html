@@ -353,6 +353,7 @@
                         {% else %}
                           <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/suspend"><button class="btn danger" type="submit">Приостановить</button></form>
                         {% endif %}
+                        <a class="btn" href="/app/superadmin/workspaces/{{ row.workspace.id }}/chats">Открыть чаты клиента</a>
                         <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/revoke-sessions"><button class="btn" type="submit">Сбросить сессии</button></form>
                         <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/delete"><button class="btn danger" type="submit">Удалить клиента</button></form>
                       {% else %}

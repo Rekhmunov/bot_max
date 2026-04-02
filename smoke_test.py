@@ -69,6 +69,7 @@ def run() -> None:
         superadmin_workspaces = client.get("/app/superadmin/workspaces", cookies=superadmin_cookies)
         assert superadmin_workspaces.status_code == 200
         assert "Default Workspace" not in superadmin_workspaces.text
+        assert "Открыть чаты клиента" in superadmin_workspaces.text
 
         superadmin_users = client.get("/app/superadmin/users", cookies=superadmin_cookies)
         assert superadmin_users.status_code == 200
@@ -96,6 +97,21 @@ def run() -> None:
             delete_temp_user = db.query(ServiceUser).filter(ServiceUser.username == delete_temp_email).first()
             assert delete_temp_user is not None
             delete_temp_user_id = int(delete_temp_user.id)
+            delete_temp_workspace_id = int(delete_temp_user.workspace_id or 0)
+            assert delete_temp_workspace_id > 0
+        superadmin_open_chats = client.get(
+            f"/app/superadmin/workspaces/{delete_temp_workspace_id}/chats",
+            cookies=superadmin_cookies,
+            follow_redirects=False,
+        )
+        assert superadmin_open_chats.status_code in (302, 303)
+        assert superadmin_open_chats.headers.get("location") == f"/app/chats?workspace_id={delete_temp_workspace_id}"
+        scoped_chats_page = client.get(
+            f"/app/chats?workspace_id={delete_temp_workspace_id}",
+            cookies=superadmin_cookies,
+        )
+        assert scoped_chats_page.status_code == 200
+        assert "Чаты клиента" in scoped_chats_page.text
         delete_temp_user_resp = client.post(
             f"/app/superadmin/users/{delete_temp_user_id}/delete",
             cookies=superadmin_cookies,

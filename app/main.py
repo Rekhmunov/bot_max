@@ -1702,6 +1702,35 @@ def _resolve_workspace_for_token_or_user(
     return DEFAULT_WORKSPACE_ID
 
 
+def _resolve_app_workspace_scope(
+    *,
+    db: Session,
+    current_user: ServiceUser,
+    workspace_id: int | None,
+) -> tuple[int, Workspace | None, bool]:
+    """
+    Resolve workspace scope for /app/chats.
+    Superadmin can explicitly open any tenant via workspace_id query param.
+    """
+    if workspace_id is not None:
+        if current_user.role != "superadmin":
+            raise HTTPException(status_code=403, detail="Недостаточно прав")
+        target = db.query(Workspace).filter(Workspace.id == int(workspace_id)).first()
+        if target is None:
+            raise HTTPException(status_code=404, detail="Клиент не найден")
+        return int(target.id), target, True
+
+    current_workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    target = db.query(Workspace).filter(Workspace.id == int(current_workspace_id)).first()
+    return int(current_workspace_id), target, False
+
+
+def _workspace_scope_query_suffix(*, workspace_id: int, is_scoped: bool) -> str:
+    if not is_scoped:
+        return ""
+    return f"&workspace_id={workspace_id}"
+
+
 def _rename_conversation_customer(
     db: Session,
     *,
@@ -2374,6 +2403,7 @@ async def app_chats_page(
     q: str = "",
     view: str = "",
     folder_id: int | None = None,
+    workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -2382,19 +2412,34 @@ async def app_chats_page(
         scope="app_view",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    workspace_id, scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    query_scope_prefix = (
+        f"/app/chats?workspace_id={workspace_id}&" if is_superadmin_scoped else "/app/chats?"
+    )
+    endpoint_scope_suffix = f"?workspace_id={workspace_id}" if is_superadmin_scoped else ""
+    create_folder_action = f"/app/chats/folders{endpoint_scope_suffix}"
+    page_title = f"Чаты клиента · {current_user.username}"
+    settings_href = "/app/settings"
+    if is_superadmin_scoped:
+        page_title = f"Чаты клиента · {(scoped_workspace.name if scoped_workspace else workspace_id)}"
+        settings_href = "/app/superadmin/workspaces"
     ui = _admin_chats_ui()
     ui.update(
         {
-            "page_title": f"Чаты клиента · {current_user.username}",
+            "page_title": page_title,
             "page_path": "/app/chats",
-            "page_query_prefix": "/app/chats?",
-            "create_folder_action": "/app/chats/folders",
+            "page_query_prefix": query_scope_prefix,
+            "create_folder_action": create_folder_action,
             "show_admin_nav": True,
-            "settings_href": "/app/settings",
+            "settings_href": settings_href,
             "logout_action": "/app/logout",
             "show_rename_user": True,
             "send_action_prefix": "/app/chats/",
+            "send_action_suffix": endpoint_scope_suffix,
             "delete_user_action_prefix": "/app/chats/",
             "rename_user_action_prefix": "/app/chats/",
             "profile_href_prefix": "/app/chats/",
@@ -2402,6 +2447,7 @@ async def app_chats_page(
             "move_folder_prefix": "/app/chats/",
             "create_folder_endpoint": "/app/chats/folders",
             "delete_message_prefix": "/app/chats/",
+            "endpoint_query_suffix": endpoint_scope_suffix,
         }
     )
     return await _render_chat_workspace(
@@ -2884,6 +2930,19 @@ def app_superadmin_workspaces_page(
         db=db,
         tab="workspaces",
     )
+
+
+@app.get("/app/superadmin/workspaces/{workspace_id}/chats", response_class=RedirectResponse)
+def app_superadmin_workspace_chats_redirect(
+    workspace_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _require_superadmin(current_user)
+    target = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if target is None:
+        raise HTTPException(status_code=404, detail="Клиент не найден")
+    return RedirectResponse(url=f"/app/chats?workspace_id={workspace_id}", status_code=302)
 
 
 @app.get("/app/superadmin/users", response_class=HTMLResponse)
@@ -3544,10 +3603,15 @@ def app_chat_create_folder(
     q: str = Form(""),
     view: str = Form(""),
     folder_id: int | None = Form(default=None),
+    workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
     folder_name = name.strip()
     if folder_name:
         created = create_chat_folder(db, folder_name=folder_name, workspace_id=workspace_id)
@@ -3561,8 +3625,12 @@ def app_chat_create_folder(
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
     conv_qs = f"&conversation_id={conversation_id}" if conversation_id is not None else ""
     view_qs = f"&view={view}" if view else ""
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
     return RedirectResponse(
-        url=f"/app/chats?q={q}{folder_qs}{conv_qs}{view_qs}",
+        url=f"/app/chats?q={q}{folder_qs}{conv_qs}{view_qs}{workspace_qs}",
         status_code=302,
     )
 
@@ -3573,15 +3641,24 @@ def app_chat_mark_unread(
     q: str = Form(""),
     view: str = Form(""),
     folder_id: int | None = Form(default=None),
+    workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
     ok = mark_thread_unread(db, conversation_id=conversation_id, workspace_id=workspace_id)
     suffix = "1" if ok else "0"
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
     return RedirectResponse(
-        url=f"/app/chats?conversation_id={conversation_id}&q={q}&view={view}&unread={suffix}{folder_qs}",
+        url=f"/app/chats?conversation_id={conversation_id}&q={q}&view={view}&unread={suffix}{folder_qs}{workspace_qs}",
         status_code=302,
     )
 
@@ -3593,10 +3670,15 @@ def app_chat_move_folder(
     q: str = Form(""),
     view: str = Form(""),
     current_folder_id: int | None = Form(default=None),
+    workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
     ok = assign_conversation_to_folder(
         db,
         conversation_id=conversation_id,
@@ -3605,8 +3687,12 @@ def app_chat_move_folder(
     )
     suffix = "1" if ok else "0"
     folder_qs = f"&folder_id={current_folder_id}" if current_folder_id is not None else ""
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
     return RedirectResponse(
-        url=f"/app/chats?conversation_id={conversation_id}&q={q}&view={view}&foldered={suffix}{folder_qs}",
+        url=f"/app/chats?conversation_id={conversation_id}&q={q}&view={view}&foldered={suffix}{folder_qs}{workspace_qs}",
         status_code=302,
     )
 
@@ -3621,6 +3707,7 @@ async def app_chats_send_message(
     q: str = Form(""),
     view: str = Form(""),
     schedule_at: str = Form(""),
+    workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -3629,7 +3716,15 @@ async def app_chats_send_message(
         scope="app_send",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 5),
     )
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
     text_value = text.strip()
     view_value = view.strip().lower()
     image_path = None
@@ -3655,7 +3750,7 @@ async def app_chats_send_message(
             redirect_url += f"&q={quote_plus(q.strip())}"
         if view_value == "chat":
             redirect_url += "&view=chat"
-        return RedirectResponse(url=redirect_url, status_code=302)
+        return RedirectResponse(url=f"{redirect_url}{workspace_qs}", status_code=302)
 
     if text_value.startswith("/") and not image_path:
         sent_ok = await send_admin_quick_reply(
@@ -3670,7 +3765,7 @@ async def app_chats_send_message(
             redirect_url += f"&q={quote_plus(q.strip())}"
         if view_value == "chat":
             redirect_url += "&view=chat"
-        return RedirectResponse(url=redirect_url, status_code=302)
+        return RedirectResponse(url=f"{redirect_url}{workspace_qs}", status_code=302)
 
     sent_ok = await send_admin_chat_message(
         db=db,
@@ -3689,17 +3784,22 @@ async def app_chats_send_message(
         redirect_url += f"&q={quote_plus(q.strip())}"
     if view_value == "chat":
         redirect_url += "&view=chat"
-    return RedirectResponse(url=redirect_url, status_code=302)
+    return RedirectResponse(url=f"{redirect_url}{workspace_qs}", status_code=302)
 
 
 @app.post("/app/chats/{conversation_id}/quick-reply", response_class=RedirectResponse)
 async def app_chats_send_quick_reply(
     conversation_id: int,
     command: str = Form(""),
+    workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
     sent_ok = await send_admin_quick_reply(
         db=db,
         conversation_id=conversation_id,
@@ -3707,8 +3807,12 @@ async def app_chats_send_quick_reply(
         workspace_id=workspace_id,
     )
     suffix = "1" if sent_ok else "0"
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
     return RedirectResponse(
-        url=f"/app/chats?conversation_id={conversation_id}&quick={suffix}",
+        url=f"/app/chats?conversation_id={conversation_id}&quick={suffix}{workspace_qs}",
         status_code=302,
     )
 
@@ -3718,10 +3822,15 @@ async def app_chats_edit_message(
     conversation_id: int,
     chat_message_id: int,
     text: str = Form(""),
+    workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
     updated = await update_chat_message_text(
         db=db,
         chat_message_id=chat_message_id,
@@ -3729,8 +3838,12 @@ async def app_chats_edit_message(
         workspace_id=workspace_id,
     )
     suffix = "1" if updated else "0"
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
     return RedirectResponse(
-        url=f"/app/chats?conversation_id={conversation_id}&edited={suffix}",
+        url=f"/app/chats?conversation_id={conversation_id}&edited={suffix}{workspace_qs}",
         status_code=302,
     )
 
@@ -3741,18 +3854,27 @@ async def app_chats_delete_message(
     chat_message_id: int,
     q: str = Form(""),
     view: str = Form(""),
+    workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
     removed = await remove_chat_message(db=db, chat_message_id=chat_message_id, workspace_id=workspace_id)
     suffix = "1" if removed else "0"
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
     redirect_url = f"/app/chats?conversation_id={conversation_id}&deleted={suffix}"
     if q.strip():
         redirect_url += f"&q={quote_plus(q.strip())}"
     if view.strip().lower() == "chat":
         redirect_url += "&view=chat"
-    return RedirectResponse(url=redirect_url, status_code=302)
+    return RedirectResponse(url=f"{redirect_url}{workspace_qs}", status_code=302)
 
 
 @app.post(
@@ -3762,18 +3884,27 @@ async def app_chats_delete_message(
 async def app_chats_retry_message(
     conversation_id: int,
     chat_message_id: int,
+    workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
     retried = await retry_failed_outbox_message(
         db=db,
         chat_message_id=chat_message_id,
         workspace_id=workspace_id,
     )
     suffix = "1" if retried else "0"
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
     return RedirectResponse(
-        url=f"/app/chats?conversation_id={conversation_id}&retried={suffix}",
+        url=f"/app/chats?conversation_id={conversation_id}&retried={suffix}{workspace_qs}",
         status_code=302,
     )
 
@@ -3781,13 +3912,22 @@ async def app_chats_retry_message(
 @app.post("/app/chats/{conversation_id}/delete-user", response_class=RedirectResponse)
 async def app_chats_delete_conversation(
     conversation_id: int,
+    workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
     deleted = delete_conversation(db, conversation_id=conversation_id, workspace_id=workspace_id)
     suffix = "1" if deleted else "0"
-    return RedirectResponse(url=f"/app/chats?removed={suffix}", status_code=302)
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
+    return RedirectResponse(url=f"/app/chats?removed={suffix}{workspace_qs}", status_code=302)
 
 
 @app.post("/app/chats/{conversation_id}/rename-user", response_class=RedirectResponse)
@@ -3798,6 +3938,7 @@ def app_chats_rename_user(
     q: str = Form(""),
     view: str = Form(""),
     folder_id: int | None = Form(default=None),
+    workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -3807,7 +3948,11 @@ def app_chats_rename_user(
         scope="app_ops",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
     updated = _rename_conversation_customer(
         db,
         conversation_id=conversation_id,
@@ -3816,8 +3961,12 @@ def app_chats_rename_user(
     )
     suffix = "1" if updated else "0"
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
     return RedirectResponse(
-        url=f"/app/chats?conversation_id={conversation_id}&q={quote_plus(q.strip())}&view={view}&renamed={suffix}{folder_qs}",
+        url=f"/app/chats?conversation_id={conversation_id}&q={quote_plus(q.strip())}&view={view}&renamed={suffix}{folder_qs}{workspace_qs}",
         status_code=302,
     )
 
