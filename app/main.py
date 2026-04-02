@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy import func
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 from itsdangerous import URLSafeTimedSerializer, BadData, SignatureExpired
 
@@ -623,7 +624,13 @@ def _render_app_settings_page(
     error: str | None = None,
 ) -> HTMLResponse:
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
-    ok, reason = ensure_workspace_limits_and_state(db, workspace_id=workspace_id)
+    ok = True
+    reason = ""
+    try:
+        ok, reason = ensure_workspace_limits_and_state(db, workspace_id=workspace_id)
+    except OperationalError:
+        # Keep settings page available on partially migrated SQLite snapshots.
+        db.rollback()
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
     quick_replies = (
         db.query(QuickReply)
@@ -640,18 +647,25 @@ def _render_app_settings_page(
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
     managers = list_workspace_managers(db, workspace_id=workspace_id)
-    sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
-    refresh_tenant_alerts(db, workspace_id=workspace_id)
-    active_alerts = (
-        db.query(TenantAlert)
-        .filter(
-            TenantAlert.workspace_id == workspace_id,
-            TenantAlert.is_resolved.is_(False),
+    sub = None
+    tenant_metrics = None
+    active_alerts: list[TenantAlert] = []
+    try:
+        sub = get_or_create_subscription(db, workspace_id=workspace_id)
+        tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
+        refresh_tenant_alerts(db, workspace_id=workspace_id)
+        active_alerts = (
+            db.query(TenantAlert)
+            .filter(
+                TenantAlert.workspace_id == workspace_id,
+                TenantAlert.is_resolved.is_(False),
+            )
+            .order_by(TenantAlert.id.desc())
+            .all()
         )
-        .order_by(TenantAlert.id.desc())
-        .all()
-    )
+    except OperationalError:
+        # Keep settings page available on partially migrated SQLite snapshots.
+        db.rollback()
     note = message or f"Workspace: {workspace_id}. Менеджеров: {len(managers)}"
     if not ok:
         note += f" · Ограничение: {reason}"
@@ -1160,89 +1174,50 @@ def admin_chat_move_folder(
     )
 
 
-@app.get("/admin/chats/{conversation_id}/profile", response_class=HTMLResponse)
-def admin_chat_customer_profile(
+def _render_customer_profile_page(
+    *,
     request: Request,
+    db: Session,
     conversation_id: int,
-    q: str = "",
-    view: str = "",
-    _admin: str = Depends(require_admin),
-    db: Session = Depends(get_db),
+    q: str,
+    view: str,
+    folder_id: int | None,
+    page_path: str,
+    workspace_id: int | None,
+    endpoint_query_suffix: str = "",
 ) -> HTMLResponse:
-    conversation = db.query(Conversation).filter(Conversation.id == conversation_id).first()
+    conversation_query = db.query(Conversation).filter(Conversation.id == conversation_id)
+    if workspace_id is not None:
+        conversation_query = conversation_query.filter(Conversation.workspace_id == workspace_id)
+    conversation = conversation_query.first()
     if conversation is None:
         raise HTTPException(status_code=404, detail="Чат не найден")
 
-    meta = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id).first()
-    profile = (
-        db.query(CustomerProfile)
-        .filter(CustomerProfile.customer_account_id == conversation.customer_account_id)
-        .first()
+    meta_query = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id)
+    profile_query = db.query(CustomerProfile).filter(
+        CustomerProfile.customer_account_id == conversation.customer_account_id
     )
+    sender_query = db.query(MessageLog.sender_account_id).filter(MessageLog.conversation_id == conversation_id)
+    if workspace_id is not None:
+        meta_query = meta_query.filter(ConversationMeta.workspace_id == workspace_id)
+        profile_query = profile_query.filter(CustomerProfile.workspace_id == workspace_id)
+        sender_query = sender_query.filter(MessageLog.workspace_id == workspace_id)
 
+    meta = meta_query.first()
+    profile = profile_query.first()
     sender_ids = [
         str(row[0])
-        for row in (
-            db.query(MessageLog.sender_account_id)
-            .filter(MessageLog.conversation_id == conversation_id)
-            .distinct()
-            .limit(20)
-            .all()
-        )
+        for row in sender_query.distinct().limit(20).all()
         if row and row[0]
-    ]
-    message_mids = [
-        {
-            "direction": row.direction,
-            "source": row.source,
-            "max_mid": row.max_message_mid,
-            "link_mid": row.link_mid,
-        }
-        for row in (
-            db.query(ChatMessage)
-            .filter(
-                ChatMessage.conversation_id == conversation_id,
-                (ChatMessage.max_message_mid.is_not(None)) | (ChatMessage.link_mid.is_not(None)),
-            )
-            .order_by(ChatMessage.id.desc())
-            .limit(20)
-            .all()
-        )
-    ]
-    manager_dispatch_mids = [
-        str(row.manager_message_mid)
-        for row in (
-            db.query(ManagerDispatch)
-            .filter(ManagerDispatch.conversation_id == conversation_id)
-            .order_by(ManagerDispatch.id.desc())
-            .limit(20)
-            .all()
-        )
-        if row.manager_message_mid
-    ]
-    outbox_targets = [
-        {
-            "operation": row.operation,
-            "target_chat_id": row.target_chat_id,
-            "target_user_id": row.target_user_id,
-            "state": row.state,
-            "external_message_mid": row.external_message_mid,
-        }
-        for row in (
-            db.query(OutboxMessage)
-            .filter(OutboxMessage.conversation_id == conversation_id)
-            .order_by(OutboxMessage.id.desc())
-            .limit(20)
-            .all()
-        )
     ]
 
     safe_q = q.strip()
-    safe_view = view.strip().lower()
-    back_to_chat_url = f"/admin/chats?conversation_id={conversation_id}&q={safe_q}"
-    if view.strip().lower() == "chat":
-        back_to_chat_url += "&view=chat"
-    back_to_list_url = f"/admin/chats?q={safe_q}"
+    safe_view = "chat" if view.strip().lower() == "chat" else ""
+    back_to_chat_url = f"{page_path}?conversation_id={conversation_id}&q={quote_plus(safe_q)}&view=chat"
+    if folder_id is not None:
+        back_to_chat_url += f"&folder_id={folder_id}"
+    if endpoint_query_suffix:
+        back_to_chat_url += endpoint_query_suffix.replace("?", "&")
 
     basic_rows = [
         {"label": "Тикет", "value": f"T-{meta.ticket_no}" if meta else "—"},
@@ -1275,36 +1250,6 @@ def admin_chat_customer_profile(
         },
         {"label": "manager_owner_id", "value": (meta.manager_owner_id if meta and meta.manager_owner_id else "—")},
         {"label": "sender_ids (последние)", "value": "\n".join(sender_ids) if sender_ids else "—"},
-        {
-            "label": "message mids (последние)",
-            "value": (
-                "\n".join(
-                    [
-                        f"{item['direction']}/{item['source']} max:{item['max_mid'] or '-'} link:{item['link_mid'] or '-'}"
-                        for item in message_mids
-                    ]
-                )
-                if message_mids
-                else "—"
-            ),
-        },
-        {
-            "label": "manager dispatch mids",
-            "value": "\n".join(manager_dispatch_mids) if manager_dispatch_mids else "—",
-        },
-        {
-            "label": "outbox targets",
-            "value": (
-                "\n".join(
-                    [
-                        f"{item['operation']} chat:{item['target_chat_id'] or '-'} user:{item['target_user_id'] or '-'} [{item['state']}] mid:{item['external_message_mid'] or '-'}"
-                        for item in outbox_targets
-                    ]
-                )
-                if outbox_targets
-                else "—"
-            ),
-        },
     ]
 
     return templates.TemplateResponse(
@@ -1321,8 +1266,63 @@ def admin_chat_customer_profile(
             "query": safe_q,
             "view": safe_view,
             "back_to_chat_url": back_to_chat_url,
-            "back_to_list_url": back_to_list_url,
+            "back_to_list_url": f"{page_path}?q={quote_plus(safe_q)}",
         },
+    )
+
+
+@app.get("/admin/chats/{conversation_id}/profile", response_class=HTMLResponse)
+def admin_chat_customer_profile(
+    request: Request,
+    conversation_id: int,
+    q: str = "",
+    view: str = "",
+    folder_id: int | None = None,
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return _render_customer_profile_page(
+        request=request,
+        db=db,
+        conversation_id=conversation_id,
+        q=q,
+        view=view,
+        folder_id=folder_id,
+        page_path="/admin/chats",
+        workspace_id=DEFAULT_WORKSPACE_ID,
+    )
+
+
+@app.get("/app/chats/{conversation_id}/profile", response_class=HTMLResponse)
+def app_chat_customer_profile(
+    request: Request,
+    conversation_id: int,
+    q: str = "",
+    view: str = "",
+    folder_id: int | None = None,
+    workspace_id: int | None = None,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    resolved_workspace_id, _, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=resolved_workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
+    return _render_customer_profile_page(
+        request=request,
+        db=db,
+        conversation_id=conversation_id,
+        q=q,
+        view=view,
+        folder_id=folder_id,
+        page_path="/app/chats",
+        workspace_id=resolved_workspace_id,
+        endpoint_query_suffix=workspace_qs,
     )
 
 

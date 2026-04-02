@@ -554,8 +554,8 @@ def run() -> None:
         assert "Max Manager Mini App" in manager_mini_page.text
         assert "mobile-folder-bar" in manager_mini_page.text
         assert "/mini/manager/chats/" in manager_mini_page.text
-        assert "Настройки" in manager_mini_page.text
-        assert "Выйти" in manager_mini_page.text
+        assert "list-actions-btn" in manager_mini_page.text
+        assert "list-actions-menu" in manager_mini_page.text
 
         manager_mini_page_bad_token = client.get("/mini/manager?token=broken")
         assert manager_mini_page_bad_token.status_code == 403
@@ -599,12 +599,15 @@ def run() -> None:
             cookies=cookies,
         )
         assert profile_page.status_code == 200
-        assert "Профиль покупателя" in profile_page.text
+        assert "Профиль" in profile_page.text
         assert "Вернуться в чат" in profile_page.text
         assert "К списку чатов" not in profile_page.text
         assert "Основные данные" in profile_page.text
         assert "Данные из переписки / Max" in profile_page.text
         assert "Тикет" in profile_page.text
+        assert "message mids (последние)" not in profile_page.text
+        assert "manager dispatch mids" not in profile_page.text
+        assert "outbox targets" not in profile_page.text
         assert f"T-{conversation_id + 1000}"[:2] == "T-"
 
         admin_quick_reply = client.post(
@@ -706,7 +709,7 @@ def run() -> None:
         assert folder_page.status_code == 200
         assert folder_name in folder_page.text
         assert "folder-chip" in folder_page.text
-        assert f"/admin/chats/{conversation_id}/profile?from=chat&q=" in mobile_chat_page.text
+        assert f"/admin/chats/{conversation_id}/profile?q=" in mobile_chat_page.text
 
         metrics_page = client.get("/admin/chats", cookies=cookies)
         assert metrics_page.status_code == 200

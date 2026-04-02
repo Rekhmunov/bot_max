@@ -98,6 +98,12 @@
       cursor: pointer;
       width: 100%;
     }
+    .list-search-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+    }
     .search-form {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -119,6 +125,28 @@
       font-weight: 700;
       padding: 0 14px;
       cursor: pointer;
+    }
+    .list-actions-wrap {
+      display: none;
+      align-items: center;
+    }
+    .list-actions-btn {
+      border: 0;
+      width: 36px;
+      height: 36px;
+      border-radius: 11px;
+      background: #eef3ff;
+      color: #3a4f7a;
+      font-size: 20px;
+      line-height: 1;
+      font-weight: 800;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    .list-actions-btn:hover {
+      background: #e4ecff;
     }
     .metrics { display: none; }
     .threads {
@@ -358,34 +386,6 @@
       top: 0;
       z-index: 6;
     }
-    .chat-header-actions {
-      display: none;
-      align-items: center;
-      gap: 8px;
-      margin-left: 6px;
-      margin-right: 6px;
-    }
-    .chat-header-link {
-      text-decoration: none;
-      color: var(--accent);
-      font-size: 12px;
-      font-weight: 700;
-      border-radius: 9px;
-      background: var(--accent-soft);
-      padding: 6px 8px;
-      line-height: 1;
-    }
-    .chat-header-logout {
-      border: 0;
-      border-radius: 9px;
-      background: #f0f3fa;
-      color: #556079;
-      padding: 6px 8px;
-      font-size: 12px;
-      font-weight: 700;
-      cursor: pointer;
-      line-height: 1;
-    }
     .header-menu-btn {
       border: 0;
       width: 34px;
@@ -409,12 +409,23 @@
       border: 0;
       background: transparent;
       color: #222f4b;
-      width: 32px;
-      height: 32px;
+      width: 34px;
+      height: 34px;
       border-radius: 50%;
-      font-size: 24px;
-      line-height: 1;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       cursor: pointer;
+    }
+    .back-btn svg {
+      width: 20px;
+      height: 20px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 3;
+      stroke-linecap: round;
+      stroke-linejoin: round;
     }
     .back-btn:hover { background: #f1f4fb; }
     .chat-title-wrap { min-width: 0; }
@@ -732,6 +743,27 @@
       min-width: 230px;
       z-index: 1004;
     }
+    .list-actions-menu {
+      min-width: 190px;
+      z-index: 1005;
+    }
+    .list-actions-menu form {
+      margin: 0;
+    }
+    .context-menu .menu-link {
+      display: block;
+      width: 100%;
+      text-decoration: none;
+      text-align: left;
+      padding: 9px 10px;
+      border-radius: 8px;
+      color: #1f2a45;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .context-menu .menu-link:hover {
+      background: #f2f6ff;
+    }
     .msg-context-menu {
       position: fixed;
       z-index: 1002;
@@ -1010,14 +1042,14 @@
       .top-actions {
         display: none;
       }
+      .list-actions-wrap {
+        display: inline-flex;
+      }
       .chat-screen {
         border-right: 0;
       }
       .chat-header {
         padding-top: max(10px, env(safe-area-inset-top));
-      }
-      .chat-header-actions {
-        display: inline-flex;
       }
       .compose {
         bottom: var(--keyboard-offset, 0px);
@@ -1169,16 +1201,30 @@
         <div class="list-title-row">
           <h1 class="list-title">Чаты</h1>
         </div>
-        <form class="search-form" method="get" action="{{ page_path }}" data-soft-nav>
-          {% if access_token %}
-            <input type="hidden" name="token" value="{{ access_token }}" />
+        <div class="list-search-row">
+          <form class="search-form" method="get" action="{{ page_path }}" data-soft-nav>
+            {% if access_token %}
+              <input type="hidden" name="token" value="{{ access_token }}" />
+            {% endif %}
+            {% if folder_filter is not none %}
+              <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
+            {% endif %}
+            <input name="q" value="{{ query }}" placeholder="Поиск по имени, телефону, T-номеру..." />
+            <button type="submit">Найти</button>
+          </form>
+          {% if show_admin_nav %}
+            <div class="list-actions-wrap">
+              <button
+                type="button"
+                class="list-actions-btn"
+                id="list-actions-btn"
+                aria-label="Настройки и выход"
+              >
+                &#8942;
+              </button>
+            </div>
           {% endif %}
-          {% if folder_filter is not none %}
-            <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
-          {% endif %}
-          <input name="q" value="{{ query }}" placeholder="Поиск по имени, телефону, T-номеру..." />
-          <button type="submit">Найти</button>
-        </form>
+        </div>
       </div>
       <div class="mobile-folder-bar">
         <div class="mobile-folder-scroll">
@@ -1272,19 +1318,15 @@
     <main class="chat-screen {% if not active_thread or not mobile_chat_view %}hidden-mobile{% endif %}" id="chat-screen">
       {% if active_thread %}
         <div class="chat-header">
-          <a class="back-btn mobile-only" href="{{ page_query_prefix }}q={{ query }}{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}" aria-label="Назад к чатам" data-soft-nav>‹</a>
-          {% if show_admin_nav %}
-            <div class="chat-header-actions mobile-only">
-              <a class="chat-header-link" href="{{ settings_href }}">Настройки</a>
-              <form method="post" action="{{ logout_action }}">
-                <button class="chat-header-logout" type="submit">Выйти</button>
-              </form>
-            </div>
-          {% endif %}
+          <a class="back-btn mobile-only" href="{{ page_query_prefix }}q={{ query }}{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}" aria-label="Назад к чатам" data-soft-nav>
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 18L9 12L15 6" />
+            </svg>
+          </a>
           <div class="chat-title-wrap">
             <h2 class="chat-title">
               {% if show_profile_links %}
-                <a class="profile-link" href="{{ profile_href_prefix }}{{ active_thread.conversation_id }}/profile?from=chat&q={{ query }}">
+                <a class="profile-link" href="{{ profile_href_prefix }}{{ active_thread.conversation_id }}/profile?q={{ query }}&view={{ 'chat' if mobile_chat_view else '' }}{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}">
                   {% if active_thread.ticket_no %}[T-{{ active_thread.ticket_no }}] {% endif %}
                   {{ active_thread.customer_label }}
                 </a>
@@ -1442,6 +1484,15 @@
     </div>
   </div>
 
+  {% if show_admin_nav %}
+    <div class="context-menu list-actions-menu" id="list-actions-menu">
+      <a class="menu-link" href="{{ settings_href }}" data-soft-nav>Настройки</a>
+      <form method="post" action="{{ logout_action }}">
+        <button type="submit">Выйти</button>
+      </form>
+    </div>
+  {% endif %}
+
   {% if active_thread and (show_delete_user or show_rename_user) %}
     <div class="context-menu header-context-menu" id="header-context-menu"></div>
 
@@ -1524,6 +1575,49 @@
   </div>
 
   <script>
+    (() => {
+      const listActionsBtn = document.getElementById("list-actions-btn");
+      const listActionsMenu = document.getElementById("list-actions-menu");
+      if (!listActionsBtn || !listActionsMenu) return;
+
+      const placeFixedMenu = (menuEl, x, y) => {
+        const pad = 8;
+        menuEl.style.visibility = "hidden";
+        menuEl.style.display = "block";
+        const width = menuEl.offsetWidth || 0;
+        const height = menuEl.offsetHeight || 0;
+        const maxLeft = Math.max(pad, window.innerWidth - width - pad);
+        const maxTop = Math.max(pad, window.innerHeight - height - pad);
+        const left = Math.min(Math.max(pad, x), maxLeft);
+        const top = Math.min(Math.max(pad, y), maxTop);
+        menuEl.style.left = `${left}px`;
+        menuEl.style.top = `${top}px`;
+        menuEl.style.visibility = "visible";
+      };
+
+      const hideListActionsMenu = () => {
+        listActionsMenu.style.display = "none";
+      };
+
+      listActionsBtn.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (listActionsMenu.style.display === "block") {
+          hideListActionsMenu();
+          return;
+        }
+        const rect = listActionsBtn.getBoundingClientRect();
+        placeFixedMenu(listActionsMenu, rect.right - 8, rect.bottom + 6);
+      });
+
+      document.addEventListener("click", (event) => {
+        if (listActionsMenu.contains(event.target) || listActionsBtn.contains(event.target)) return;
+        hideListActionsMenu();
+      });
+      window.addEventListener("resize", hideListActionsMenu);
+      window.addEventListener("scroll", hideListActionsMenu, { passive: true });
+    })();
+
     (() => {
       const messageInput = document.getElementById("message-input");
       const photoInput = document.querySelector(".attach-wrap input[type='file']");
