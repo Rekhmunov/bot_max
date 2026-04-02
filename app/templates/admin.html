@@ -145,13 +145,32 @@
       gap: 8px;
       align-items: center;
     }
-    .add-manager-id-btn {
+    .manager-row-send-btn {
       border: 1px solid var(--line);
       background: #fff;
       color: #3b4d74;
       border-radius: 8px;
       width: 34px;
       height: 34px;
+      font-size: 16px;
+      line-height: 1;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .manager-add-row {
+      display: flex;
+      justify-content: flex-start;
+    }
+    .add-manager-id-btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #3b4d74;
+      border-radius: 8px;
+      height: 34px;
+      min-width: 34px;
       font-size: 20px;
       line-height: 1;
       font-weight: 700;
@@ -159,6 +178,7 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
+      padding: 0 10px;
     }
     .manager-id-extra { display: none; }
     .manager-id-extra.show { display: grid; }
@@ -211,18 +231,33 @@
 
           <label for="after_phone_message">Сообщение после подтверждения номера</label>
           <textarea id="after_phone_message" name="after_phone_message" required>{{ template_after_phone }}</textarea>
-          {% set manager_ids = (settings.manager_account_id or "").split(",") %}
-          {% set manager_id_1 = (manager_ids[0].strip() if manager_ids|length > 0 else "") %}
-          {% set manager_id_2 = (manager_ids[1].strip() if manager_ids|length > 1 else "") %}
+          {% set manager_ids = manager_id_rows if manager_id_rows is defined else [] %}
+          {% if not manager_ids %}
+            {% set manager_ids = [""] %}
+          {% endif %}
 
           <label for="manager_account_id">ID менеджера в Max</label>
-          <div class="manager-ids-wrap">
+          <div class="manager-ids-wrap" id="manager-ids-wrap">
+            {% for manager_id in manager_ids %}
             <div class="manager-id-row">
-              <input id="manager_account_id" name="manager_account_id" value="{{ manager_id_1 }}" />
-              <button type="button" class="add-manager-id-btn" id="add-manager-id-btn" aria-label="Добавить ID менеджера">+</button>
+              <input
+                name="manager_account_ids"
+                value="{{ manager_id }}"
+                placeholder="ID менеджера в Max"
+              />
+              <button
+                type="submit"
+                class="manager-row-send-btn"
+                name="send_manager_id"
+                value="{{ manager_id }}"
+                formaction="{{ manager_invite_send_action or '/app/settings/send-manager-link' }}"
+                aria-label="Отправить ссылку менеджеру"
+                title="Отправить ссылку менеджеру"
+              >➤</button>
             </div>
-            <div class="manager-id-extra {% if manager_id_2 %}show{% endif %}" id="manager-id-extra">
-              <input id="manager_account_id_2" name="manager_account_id_2" value="{{ manager_id_2 }}" placeholder="ID второго менеджера" />
+            {% endfor %}
+            <div class="manager-add-row">
+              <button type="button" class="add-manager-id-btn" id="add-manager-id-btn" aria-label="Добавить ID менеджера">+</button>
             </div>
           </div>
 
@@ -394,12 +429,44 @@
   <script>
     (() => {
       const plusBtn = document.getElementById("add-manager-id-btn");
-      const extraRow = document.getElementById("manager-id-extra");
-      if (!plusBtn || !extraRow) return;
+      const rowsWrap = document.getElementById("manager-ids-wrap");
+      if (!plusBtn || !rowsWrap) return;
       plusBtn.addEventListener("click", () => {
-        extraRow.classList.add("show");
-        const second = document.getElementById("manager_account_id_2");
-        if (second instanceof HTMLInputElement) second.focus();
+        const rows = Array.from(rowsWrap.querySelectorAll("input[name='manager_account_ids']"));
+        const lastInput = rows.length ? rows[rows.length - 1] : null;
+        if (lastInput && !lastInput.value.trim()) {
+          lastInput.focus();
+          return;
+        }
+        const addRow = rowsWrap.querySelector(".manager-add-row");
+        if (!addRow) return;
+        const row = document.createElement("div");
+        row.className = "manager-id-row";
+        row.innerHTML = `
+          <input name="manager_account_ids" value="" placeholder="ID менеджера в Max" />
+          <button
+            type="submit"
+            class="manager-row-send-btn"
+            name="send_manager_id"
+            value=""
+            formaction="{{ manager_invite_send_action or '/app/settings/send-manager-link' }}"
+            aria-label="Отправить ссылку менеджеру"
+            title="Отправить ссылку менеджеру"
+          >➤</button>
+        `;
+        rowsWrap.insertBefore(row, addRow);
+        const created = row.querySelector("input[name='manager_account_ids']");
+        if (created instanceof HTMLInputElement) created.focus();
+      });
+      rowsWrap.addEventListener("input", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement)) return;
+        if (target.name !== "manager_account_ids") return;
+        const row = target.closest(".manager-id-row");
+        const sendBtn = row?.querySelector("button[name='send_manager_id']");
+        if (sendBtn instanceof HTMLButtonElement) {
+          sendBtn.value = target.value.trim();
+        }
       });
     })();
   </script>

@@ -277,6 +277,7 @@ def run() -> None:
                 "start_message": start_template,
                 "after_phone_message": after_phone_template,
                 "manager_account_id": "90000",
+                "manager_account_ids": "90000",
                 "admin_account_id": "admin_1",
             },
             cookies=cookies,
@@ -286,6 +287,8 @@ def run() -> None:
         assert "Распределять по очереди" in save_settings.text
         assert "Случайное назначение" in save_settings.text
         assert "Логика: бот общается с покупателем" not in save_settings.text
+        assert "add-manager-id-btn" in save_settings.text
+        assert "manager-row-send-btn" in save_settings.text
 
         create_reply = client.post(
             "/admin/quick-replies",
@@ -594,18 +597,36 @@ def run() -> None:
                 "start_message": start_template,
                 "after_phone_message": after_phone_template,
                 "manager_account_id": "90000",
-                "manager_account_id_2": "90001",
+                "manager_account_ids": "90000,90001",
                 "admin_account_id": "",
                 "routing_mode": "round_robin",
             },
             cookies=cookies,
         )
         assert save_settings_multi.status_code == 200
-        assert "manager-id-extra" in save_settings_multi.text
+        assert "manager-ids-wrap" in save_settings_multi.text
         assert "add-manager-id-btn" in save_settings_multi.text
         with SessionLocal() as db:
             settings_row = get_or_create_settings(db)
-            assert settings_row.manager_account_id == "90000,90001"
+            parsed_ids = [item.strip() for item in (settings_row.manager_account_id or "").split(",") if item.strip()]
+            assert parsed_ids == ["90000", "90001"]
+
+        send_manager_link = client.post(
+            "/admin/settings/send-manager-link",
+            data={
+                "manager_account_id": "90000",
+                "manager_account_ids": "90000,90001",
+                "send_manager_id": "90000",
+                "prestart_message": DEFAULT_TEMPLATES["prestart_message"],
+                "start_message": start_template,
+                "after_phone_message": after_phone_template,
+                "routing_mode": "round_robin",
+                "admin_account_id": "",
+            },
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert send_manager_link.status_code == 200
 
         admin_chats_page = client.get(
             f"/admin/chats?conversation_id={conversation_id}",

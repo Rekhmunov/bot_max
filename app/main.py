@@ -14,7 +14,7 @@ from urllib.parse import urlencode
 from uuid import uuid4
 
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from sqlalchemy import func
@@ -173,6 +173,141 @@ def _normalize_manager_ids(raw: str) -> str:
 
 def _parse_manager_ids(raw: str) -> list[str]:
     return [item.strip() for item in (raw or "").split(",") if item.strip()]
+
+
+def _extract_manager_ids_from_form(form_data: object) -> list[str]:
+    get = getattr(form_data, "get", None)
+    getlist = getattr(form_data, "getlist", None)
+    values: list[str] = []
+    if callable(getlist):
+        for value in getlist("manager_account_ids"):
+            values.append(str(value or ""))
+    if callable(get):
+        # Backward compatibility for old form fields.
+        values.append(str(get("manager_account_id", "") or ""))
+        values.append(str(get("manager_account_id_2", "") or ""))
+    return _parse_manager_ids(_normalize_manager_ids(",".join(values)))
+
+
+def _build_manager_username(db: Session, *, workspace_id: int, manager_id: str) -> str:
+    seed = re.sub(r"[^a-z0-9_.-]+", "_", (manager_id or "").strip().lower()).strip("._-")
+    if not seed:
+        seed = "manager"
+    base = f"mgr_{workspace_id}_{seed}"
+    base = base[:64]
+    candidate = base
+    suffix = 2
+    while db.query(ServiceUser.id).filter(ServiceUser.username == candidate).first():
+        tail = f"_{suffix}"
+        candidate = f"{base[: max(1, 64 - len(tail))]}{tail}"
+        suffix += 1
+    return candidate
+
+
+def _get_or_create_manager_by_max_id(
+    db: Session,
+    *,
+    workspace_id: int,
+    manager_id: str,
+    actor_user_id: int | None,
+) -> ServiceUser:
+    manager = (
+        db.query(ServiceUser)
+        .filter(
+            ServiceUser.workspace_id == workspace_id,
+            ServiceUser.role == "manager",
+            ServiceUser.max_account_id == manager_id,
+        )
+        .first()
+    )
+    if manager is not None:
+        if not manager.is_active or manager.is_blocked:
+            raise ValueError("manager_inactive")
+        return manager
+
+    can_add, _ = can_add_manager(db, workspace_id=workspace_id)
+    if not can_add:
+        raise ValueError("manager_limit_exceeded")
+
+    username = _build_manager_username(db, workspace_id=workspace_id, manager_id=manager_id)
+    manager = create_service_user(
+        db,
+        username=username,
+        password=f"InviteOnly#{uuid4().hex[:10]}",
+        role="manager",
+        workspace_id=workspace_id,
+        display_name=f"Менеджер {manager_id}",
+        max_account_id=manager_id,
+    )
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=actor_user_id,
+            action="manager_created",
+            object_type="service_user",
+            object_id=str(manager.id),
+            details_json=f'{{"username":"{manager.username}","max_account_id":"{manager_id}","source":"settings_send_link"}}',
+        )
+    )
+    db.commit()
+    return manager
+
+
+async def _send_manager_invite_link_to_max(
+    db: Session,
+    *,
+    workspace_id: int,
+    manager_id: str,
+    actor_user_id: int | None,
+) -> tuple[bool, str]:
+    manager_id_clean = (manager_id or "").strip()
+    if not manager_id_clean:
+        return False, "Укажите ID менеджера."
+
+    ok_ws, _ = ensure_workspace_limits_and_state(db, workspace_id=workspace_id)
+    if not ok_ws:
+        return False, "Workspace приостановлен из-за биллинга."
+
+    try:
+        manager_user = _get_or_create_manager_by_max_id(
+            db,
+            workspace_id=workspace_id,
+            manager_id=manager_id_clean,
+            actor_user_id=actor_user_id,
+        )
+    except ValueError as exc:
+        if str(exc) == "manager_limit_exceeded":
+            return False, "Ваш тарифный план не позволяет добавлять больше менеджеров."
+        return False, "Менеджер не активен или заблокирован."
+
+    links = _build_manager_invite_links(
+        db=db,
+        manager=manager_user,
+        workspace_id=workspace_id,
+        base_url=settings.public_base_url.rstrip("/"),
+    )
+    message_text = (
+        "Вас пригласили в FeedPilot.\n"
+        f"Ссылка для входа: {links['invite_link']}\n"
+        f"Mini-app: {links['mini_link']}"
+    )
+    send_result = await MaxClient().send_text_to_user(user_id=manager_id_clean, text=message_text)
+    sent_ok = bool(send_result.get("success", True) or send_result.get("message") or send_result.get("mock"))
+    if not sent_ok:
+        return False, "Не удалось отправить ссылку в Max."
+
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=actor_user_id,
+            action="manager_invite_sent",
+            object_type="service_user",
+            object_id=str(manager_user.id),
+            details_json=f'{{"max_account_id":"{manager_id_clean}"}}',
+        )
+    )
+    db.commit()
+    return True, f"Ссылка отправлена менеджеру {manager_id_clean}."
 
 
 def _superadmin_dashboard_snapshot(db: Session) -> dict:
@@ -860,6 +995,7 @@ def admin_page(
 ) -> HTMLResponse:
     workspace_id = DEFAULT_WORKSPACE_ID
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
     replies = (
         db.query(QuickReply)
         .filter(QuickReply.workspace_id == workspace_id)
@@ -886,6 +1022,9 @@ def admin_page(
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
+            "manager_id_rows": _parse_manager_ids(bot_settings.manager_account_id),
+            "manager_ids_limit": int(sub.manager_limit or 0),
+            "manager_invite_send_action": "/admin/settings/send-manager-link",
             "message": None,
             "error": None,
         },
@@ -893,26 +1032,68 @@ def admin_page(
 
 
 @app.post("/admin/settings", response_class=HTMLResponse)
-def update_settings(
+async def update_settings(
     request: Request,
     prestart_message: str = Form(...),
     start_message: str = Form(...),
     after_phone_message: str = Form(...),
-    manager_account_id: str = Form(...),
+    manager_account_id: str = Form(""),
     manager_account_id_2: str = Form(""),
     admin_account_id: str = Form(""),
+    routing_mode: str = Form("round_robin"),
     _admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     _enforce_same_origin(request)
     if _admin is None:
         return RedirectResponse(url="/admin/login", status_code=302)
+    form_data = await request.form()
+    manager_ids = _extract_manager_ids_from_form(form_data)
+    if not manager_ids:
+        manager_ids = _parse_manager_ids(_normalize_manager_ids(f"{manager_account_id},{manager_account_id_2}"))
+    manager_ids_csv = _normalize_manager_ids(",".join(manager_ids))
     workspace_id = DEFAULT_WORKSPACE_ID
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
-    bot_settings.manager_account_id = _normalize_manager_ids(
-        f"{manager_account_id},{manager_account_id_2}"
-    )
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    manager_limit_value = max(1, int(sub.manager_limit or 0))
+    if len(manager_ids) > manager_limit_value:
+        replies = (
+            db.query(QuickReply)
+            .filter(QuickReply.workspace_id == workspace_id)
+            .order_by(QuickReply.command.asc())
+            .all()
+        )
+        chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
+        delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
+        bot_settings.manager_account_id = manager_ids_csv
+        return templates.TemplateResponse(
+            request,
+            "admin.html",
+            {
+                "request": request,
+                "settings": bot_settings,
+                "template_prestart": prestart_message,
+                "template_start": start_message,
+                "template_after_phone": after_phone_message,
+                "quick_replies": replies,
+                "webhook_path": webhook_path,
+                "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+                "chat_metrics": chat_metrics,
+                "delivery_metrics": delivery_metrics,
+                "manager_id_rows": manager_ids,
+                "manager_ids_limit": manager_limit_value,
+                "manager_invite_send_action": "/admin/settings/send-manager-link",
+                "message": None,
+                "error": "Ваш тарифный план не позволяет добавлять больше менеджеров.",
+            },
+            status_code=400,
+        )
+    bot_settings.manager_account_id = manager_ids_csv
     bot_settings.admin_account_id = admin_account_id.strip()
+    mode = (routing_mode or "round_robin").strip().lower()
+    if mode not in {"round_robin", "random"}:
+        mode = "round_robin"
+    bot_settings.routing_mode = mode
     db.add(bot_settings)
     set_template_text(db, TEMPLATE_PRESTART, prestart_message, workspace_id=workspace_id)
     set_template_text(db, TEMPLATE_START, start_message, workspace_id=workspace_id)
@@ -945,9 +1126,125 @@ def update_settings(
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
+            "manager_id_rows": manager_ids,
+            "manager_ids_limit": manager_limit_value,
+            "manager_invite_send_action": "/admin/settings/send-manager-link",
             "message": "Настройки сохранены",
             "error": None,
         },
+    )
+
+
+@app.post("/admin/settings/send-manager-link", response_class=HTMLResponse)
+async def admin_send_manager_link(
+    request: Request,
+    _admin: str = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    _enforce_same_origin(request)
+    if _admin is None:
+        return RedirectResponse(url="/admin/login", status_code=302)
+    form_data = await request.form()
+    workspace_id = DEFAULT_WORKSPACE_ID
+    manager_ids = _extract_manager_ids_from_form(form_data)
+    manager_ids_csv = _normalize_manager_ids(",".join(manager_ids))
+    target_manager_id = str(form_data.get("send_manager_id", "") or "").strip()
+    admin_account_id = str(form_data.get("admin_account_id", "") or "").strip()
+    mode = str(form_data.get("routing_mode", "round_robin") or "round_robin").strip().lower()
+    if mode not in {"round_robin", "random"}:
+        mode = "round_robin"
+    bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    manager_limit_value = max(1, int(sub.manager_limit or 0))
+    if len(manager_ids) > manager_limit_value:
+        return templates.TemplateResponse(
+            request,
+            "admin.html",
+            {
+                "request": request,
+                "settings": bot_settings,
+                "template_prestart": str(form_data.get("prestart_message", "") or ""),
+                "template_start": str(form_data.get("start_message", "") or ""),
+                "template_after_phone": str(form_data.get("after_phone_message", "") or ""),
+                "quick_replies": (
+                    db.query(QuickReply)
+                    .filter(QuickReply.workspace_id == workspace_id)
+                    .order_by(QuickReply.command.asc())
+                    .all()
+                ),
+                "webhook_path": webhook_path,
+                "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+                "chat_metrics": get_chat_metrics(db, workspace_id=workspace_id),
+                "delivery_metrics": get_delivery_metrics(db, workspace_id=workspace_id),
+                "manager_id_rows": manager_ids,
+                "manager_ids_limit": manager_limit_value,
+                "manager_invite_send_action": "/admin/settings/send-manager-link",
+                "message": None,
+                "error": "Ваш тарифный план не позволяет добавлять больше менеджеров.",
+            },
+            status_code=400,
+        )
+
+    bot_settings.manager_account_id = manager_ids_csv
+    bot_settings.admin_account_id = admin_account_id
+    bot_settings.routing_mode = mode
+    db.add(bot_settings)
+    set_template_text(
+        db,
+        TEMPLATE_PRESTART,
+        str(form_data.get("prestart_message", "") or ""),
+        workspace_id=workspace_id,
+    )
+    set_template_text(
+        db,
+        TEMPLATE_START,
+        str(form_data.get("start_message", "") or ""),
+        workspace_id=workspace_id,
+    )
+    set_template_text(
+        db,
+        TEMPLATE_AFTER_PHONE,
+        str(form_data.get("after_phone_message", "") or ""),
+        workspace_id=workspace_id,
+    )
+    db.commit()
+
+    ok, msg = await _send_manager_invite_link_to_max(
+        db,
+        workspace_id=workspace_id,
+        manager_id=target_manager_id,
+        actor_user_id=None,
+    )
+    return templates.TemplateResponse(
+        request,
+        "admin.html",
+        {
+            "request": request,
+            "settings": get_or_create_settings(db, workspace_id=workspace_id),
+            "template_prestart": get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id),
+            "template_start": get_template_text(db, TEMPLATE_START, workspace_id=workspace_id),
+            "template_after_phone": get_template_text(
+                db,
+                TEMPLATE_AFTER_PHONE,
+                workspace_id=workspace_id,
+            ),
+            "quick_replies": (
+                db.query(QuickReply)
+                .filter(QuickReply.workspace_id == workspace_id)
+                .order_by(QuickReply.command.asc())
+                .all()
+            ),
+            "webhook_path": webhook_path,
+            "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+            "chat_metrics": get_chat_metrics(db, workspace_id=workspace_id),
+            "delivery_metrics": get_delivery_metrics(db, workspace_id=workspace_id),
+            "manager_id_rows": manager_ids,
+            "manager_ids_limit": manager_limit_value,
+            "manager_invite_send_action": "/admin/settings/send-manager-link",
+            "message": (msg if ok else None),
+            "error": (None if ok else msg),
+        },
+        status_code=(200 if ok else 400),
     )
 
 
@@ -1891,6 +2188,26 @@ def _build_manager_invite_links(
         "mini_link": f"{base_url}/mini/manager?token={quote_plus(create_manager_mini_token(manager_identifier, workspace_id=workspace_id, service_user_id=manager.id))}",
         "web_link": f"{base_url}/app/chats",
     }
+
+
+async def _send_manager_invite_message(
+    *,
+    manager_id: str,
+    invite_link: str,
+    mini_link: str,
+) -> bool:
+    target = (manager_id or "").strip()
+    if not target:
+        return False
+    text = (
+        "Подключение к FeedPilot\n"
+        "Для начала работы откройте ссылку и задайте пароль:\n"
+        f"{invite_link}\n\n"
+        "После активации можно сразу работать в mini-app:\n"
+        f"{mini_link}"
+    )
+    result = await MaxClient().send_text_to_user(user_id=target, text=text)
+    return bool(result.get("success", True) or result.get("message"))
 
 
 def _manager_invite_context(
