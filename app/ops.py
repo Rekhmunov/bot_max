@@ -22,7 +22,7 @@ def get_or_create_subscription(db: Session, *, workspace_id: int) -> Subscriptio
     now = _now()
     sub = Subscription(
         workspace_id=workspace_id,
-        plan_code="trial",
+        plan_code="basic",
         status="active",
         manager_limit=3,
         dialogs_limit=500,
@@ -65,6 +65,8 @@ def ensure_workspace_active_by_billing(db: Session, *, workspace_id: int) -> boo
 
 def can_add_manager(db: Session, *, workspace_id: int) -> tuple[bool, str]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    if (sub.plan_code or "").strip().lower() == "unlimited":
+        return True, ""
     count = (
         db.query(ServiceUser)
         .filter(
@@ -81,6 +83,8 @@ def can_add_manager(db: Session, *, workspace_id: int) -> tuple[bool, str]:
 
 def can_create_dialog(db: Session, *, workspace_id: int) -> tuple[bool, str]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    if (sub.plan_code or "").strip().lower() == "unlimited":
+        return True, ""
     dialogs = db.query(Conversation).filter(Conversation.workspace_id == workspace_id).count()
     if dialogs >= int(sub.dialogs_limit or 0):
         return False, "dialogs_limit_exceeded"
@@ -89,6 +93,8 @@ def can_create_dialog(db: Session, *, workspace_id: int) -> tuple[bool, str]:
 
 def can_send_message_this_month(db: Session, *, workspace_id: int) -> tuple[bool, str]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    if (sub.plan_code or "").strip().lower() == "unlimited":
+        return True, ""
     now = _now()
     period_start = sub.current_period_start or (now - timedelta(days=30))
     sent_count = (
@@ -107,6 +113,8 @@ def can_send_message_this_month(db: Session, *, workspace_id: int) -> tuple[bool
 
 def can_create_quick_reply(db: Session, *, workspace_id: int) -> tuple[bool, str]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    if (sub.plan_code or "").strip().lower() == "unlimited":
+        return True, ""
     current = db.query(QuickReply).filter(QuickReply.workspace_id == workspace_id).count()
     if current >= int(sub.quick_replies_limit or 0):
         return False, "quick_replies_limit_exceeded"
@@ -115,6 +123,8 @@ def can_create_quick_reply(db: Session, *, workspace_id: int) -> tuple[bool, str
 
 def can_create_folder(db: Session, *, workspace_id: int) -> tuple[bool, str]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    if (sub.plan_code or "").strip().lower() == "unlimited":
+        return True, ""
     current = db.query(ChatFolder).filter(ChatFolder.workspace_id == workspace_id).count()
     if current >= int(sub.folders_limit or 0):
         return False, "folders_limit_exceeded"

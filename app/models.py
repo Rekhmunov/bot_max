@@ -72,7 +72,7 @@ class Subscription(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
-    plan_code: Mapped[str] = mapped_column(String(64), default="trial")
+    plan_code: Mapped[str] = mapped_column(String(64), default="basic")
     status: Mapped[str] = mapped_column(String(32), default="active", index=True)
     manager_limit: Mapped[int] = mapped_column(Integer, default=3)
     dialogs_limit: Mapped[int] = mapped_column(Integer, default=500)

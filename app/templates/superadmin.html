@@ -224,7 +224,8 @@
   {% set role_labels = {"superadmin": "Суперадмин", "owner": "Владелец", "admin": "Администратор", "manager": "Менеджер"} %}
   {% set subscription_status_labels = {
     "active": "Активна",
-    "trial": "Пробный период",
+    "basic": "Базовый",
+    "trial": "Базовый",
     "past_due": "Просрочена оплата",
     "paused": "На паузе",
     "cancelled": "Отменена"
@@ -450,7 +451,7 @@
                       <div>
                         <label>Статус</label>
                         <select name="status">
-                          {% for option, option_label in [("active","Активна"), ("trial","Пробный период"), ("past_due","Просрочена оплата"), ("paused","На паузе"), ("cancelled","Отменена")] %}
+                          {% for option, option_label in [("active","Активна"), ("basic","Базовый"), ("unlimited","Безлимит"), ("past_due","Просрочена оплата"), ("paused","На паузе"), ("cancelled","Отменена")] %}
                             <option value="{{ option }}" {% if row.subscription.status == option %}selected{% endif %}>{{ option_label }}</option>
                           {% endfor %}
                         </select>

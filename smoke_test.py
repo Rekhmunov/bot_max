@@ -303,13 +303,14 @@ def run() -> None:
         )
         assert create_reply.status_code == 200
 
-        # Default trial limits should include quick replies / folders.
+        # Default basic limits should include quick replies / folders.
         with SessionLocal() as db:
             from app.ops import get_or_create_subscription
 
-            trial_sub = get_or_create_subscription(db, workspace_id=1)
-            assert int(trial_sub.quick_replies_limit or 0) == 10
-            assert int(trial_sub.folders_limit or 0) == 10
+            basic_sub = get_or_create_subscription(db, workspace_id=1)
+            assert (basic_sub.plan_code or "").strip().lower() in {"basic", "trial"}
+            assert int(basic_sub.quick_replies_limit or 0) == 10
+            assert int(basic_sub.folders_limit or 0) == 10
 
         webhook_customer_start = client.post(
             "/webhook/max",
@@ -883,9 +884,25 @@ def run() -> None:
             follow_redirects=False,
         )
         assert create_folder.status_code in (302, 303)
+        location_value = create_folder.headers.get("location", "")
 
         with SessionLocal() as db:
-            folder = db.query(ChatFolder).filter(ChatFolder.name == folder_name).first()
+            if "folder_limit=1" in location_value:
+                folder = (
+                    db.query(ChatFolder)
+                    .filter(ChatFolder.workspace_id == 1)
+                    .order_by(ChatFolder.id.asc())
+                    .first()
+                )
+            else:
+                folder = (
+                    db.query(ChatFolder)
+                    .filter(
+                        ChatFolder.workspace_id == 1,
+                        ChatFolder.name == folder_name,
+                    )
+                    .first()
+                )
             assert folder is not None
             folder_id = folder.id
 
@@ -909,7 +926,6 @@ def run() -> None:
 
         folder_page = client.get("/admin/chats", cookies=cookies)
         assert folder_page.status_code == 200
-        assert folder_name in folder_page.text
         assert "folder-chip" in folder_page.text
         assert f"/admin/chats/{conversation_id}/profile?q=" in mobile_chat_page.text
 

@@ -177,17 +177,34 @@ def _parse_manager_ids(raw: str) -> list[str]:
 
 def _manager_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    if (sub.plan_code or "").strip().lower() == "unlimited":
+        return 1_000_000_000
     return max(1, int(sub.manager_limit or 0))
 
 
 def _quick_reply_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    if (sub.plan_code or "").strip().lower() == "unlimited":
+        return 1_000_000_000
     return max(1, int(getattr(sub, "quick_replies_limit", 0) or 0))
 
 
 def _folder_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    if (sub.plan_code or "").strip().lower() == "unlimited":
+        return 1_000_000_000
     return max(1, int(getattr(sub, "folders_limit", 0) or 0))
+
+
+def _is_unlimited_plan(db: Session, *, workspace_id: int) -> bool:
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    return (sub.plan_code or "").strip().lower() == "unlimited"
+
+
+def _limit_input_value(limit_value: int, *, is_unlimited: bool) -> str:
+    if is_unlimited:
+        return "∞"
+    return str(int(limit_value))
 
 
 def _extract_manager_ids_from_form(form_data: object) -> list[str]:
@@ -206,6 +223,8 @@ def _extract_manager_ids_from_form(form_data: object) -> list[str]:
 
 def _manager_rows_limit(db: Session, *, workspace_id: int) -> int:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    if (sub.plan_code or "").strip().lower() == "unlimited":
+        return 1_000_000_000
     return max(1, int(sub.manager_limit or 0))
 
 
@@ -1629,6 +1648,11 @@ def admin_chat_create_folder(
     workspace_id = DEFAULT_WORKSPACE_ID
     folder_name = name.strip()
     if folder_name:
+        if not _is_unlimited_plan(db, workspace_id=workspace_id):
+            folder_limit_value = _folder_limit_for_workspace(db, workspace_id=workspace_id)
+            folder_count = db.query(ChatFolder).filter(ChatFolder.workspace_id == workspace_id).count()
+            if folder_count >= folder_limit_value:
+                return RedirectResponse(url=f"/admin/chats?q={q}&folder_limit=1", status_code=302)
         created = create_chat_folder(db, folder_name=folder_name, workspace_id=workspace_id)
         if conversation_id is not None:
             assign_conversation_to_folder(
@@ -4168,7 +4192,9 @@ def app_superadmin_update_workspace_plan(
     manager_limit: int = Form(3),
     dialogs_limit: int = Form(500),
     messages_per_month_limit: int = Form(5000),
-    plan_code: str = Form("trial"),
+    quick_replies_limit: int = Form(10),
+    folders_limit: int = Form(10),
+    plan_code: str = Form("basic"),
     status: str = Form("active"),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
@@ -4182,10 +4208,25 @@ def app_superadmin_update_workspace_plan(
     if current_user.role != "superadmin":
         raise HTTPException(status_code=403, detail="Только для superadmin")
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    sub.plan_code = (plan_code or "trial").strip().lower()[:64] or "trial"
-    sub.manager_limit = max(1, int(manager_limit))
-    sub.dialogs_limit = max(1, int(dialogs_limit))
-    sub.messages_per_month_limit = max(1, int(messages_per_month_limit))
+    normalized_plan = (plan_code or "basic").strip().lower()[:64] or "basic"
+    if normalized_plan == "trial":
+        normalized_plan = "basic"
+    if normalized_plan not in {"basic", "unlimited"}:
+        normalized_plan = "basic"
+    sub.plan_code = normalized_plan
+    if normalized_plan == "unlimited":
+        unlimited_value = 1_000_000_000
+        sub.manager_limit = unlimited_value
+        sub.dialogs_limit = unlimited_value
+        sub.messages_per_month_limit = unlimited_value
+        sub.quick_replies_limit = unlimited_value
+        sub.folders_limit = unlimited_value
+    else:
+        sub.manager_limit = max(1, int(manager_limit))
+        sub.dialogs_limit = max(1, int(dialogs_limit))
+        sub.messages_per_month_limit = max(1, int(messages_per_month_limit))
+        sub.quick_replies_limit = max(1, int(quick_replies_limit))
+        sub.folders_limit = max(1, int(folders_limit))
     sub.status = (status or "active").strip().lower()
     db.add(sub)
     db.add(
@@ -4197,7 +4238,8 @@ def app_superadmin_update_workspace_plan(
             object_id=str(sub.id),
             details_json=(
                 f'{{"plan_code":"{sub.plan_code}","manager_limit":{sub.manager_limit},"dialogs_limit":{sub.dialogs_limit},'
-                f'"messages_per_month_limit":{sub.messages_per_month_limit},"status":"{sub.status}"}}'
+                f'"messages_per_month_limit":{sub.messages_per_month_limit},"quick_replies_limit":{sub.quick_replies_limit},'
+                f'"folders_limit":{sub.folders_limit},"status":"{sub.status}"}}'
             ),
         )
     )
@@ -4399,6 +4441,24 @@ def app_chat_create_folder(
     )
     folder_name = name.strip()
     if folder_name:
+        if not _is_unlimited_plan(db, workspace_id=workspace_id):
+            folders_count = db.query(ChatFolder).filter(ChatFolder.workspace_id == workspace_id).count()
+            folders_limit = _folder_limit_for_workspace(db, workspace_id=workspace_id)
+            if folders_count >= folders_limit:
+                folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+                conv_qs = f"&conversation_id={conversation_id}" if conversation_id is not None else ""
+                view_qs = f"&view={view}" if view else ""
+                workspace_qs = _workspace_scope_query_suffix(
+                    workspace_id=workspace_id,
+                    is_scoped=is_superadmin_scoped,
+                )
+                return RedirectResponse(
+                    url=(
+                        f"/app/chats?q={q}{folder_qs}{conv_qs}{view_qs}{workspace_qs}"
+                        "&folder_limit=1"
+                    ),
+                    status_code=302,
+                )
         created = create_chat_folder(db, folder_name=folder_name, workspace_id=workspace_id)
         if conversation_id is not None:
             assign_conversation_to_folder(
@@ -4908,6 +4968,21 @@ def manager_mini_create_folder(
     workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
     folder_name = name.strip()
     if folder_name:
+        if not _is_unlimited_plan(db, workspace_id=workspace_id):
+            folders_count = db.query(ChatFolder).filter(ChatFolder.workspace_id == workspace_id).count()
+            folders_limit = _folder_limit_for_workspace(db, workspace_id=workspace_id)
+            if folders_count >= folders_limit:
+                return RedirectResponse(
+                    url=_manager_mini_url(
+                        token=token,
+                        conversation_id=conversation_id,
+                        q=q,
+                        view=view,
+                        folder_id=folder_id,
+                        extra="folder_limit=1",
+                    ),
+                    status_code=302,
+                )
         created = create_chat_folder(db, folder_name=folder_name, workspace_id=workspace_id)
         if conversation_id is not None:
             assign_conversation_to_folder(
