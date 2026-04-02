@@ -303,6 +303,14 @@ def run() -> None:
         )
         assert create_reply.status_code == 200
 
+        # Default trial limits should include quick replies / folders.
+        with SessionLocal() as db:
+            from app.ops import get_or_create_subscription
+
+            trial_sub = get_or_create_subscription(db, workspace_id=1)
+            assert int(trial_sub.quick_replies_limit or 0) == 10
+            assert int(trial_sub.folders_limit or 0) == 10
+
         webhook_customer_start = client.post(
             "/webhook/max",
             json={

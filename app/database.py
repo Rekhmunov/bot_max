@@ -211,6 +211,24 @@ def _ensure_lightweight_migrations() -> None:
                 )
             )
 
+        if "subscriptions" in table_names:
+            sub_cols = {col["name"] for col in inspector.get_columns("subscriptions")}
+            if "quick_replies_limit" not in sub_cols:
+                conn.execute(
+                    text("ALTER TABLE subscriptions ADD COLUMN quick_replies_limit INTEGER DEFAULT 10")
+                )
+            if "folders_limit" not in sub_cols:
+                conn.execute(
+                    text("ALTER TABLE subscriptions ADD COLUMN folders_limit INTEGER DEFAULT 10")
+                )
+
+        if "subscriptions" in table_names:
+            sub_cols = {col["name"] for col in inspector.get_columns("subscriptions")}
+            if "quick_replies_limit" not in sub_cols:
+                conn.execute(text("ALTER TABLE subscriptions ADD COLUMN quick_replies_limit INTEGER DEFAULT 10"))
+            if "chat_folders_limit" not in sub_cols:
+                conn.execute(text("ALTER TABLE subscriptions ADD COLUMN chat_folders_limit INTEGER DEFAULT 10"))
+
         if "platform_settings" in table_names:
             platform_cols = {col["name"] for col in inspector.get_columns("platform_settings")}
             if "settings_key" in platform_cols and "settings_value" in platform_cols:

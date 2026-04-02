@@ -77,6 +77,8 @@ class Subscription(Base):
     manager_limit: Mapped[int] = mapped_column(Integer, default=3)
     dialogs_limit: Mapped[int] = mapped_column(Integer, default=500)
     messages_per_month_limit: Mapped[int] = mapped_column(Integer, default=5000)
+    quick_replies_limit: Mapped[int] = mapped_column(Integer, default=10)
+    folders_limit: Mapped[int] = mapped_column(Integer, default=10)
     grace_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     current_period_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

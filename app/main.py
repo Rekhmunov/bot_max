@@ -180,6 +180,16 @@ def _manager_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     return max(1, int(sub.manager_limit or 0))
 
 
+def _quick_reply_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    return max(1, int(getattr(sub, "quick_replies_limit", 0) or 0))
+
+
+def _folder_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    return max(1, int(getattr(sub, "folders_limit", 0) or 0))
+
+
 def _extract_manager_ids_from_form(form_data: object) -> list[str]:
     get = getattr(form_data, "get", None)
     getlist = getattr(form_data, "getlist", None)
@@ -1413,6 +1423,20 @@ async def admin_copy_manager_link(
         "on",
         "yes",
     }
+    quick_replies_limit_value = max(1, int(sub.quick_replies_limit or 0))
+    quick_replies_count = (
+        db.query(QuickReply)
+        .filter(QuickReply.workspace_id == workspace_id)
+        .count()
+    )
+    if quick_replies_count >= quick_replies_limit_value:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Ваш тарифный план не позволяет создавать больше быстрых ответов.",
+            },
+            status_code=400,
+        )
     db.add(bot_settings)
     db.commit()
     ok, msg, invite_link = _build_manager_invite_link_for_copy(

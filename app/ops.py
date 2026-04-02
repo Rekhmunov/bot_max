@@ -7,7 +7,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import BillingEvent, Conversation, ServiceUser, Subscription, TenantAlert, Workspace
+from app.models import BillingEvent, ChatFolder, Conversation, QuickReply, ServiceUser, Subscription, TenantAlert, Workspace
 from app.services import DEFAULT_WORKSPACE_ID
 
 
@@ -27,6 +27,8 @@ def get_or_create_subscription(db: Session, *, workspace_id: int) -> Subscriptio
         manager_limit=3,
         dialogs_limit=500,
         messages_per_month_limit=5000,
+        quick_replies_limit=10,
+        folders_limit=10,
         current_period_start=now,
         current_period_end=now + timedelta(days=30),
         grace_until=now + timedelta(days=settings.default_grace_days),
@@ -100,6 +102,22 @@ def can_send_message_this_month(db: Session, *, workspace_id: int) -> tuple[bool
     )
     if sent_count >= int(sub.messages_per_month_limit or 0):
         return False, "messages_limit_exceeded"
+    return True, ""
+
+
+def can_create_quick_reply(db: Session, *, workspace_id: int) -> tuple[bool, str]:
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    current = db.query(QuickReply).filter(QuickReply.workspace_id == workspace_id).count()
+    if current >= int(sub.quick_replies_limit or 0):
+        return False, "quick_replies_limit_exceeded"
+    return True, ""
+
+
+def can_create_folder(db: Session, *, workspace_id: int) -> tuple[bool, str]:
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    current = db.query(ChatFolder).filter(ChatFolder.workspace_id == workspace_id).count()
+    if current >= int(sub.folders_limit or 0):
+        return False, "folders_limit_exceeded"
     return True, ""
 
 
@@ -177,10 +195,14 @@ def collect_tenant_metrics(db: Session, *, workspace_id: int) -> dict[str, int]:
         )
         .count()
     )
+    quick_replies_total = db.query(QuickReply).filter(QuickReply.workspace_id == workspace_id).count()
+    folders_total = db.query(ChatFolder).filter(ChatFolder.workspace_id == workspace_id).count()
     return {
         "managers_active": managers,
         "dialogs_total": dialogs,
         "messages_month": messages,
+        "quick_replies_total": quick_replies_total,
+        "folders_total": folders_total,
     }
 
 
@@ -191,6 +213,8 @@ def refresh_tenant_alerts(db: Session, *, workspace_id: int) -> list[TenantAlert
         "managers_limit": (metrics["managers_active"], int(sub.manager_limit or 0)),
         "dialogs_limit": (metrics["dialogs_total"], int(sub.dialogs_limit or 0)),
         "messages_month_limit": (metrics["messages_month"], int(sub.messages_per_month_limit or 0)),
+        "quick_replies_limit": (metrics["quick_replies_total"], int(sub.quick_replies_limit or 0)),
+        "folders_limit": (metrics["folders_total"], int(sub.folders_limit or 0)),
     }
     created: list[TenantAlert] = []
     for key, (value, limit) in thresholds.items():
