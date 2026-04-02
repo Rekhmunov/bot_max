@@ -43,6 +43,11 @@ def _ensure_lightweight_migrations() -> None:
         # SaaS baseline tables are created by metadata.create_all.
         # Ensure there is always a default workspace for legacy data.
         if "workspaces" in table_names:
+            workspace_columns = {col["name"] for col in inspector.get_columns("workspaces")}
+            if "suspended_by_admin" not in workspace_columns:
+                conn.execute(
+                    text("ALTER TABLE workspaces ADD COLUMN suspended_by_admin INTEGER DEFAULT 0")
+                )
             conn.execute(
                 text(
                     "INSERT OR IGNORE INTO workspaces (id, name, tenant_code, is_active, is_suspended, created_at, updated_at) "

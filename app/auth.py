@@ -208,6 +208,10 @@ def sign_in_service_user(
         return None
     if not verify_password(password=password, password_hash=user.password_hash):
         return None
+    if user.role != "superadmin" and user.workspace_id:
+        workspace = db.query(Workspace).filter(Workspace.id == user.workspace_id).first()
+        if workspace is None or not workspace.is_active or workspace.is_suspended:
+            return None
     user.last_login_at = _now()
     db.add(user)
     db.commit()

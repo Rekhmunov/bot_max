@@ -3170,8 +3170,10 @@ def app_superadmin_suspend_workspace(
         raise HTTPException(status_code=403, detail="Только для superadmin")
     ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
     if ws:
+        ws.manual_suspended = True
         ws.is_suspended = True
         db.add(ws)
+        revoke_workspace_sessions(db, workspace_id=workspace_id)
         db.add(
             AuditLog(
                 workspace_id=workspace_id,
@@ -3203,6 +3205,7 @@ def app_superadmin_resume_workspace(
         raise HTTPException(status_code=403, detail="Только для superadmin")
     ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
     if ws:
+        ws.manual_suspended = False
         ws.is_suspended = False
         db.add(ws)
         db.add(

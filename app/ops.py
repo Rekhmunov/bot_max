@@ -41,6 +41,8 @@ def ensure_workspace_active_by_billing(db: Session, *, workspace_id: int) -> boo
     workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
     if workspace is None:
         return False
+    if workspace.is_manually_suspended:
+        return False
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
     now = _now()
     should_suspend = sub.status in {"past_due", "paused", "cancelled"} and (

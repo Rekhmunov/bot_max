@@ -14,6 +14,7 @@ class Workspace(Base):
     tenant_code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     is_suspended: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    suspended_by_admin: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

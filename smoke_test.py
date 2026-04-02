@@ -105,6 +105,33 @@ def run() -> None:
         with SessionLocal() as db:
             assert db.query(ServiceUser).filter(ServiceUser.id == delete_temp_user_id).first() is None
 
+        # Workspace suspension must immediately block login for workspace users.
+        suspend_email = f"suspend_{uuid4().hex[:8]}@example.com"
+        suspend_register = client.post(
+            "/app/register",
+            data={"email": suspend_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert suspend_register.status_code in (302, 303)
+        with SessionLocal() as db:
+            suspend_owner = db.query(ServiceUser).filter(ServiceUser.username == suspend_email).first()
+            assert suspend_owner is not None
+            suspend_workspace_id = int(suspend_owner.workspace_id or 0)
+            assert suspend_workspace_id > 0
+        suspend_workspace_resp = client.post(
+            f"/app/superadmin/workspaces/{suspend_workspace_id}/suspend",
+            cookies=superadmin_cookies,
+            follow_redirects=False,
+        )
+        assert suspend_workspace_resp.status_code in (302, 303)
+        suspended_login = client.post(
+            "/app/login",
+            data={"username": suspend_email, "password": "StrongPass#123"},
+            follow_redirects=True,
+        )
+        assert suspended_login.status_code == 200
+        assert "Неверный логин или пароль." in suspended_login.text
+
         # Workspace deletion from superadmin panel.
         delete_ws_email = f"deletews_{uuid4().hex[:8]}@example.com"
         delete_ws_register = client.post(
@@ -126,6 +153,33 @@ def run() -> None:
         assert delete_ws_resp.status_code in (302, 303)
         with SessionLocal() as db:
             assert db.query(Workspace).filter(Workspace.id == delete_ws_id).first() is None
+
+        # Workspace suspend should immediately prevent owner login.
+        suspend_email = f"suspend_{uuid4().hex[:8]}@example.com"
+        suspend_register = client.post(
+            "/app/register",
+            data={"email": suspend_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert suspend_register.status_code in (302, 303)
+        with SessionLocal() as db:
+            suspend_owner = db.query(ServiceUser).filter(ServiceUser.username == suspend_email).first()
+            assert suspend_owner is not None
+            suspend_ws_id = int(suspend_owner.workspace_id or 0)
+            assert suspend_ws_id > 0
+        suspend_resp = client.post(
+            f"/app/superadmin/workspaces/{suspend_ws_id}/suspend",
+            cookies=superadmin_cookies,
+            follow_redirects=False,
+        )
+        assert suspend_resp.status_code in (302, 303)
+        blocked_login = client.post(
+            "/app/login",
+            data={"username": suspend_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert blocked_login.status_code == 200
+        assert "Неверный логин или пароль." in blocked_login.text
 
         orphan_seed = uuid4().hex[:8]
         first_register = client.post(
