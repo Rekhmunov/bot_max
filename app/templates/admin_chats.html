@@ -1320,8 +1320,18 @@
                 autocomplete="off"
                 placeholder="Введите сообщение или / для быстрых ответов"
               />
-              <button class="schedule-btn" id="schedule-btn-mobile" type="button" title="Отложенная отправка" aria-label="Отложенная отправка">⏰</button>
-              <button class="send-btn" id="send-btn" type="submit" title="Отправить" aria-label="Отправить">✉</button>
+              <button class="send-btn" id="send-btn" type="submit" title="Отправить" aria-label="Отправить">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 20V6"></path>
+                  <path d="M6 12l6-6 6 6"></path>
+                </svg>
+              </button>
+              <button class="schedule-btn" id="schedule-btn-mobile" type="button" title="Отложенная отправка" aria-label="Отложенная отправка">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="8"></circle>
+                  <path d="M12 8v4l3 2"></path>
+                </svg>
+              </button>
             </div>
             <input type="hidden" id="scheduled-at-input" name="scheduled_at" value="" />
             {% if allow_message_edit_actions %}
@@ -1472,11 +1482,16 @@
       };
       const setKeyboardInset = () => {
         const vv = window.visualViewport;
+        const fallbackHeight = window.innerHeight || document.documentElement.clientHeight || 0;
         if (!vv) {
+          const fallbackPx = `${Math.max(320, Math.round(fallbackHeight))}px`;
+          document.documentElement.style.setProperty("--app-height", fallbackPx);
           document.documentElement.style.setProperty("--keyboard-offset", "0px");
           return;
         }
-        const keyboard = Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop));
+        const viewportHeight = Math.max(320, Math.round(vv.height));
+        const keyboard = Math.max(0, Math.round(fallbackHeight - vv.height - vv.offsetTop));
+        document.documentElement.style.setProperty("--app-height", `${viewportHeight}px`);
         document.documentElement.style.setProperty("--keyboard-offset", `${keyboard}px`);
       };
 
@@ -1575,7 +1590,10 @@
       window.visualViewport?.addEventListener("resize", setKeyboardInset);
       window.visualViewport?.addEventListener("scroll", setKeyboardInset);
       messageInput.addEventListener("focus", () => {
-        setTimeout(setKeyboardInset, 20);
+        setTimeout(() => {
+          setKeyboardInset();
+          messageInput.scrollIntoView({ block: "nearest", inline: "nearest" });
+        }, 20);
       });
       messageInput.addEventListener("blur", () => {
         setTimeout(setKeyboardInset, 20);
