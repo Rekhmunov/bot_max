@@ -8,7 +8,7 @@ from app.database import SessionLocal, init_db
 from app.main import app
 from app.manager_bridge import DEFAULT_TEMPLATES
 from app.services import get_or_create_settings
-from app.models import ChatFolder, Conversation, WebhookEvent
+from app.models import ChatFolder, Conversation, ServiceUser, WebhookEvent, Workspace
 
 
 def run() -> None:
@@ -73,6 +73,30 @@ def run() -> None:
         superadmin_users = client.get("/app/superadmin/users", cookies=superadmin_cookies)
         assert superadmin_users.status_code == 200
         assert "admin" in superadmin_users.text
+
+        orphan_seed = uuid4().hex[:8]
+        first_register = client.post(
+            "/app/register",
+            data={"email": f"dupe_{orphan_seed}@example.com", "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert first_register.status_code in (302, 303)
+        with SessionLocal() as db:
+            workspace_count_before = db.query(Workspace).count()
+            user_count_before = db.query(ServiceUser).count()
+        second_register = client.post(
+            "/app/register",
+            data={"email": f"dupe_{orphan_seed}@example.com", "password": "StrongPass#123"},
+            follow_redirects=True,
+        )
+        assert second_register.status_code == 200
+        assert "Пользователь с таким email уже существует." in second_register.text
+        with SessionLocal() as db:
+            workspace_count_after = db.query(Workspace).count()
+            user_count_after = db.query(ServiceUser).count()
+        # Failed duplicate registration must not create orphan workspace rows.
+        assert workspace_count_after == workspace_count_before
+        assert user_count_after == user_count_before
 
         login_page = client.get("/admin/login")
         assert login_page.status_code == 200

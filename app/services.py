@@ -113,15 +113,42 @@ def create_workspace_with_owner(
     password: str,
     display_name: str = "",
 ) -> tuple[Workspace, ServiceUser]:
-    workspace = create_workspace(db, name=workspace_name)
-    owner = create_service_user(
-        db,
-        username=username,
-        password=password,
-        role="owner",
-        workspace_id=workspace.id,
-        display_name=display_name,
+    normalized = normalize_username(username)
+    if not validate_username(normalized):
+        raise ValueError("invalid_username")
+    if len((password or "").strip()) < 8:
+        raise ValueError("password_too_short")
+    if db.query(ServiceUser.id).filter(ServiceUser.username == normalized).first():
+        raise ValueError("username_exists")
+
+    workspace_name_normalized = (workspace_name or "").strip() or "Workspace"
+    workspace = Workspace(
+        name=workspace_name_normalized,
+        tenant_code=generate_tenant_code(db, seed=workspace_name_normalized),
+        is_active=True,
+        is_suspended=False,
     )
+    owner = ServiceUser(
+        role="owner",
+        username=normalized,
+        password_hash=hash_password(password.strip()),
+        display_name=(display_name or "").strip(),
+        max_account_id="",
+        is_active=True,
+        is_blocked=False,
+    )
+    try:
+        db.add(workspace)
+        db.flush()
+        owner.workspace_id = workspace.id
+        db.add(owner)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    db.refresh(workspace)
+    db.refresh(owner)
     return workspace, owner
 
 
