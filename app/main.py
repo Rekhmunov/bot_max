@@ -3017,7 +3017,7 @@ def app_create_manager(
 
 
 @app.post("/app/settings", response_class=RedirectResponse)
-def app_update_settings(
+async def app_update_settings(
     request: Request,
     prestart_message: str = Form(""),
     start_message: str = Form(""),
@@ -3037,8 +3037,12 @@ def app_update_settings(
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
+    form_data = await request.form()
+    manager_ids = _extract_manager_ids_from_form(form_data)
+    if not manager_ids:
+        manager_ids = _parse_manager_ids(_normalize_manager_ids(manager_account_id))
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
-    settings_row.manager_account_id = _normalize_manager_ids(manager_account_id)
+    settings_row.manager_account_id = _normalize_manager_ids(",".join(manager_ids))
     settings_row.admin_account_id = admin_account_id.strip()
     mode = (routing_mode or "round_robin").strip().lower()
     if mode not in {"round_robin", "random"}:

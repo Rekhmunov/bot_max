@@ -236,14 +236,14 @@
             {% set manager_ids = [""] %}
           {% endif %}
 
-          <label for="manager_account_id">ID менеджера в Max</label>
+          <label for="manager_account_id">ID менеджеров в Max</label>
           <div class="manager-ids-wrap" id="manager-ids-wrap">
             {% for manager_id in manager_ids %}
             <div class="manager-id-row">
               <input
                 name="manager_account_ids"
                 value="{{ manager_id }}"
-                placeholder="ID менеджера в Max"
+                placeholder="ID менеджеров в Max"
               />
               <button
                 type="submit"
@@ -443,7 +443,7 @@
         const row = document.createElement("div");
         row.className = "manager-id-row";
         row.innerHTML = `
-          <input name="manager_account_ids" value="" placeholder="ID менеджера в Max" />
+          <input name="manager_account_ids" value="" placeholder="ID менеджеров в Max" />
           <button
             type="submit"
             class="manager-row-send-btn"

@@ -597,6 +597,7 @@ def run() -> None:
                 "start_message": start_template,
                 "after_phone_message": after_phone_template,
                 "manager_account_id": "90000",
+                "manager_account_ids": ["90000", "90001"],
                 "manager_account_ids": "90000,90001",
                 "admin_account_id": "",
                 "routing_mode": "round_robin",
