@@ -254,6 +254,21 @@
       background: #f3eaff;
       border-color: #dbc3f5;
     }
+    .manager-remove-btn {
+      border: 1px solid #ebc5c5;
+      background: #fff2f2;
+      color: var(--danger);
+      border-radius: 8px;
+      width: 30px;
+      height: 30px;
+      font-size: 14px;
+      line-height: 1;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
     code { background: #eef1f8; padding: 2px 6px; border-radius: 6px; }
   </style>
 </head>
@@ -463,6 +478,7 @@
             <th>Ссылка отправлена</th>
             <th>Подключился</th>
             <th>Последний вход</th>
+            <th>Действия</th>
           </tr>
         </thead>
         <tbody>
@@ -475,6 +491,16 @@
             <td>{{ row.link_sent_at }}</td>
             <td>{{ row.connected_at }}</td>
             <td>{{ row.last_login_at }}</td>
+            <td>
+              <button
+                type="button"
+                class="manager-remove-btn"
+                data-remove-manager-id="{{ row.max_account_id }}"
+                data-remove-action="{{ manager_remove_action or '/app/settings/remove-manager' }}"
+                aria-label="Удалить менеджера"
+                title="Удалить менеджера"
+              >🗑</button>
+            </td>
           </tr>
           {% endfor %}
         </tbody>
@@ -659,6 +685,37 @@
             })
             .catch(() => {
               alert("Не удалось сформировать ссылку.");
+            });
+          return;
+        }
+        const removeBtn = target.closest("button.manager-remove-btn");
+        if (removeBtn instanceof HTMLButtonElement) {
+          const removeAction = removeBtn.getAttribute("data-remove-action") || "{{ manager_remove_action or '/app/settings/remove-manager' }}";
+          const removeManagerId = (removeBtn.getAttribute("data-remove-manager-id") || "").trim();
+          if (!removeManagerId) {
+            alert("Не удалось определить ID менеджера для удаления.");
+            return;
+          }
+          const confirmed = window.confirm(`Удалить менеджера ${removeManagerId}?`);
+          if (!confirmed) {
+            return;
+          }
+          const payload = new FormData(settingsForm);
+          payload.set("remove_manager_id", removeManagerId);
+          fetch(removeAction, { method: "POST", body: payload })
+            .then((resp) => resp.json().catch(() => ({ ok: false, error: "Некорректный ответ сервера." })))
+            .then((data) => {
+              if (!data || !data.ok) {
+                alert((data && data.error) ? data.error : "Не удалось удалить менеджера.");
+                return;
+              }
+              if (data.message) {
+                alert(String(data.message));
+              }
+              window.location.reload();
+            })
+            .catch(() => {
+              alert("Не удалось удалить менеджера.");
             });
           return;
         }

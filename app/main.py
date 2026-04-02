@@ -1320,6 +1320,7 @@ def _render_app_settings_page(
             "manager_ids_limit": _manager_limit_for_workspace(db, workspace_id=workspace_id),
             "manager_invite_send_action": "/app/settings/send-manager-link",
             "manager_invite_copy_action": "/app/settings/copy-manager-link",
+            "manager_remove_action": "/app/settings/remove-manager",
             "quick_reply_create_action": "/app/quick-replies",
             "quick_reply_delete_action_prefix": "/app/quick-replies/",
             "intro_create_action": "/app/settings/intro-steps",
@@ -1333,6 +1334,7 @@ def _render_app_settings_page(
             "manager_ids_limit": manager_rows_limit,
             "manager_invite_send_action": "/app/settings/send-manager-link",
             "manager_invite_copy_action": "/app/settings/copy-manager-link",
+            "manager_remove_action": "/app/settings/remove-manager",
             "manager_status_rows": manager_status_rows,
             "manager_status_summary": manager_status_summary,
         },
@@ -3743,6 +3745,85 @@ async def app_copy_manager_link(
     if not ok:
         return JSONResponse({"ok": False, "error": msg}, status_code=400)
     return JSONResponse({"ok": True, "message": msg, "link": invite_link}, status_code=200)
+
+
+@app.post("/app/settings/remove-manager", response_class=JSONResponse)
+async def app_remove_manager(
+    request: Request,
+    remove_manager_id: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_settings",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    if current_user.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    form_data = await request.form()
+    target_manager_id = (remove_manager_id or "").strip()
+    if not target_manager_id:
+        return JSONResponse({"ok": False, "error": "Не указан ID менеджера для удаления."}, status_code=400)
+
+    settings_row = get_or_create_settings(db, workspace_id=workspace_id)
+    manager_ids = _extract_manager_ids_from_form(form_data)
+    if not manager_ids:
+        manager_ids = _parse_manager_ids(settings_row.manager_account_id)
+    updated_ids = [item for item in manager_ids if item != target_manager_id]
+    settings_row.manager_account_id = _normalize_manager_ids(",".join(updated_ids))
+    db.add(settings_row)
+
+    manager_rows = (
+        db.query(ServiceUser)
+        .filter(
+            ServiceUser.workspace_id == workspace_id,
+            ServiceUser.role == "manager",
+            ServiceUser.max_account_id == target_manager_id,
+        )
+        .all()
+    )
+    revoked_user_ids: list[int] = []
+    for row in manager_rows:
+        row.is_active = False
+        row.is_blocked = True
+        db.add(row)
+        revoked_user_ids.append(int(row.id))
+
+    db.query(ManagerInvite).filter(
+        ManagerInvite.workspace_id == workspace_id,
+        ManagerInvite.max_account_id == target_manager_id,
+    ).delete(synchronize_session=False)
+
+    object_id = str(revoked_user_ids[0]) if revoked_user_ids else target_manager_id
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=current_user.id,
+            action="manager_removed",
+            object_type="service_user",
+            object_id=object_id,
+            details_json=safe_json_dumps(
+                {
+                    "max_account_id": target_manager_id,
+                    "revoked_user_ids": revoked_user_ids,
+                    "removed_from_settings": target_manager_id in manager_ids,
+                }
+            ),
+        )
+    )
+    db.commit()
+    for user_id in revoked_user_ids:
+        revoke_user_sessions(db, user_id=user_id)
+
+    if target_manager_id not in manager_ids:
+        return JSONResponse(
+            {"ok": True, "message": f"Менеджер {target_manager_id} уже отсутствует в настройках."},
+            status_code=200,
+        )
+    return JSONResponse({"ok": True, "message": f"Менеджер {target_manager_id} удален."}, status_code=200)
 
 
 @app.post("/app/settings/intro-steps", response_class=RedirectResponse)

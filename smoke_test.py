@@ -707,6 +707,26 @@ def run() -> None:
         assert invite_page.status_code == 200
         assert "Создание пароля менеджера" in invite_page.text
 
+        delete_manager_resp = client.post(
+            "/app/settings/remove-manager",
+            data={
+                "manager_account_ids": "90000,90001",
+                "remove_manager_id": "90001",
+                "routing_mode": "round_robin",
+                "admin_account_id": "",
+                "request_customer_phone": "1",
+            },
+            cookies=invite_flow_cookies,
+            follow_redirects=False,
+        )
+        assert delete_manager_resp.status_code == 200
+        delete_payload = delete_manager_resp.json()
+        assert delete_payload.get("ok") is True
+        with SessionLocal() as db:
+            invite_flow_settings = get_or_create_settings(db, workspace_id=invite_flow_workspace_id)
+            current_ids = [item.strip() for item in (invite_flow_settings.manager_account_id or "").split(",") if item.strip()]
+            assert current_ids == ["90000"]
+
         # App settings must also enforce manager IDs limit on plain save.
         app_limit_email = f"limit_{uuid4().hex[:8]}@example.com"
         app_limit_register = client.post(
