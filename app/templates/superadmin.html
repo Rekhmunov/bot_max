@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Superadmin · FeedPilot</title>
+  <title>Панель суперадмина FeedPilot</title>
   <style>
     :root {
       --bg: #f3f5fb;
@@ -221,9 +221,48 @@
   </style>
 </head>
 <body>
+  {% set role_labels = {"superadmin": "Суперадмин", "owner": "Владелец", "admin": "Администратор", "manager": "Менеджер"} %}
+  {% set subscription_status_labels = {
+    "active": "Активна",
+    "trial": "Пробный период",
+    "past_due": "Просрочена оплата",
+    "paused": "На паузе",
+    "cancelled": "Отменена"
+  } %}
+  {% set action_labels = {
+    "workspace_registered": "Клиент зарегистрирован",
+    "email_verification_sent": "Отправлено письмо подтверждения email",
+    "email_verified": "Email подтвержден",
+    "email_verification_resent": "Письмо подтверждения отправлено повторно",
+    "manager_created": "Менеджер создан",
+    "intro_step_added": "Добавлен вступительный шаг",
+    "intro_step_deleted": "Удален вступительный шаг",
+    "manager_invite_consumed": "Инвайт менеджера использован",
+    "manager_password_set_by_invite": "Пароль менеджера установлен по инвайту",
+    "user_role_updated": "Роль пользователя изменена",
+    "user_block_toggled": "Статус блокировки пользователя изменен",
+    "user_sessions_revoked": "Сессии пользователя сброшены",
+    "workspace_suspended": "Клиент приостановлен",
+    "workspace_resumed": "Клиент возобновлен",
+    "workspace_sessions_revoked": "Сессии клиента сброшены",
+    "workspace_plan_updated": "План клиента обновлен",
+    "backup_created": "Резервная копия создана",
+    "backup_restored": "Резервная копия восстановлена",
+    "superadmin_2fa_updated": "Настройки 2FA суперадмина обновлены"
+  } %}
+  {% set object_type_labels = {
+    "service_user": "Пользователь",
+    "workspace": "Клиент",
+    "subscription": "Подписка",
+    "backup": "Резервная копия",
+    "security": "Безопасность",
+    "manager_invite": "Инвайт менеджера",
+    "intro_step": "Вступительный шаг",
+    "email": "Email"
+  } %}
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand">Superadmin</div>
+      <div class="brand">Суперадмин</div>
       <nav class="nav">
         <a class="{% if section == 'dashboard' %}active{% endif %}" href="/app/superadmin">Дашборд</a>
         <a class="{% if section == 'workspaces' %}active{% endif %}" href="/app/superadmin/workspaces">Клиенты</a>
@@ -231,7 +270,7 @@
         <a class="{% if section == 'plans' %}active{% endif %}" href="/app/superadmin/plans">Тарифы и лимиты</a>
         <a class="{% if section == 'security' %}active{% endif %}" href="/app/superadmin/security">Безопасность</a>
         <a class="{% if section == 'monitoring' %}active{% endif %}" href="/app/superadmin/monitoring">Мониторинг</a>
-        <a class="{% if section == 'backups' %}active{% endif %}" href="/app/superadmin/backups">Бэкапы</a>
+        <a class="{% if section == 'backups' %}active{% endif %}" href="/app/superadmin/backups">Резервные копии</a>
         <a class="{% if section == 'audit' %}active{% endif %}" href="/app/superadmin/audit">Аудит-лог</a>
         <a class="{% if section == 'system' %}active{% endif %}" href="/app/superadmin/system">Системные настройки</a>
       </nav>
@@ -239,12 +278,12 @@
     <main class="content">
       <div class="topbar">
         <div>
-          <h1>{{ page_title or "Superadmin" }}</h1>
+          <h1>{{ page_title or "Панель суперадмина" }}</h1>
           <div class="muted">Платформа FeedPilot · логин: {{ current_user.username }}</div>
         </div>
         <div class="top-actions">
           <form method="post" action="/app/superadmin/backup">
-            <button class="btn primary" type="submit">Создать backup</button>
+            <button class="btn primary" type="submit">Создать резервную копию</button>
           </form>
           <form method="post" action="/app/logout">
             <button class="btn" type="submit">Выйти</button>
@@ -265,14 +304,14 @@
         <section class="card">
           <h2>Последние критичные события</h2>
           <table>
-            <thead><tr><th>Время</th><th>Workspace</th><th>Действие</th><th>Объект</th><th>Details</th></tr></thead>
+            <thead><tr><th>Время</th><th>Клиент</th><th>Действие</th><th>Объект</th><th>Подробности</th></tr></thead>
             <tbody>
               {% for item in audit_items %}
                 <tr>
                   <td>{{ item.created_at }}</td>
                   <td>{{ item.workspace_id or "-" }}</td>
-                  <td>{{ item.action }}</td>
-                  <td>{{ item.object_type }}#{{ item.object_id }}</td>
+                  <td>{{ action_labels.get(item.action, item.action) }}</td>
+                  <td>{{ object_type_labels.get(item.object_type, item.object_type) }}#{{ item.object_id }}</td>
                   <td>{{ item.details_json }}</td>
                 </tr>
               {% endfor %}
@@ -283,9 +322,9 @@
 
       {% if section == "workspaces" %}
         <section class="card">
-          <h2>Клиенты (workspaces)</h2>
+          <h2>Клиенты (рабочие пространства)</h2>
           <table>
-            <thead><tr><th>ID</th><th>Название</th><th>Tenant</th><th>Статус</th><th>План</th><th>Менеджеры/Диалоги/Сообщения</th><th>Действия</th></tr></thead>
+            <thead><tr><th>ID</th><th>Название</th><th>Код клиента</th><th>Статус</th><th>План</th><th>Менеджеры/Диалоги/Сообщения</th><th>Действия</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
                 <tr>
@@ -294,23 +333,23 @@
                   <td>{{ row.workspace.tenant_code }}</td>
                   <td>
                     {% if row.workspace.is_suspended %}
-                      <span class="badge danger">suspended</span>
+                      <span class="badge danger">Приостановлен</span>
                     {% elif row.workspace.is_active %}
-                      <span class="badge ok">active</span>
+                      <span class="badge ok">Активен</span>
                     {% else %}
-                      <span class="badge warn">inactive</span>
+                      <span class="badge warn">Неактивен</span>
                     {% endif %}
                   </td>
-                  <td>{{ row.subscription.plan_code }} / {{ row.subscription.status }}</td>
+                  <td>{{ row.subscription.plan_code }} / {{ subscription_status_labels.get(row.subscription.status, row.subscription.status) }}</td>
                   <td>{{ row.metrics.managers_active }} / {{ row.metrics.dialogs_total }} / {{ row.metrics.messages_month }}</td>
                   <td>
                     <div class="row-actions">
                       {% if row.workspace.is_suspended %}
-                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/resume"><button class="btn" type="submit">Resume</button></form>
+                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/resume"><button class="btn" type="submit">Возобновить</button></form>
                       {% else %}
-                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/suspend"><button class="btn danger" type="submit">Suspend</button></form>
+                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/suspend"><button class="btn danger" type="submit">Приостановить</button></form>
                       {% endif %}
-                      <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/revoke-sessions"><button class="btn" type="submit">Revoke sessions</button></form>
+                      <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/revoke-sessions"><button class="btn" type="submit">Сбросить сессии</button></form>
                     </div>
                   </td>
                 </tr>
@@ -324,36 +363,40 @@
         <section class="card">
           <h2>Пользователи и роли</h2>
           <table>
-            <thead><tr><th>ID</th><th>Workspace</th><th>Логин</th><th>Роль</th><th>Статус</th><th>Email</th><th>Последний вход</th><th>Действия</th></tr></thead>
+            <thead><tr><th>ID</th><th>Клиент</th><th>Логин</th><th>Роль</th><th>Статус</th><th>Email</th><th>Последний вход</th><th>Действия</th></tr></thead>
             <tbody>
               {% for user in users %}
                 <tr>
                   <td>{{ user.id }}</td>
                   <td>{{ user.workspace_id or "-" }}</td>
                   <td>{{ user.username }}</td>
-                  <td>{{ user.role }}</td>
+                  <td>{{ role_labels.get(user.role, user.role) }}</td>
                   <td>
                     {% if user.is_blocked %}
-                      <span class="badge danger">blocked</span>
+                      <span class="badge danger">Заблокирован</span>
                     {% elif user.is_active %}
-                      <span class="badge ok">active</span>
+                      <span class="badge ok">Активен</span>
                     {% else %}
-                      <span class="badge warn">inactive</span>
+                      <span class="badge warn">Неактивен</span>
                     {% endif %}
                   </td>
                   <td>
                     {% if user.email_verified %}
-                      <span class="badge ok">verified</span>
+                      <span class="badge ok">Подтвержден</span>
                     {% else %}
-                      <span class="badge warn">not verified</span>
+                      <span class="badge warn">Не подтвержден</span>
                     {% endif %}
                   </td>
                   <td>{{ user.last_login_at or "-" }}</td>
                   <td>
                     <div class="row-actions">
                       <form method="post" action="/app/superadmin/users/{{ user.id }}/role">
-                        <input name="role" value="{{ user.role }}" />
-                        <button class="btn" type="submit">Сменить роль</button>
+                        <select name="role">
+                          {% for code, title in [("owner","Владелец"), ("admin","Администратор"), ("manager","Менеджер")] %}
+                            <option value="{{ code }}" {% if user.role == code %}selected{% endif %}>{{ title }}</option>
+                          {% endfor %}
+                        </select>
+                        <button class="btn" type="submit">Применить роль</button>
                       </form>
                       <form method="post" action="/app/superadmin/users/{{ user.id }}/toggle-block">
                         <button class="btn {% if user.is_blocked %}primary{% else %}danger{% endif %}" type="submit">
@@ -376,26 +419,26 @@
         <section class="card">
           <h2>Тарифы и лимиты</h2>
           <table>
-            <thead><tr><th>Workspace</th><th>План</th><th>Статус</th><th>Менеджеры</th><th>Диалоги</th><th>Сообщения/мес</th><th>Изменить</th></tr></thead>
+            <thead><tr><th>Клиент</th><th>План</th><th>Статус</th><th>Менеджеры</th><th>Диалоги</th><th>Сообщения/мес</th><th>Изменить</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
                 <tr>
                   <td>{{ row.workspace.id }} · {{ row.workspace.name }}</td>
                   <td>{{ row.subscription.plan_code }}</td>
-                  <td>{{ row.subscription.status }}</td>
+                  <td>{{ subscription_status_labels.get(row.subscription.status, row.subscription.status) }}</td>
                   <td>{{ row.subscription.manager_limit }}</td>
                   <td>{{ row.subscription.dialogs_limit }}</td>
                   <td>{{ row.subscription.messages_per_month_limit }}</td>
                   <td>
                     <form class="inline-form" method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/plan">
-                      <div><label>Managers</label><input type="number" min="1" name="manager_limit" value="{{ row.subscription.manager_limit }}" /></div>
-                      <div><label>Dialogs</label><input type="number" min="1" name="dialogs_limit" value="{{ row.subscription.dialogs_limit }}" /></div>
-                      <div><label>Messages</label><input type="number" min="1" name="messages_per_month_limit" value="{{ row.subscription.messages_per_month_limit }}" /></div>
+                      <div><label>Менеджеры</label><input type="number" min="1" name="manager_limit" value="{{ row.subscription.manager_limit }}" /></div>
+                      <div><label>Диалоги</label><input type="number" min="1" name="dialogs_limit" value="{{ row.subscription.dialogs_limit }}" /></div>
+                      <div><label>Сообщения</label><input type="number" min="1" name="messages_per_month_limit" value="{{ row.subscription.messages_per_month_limit }}" /></div>
                       <div>
-                        <label>Status</label>
+                        <label>Статус</label>
                         <select name="status">
-                          {% for option in ["active","trial","past_due","paused","cancelled"] %}
-                            <option value="{{ option }}" {% if row.subscription.status == option %}selected{% endif %}>{{ option }}</option>
+                          {% for option, option_label in [("active","Активна"), ("trial","Пробный период"), ("past_due","Просрочена оплата"), ("paused","На паузе"), ("cancelled","Отменена")] %}
+                            <option value="{{ option }}" {% if row.subscription.status == option %}selected{% endif %}>{{ option_label }}</option>
                           {% endfor %}
                         </select>
                       </div>
@@ -415,33 +458,33 @@
           <div class="muted">2FA и управление сессиями на уровне платформы.</div>
           <div class="row-actions" style="margin-top:10px;">
             <form method="post" action="/app/logout-all">
-              <button class="btn danger" type="submit">Logout всех сессий платформы</button>
+              <button class="btn danger" type="submit">Выйти из всех сессий платформы</button>
             </form>
           </div>
           <form class="inline-form" method="post" action="/app/superadmin/2fa" style="margin-top:12px;">
             <div>
-              <label>Новый TOTP secret (Base32)</label>
+              <label>Новый секрет TOTP (Base32)</label>
               <input name="secret_b32" placeholder="JBSWY3DPEHPK3PXP" />
             </div>
             <div><button class="btn primary" type="submit">Обновить 2FA</button></div>
           </form>
           <div class="muted" style="margin-top:10px;">
-            Fallback 2FA код: {% if superadmin_static_2fa_code_enabled %}<span class="badge warn">включен</span>{% else %}<span class="badge">выключен</span>{% endif %}
+            Резервный 2FA-код: {% if superadmin_static_2fa_code_enabled %}<span class="badge warn">включен</span>{% else %}<span class="badge">выключен</span>{% endif %}
           </div>
         </section>
       {% endif %}
 
       {% if section == "monitoring" %}
         <section class="card">
-          <h2>Мониторинг по tenant</h2>
+          <h2>Мониторинг по клиентам</h2>
           <table>
-            <thead><tr><th>Workspace</th><th>Tenant</th><th>Suspended</th><th>Managers</th><th>Dialogs</th><th>Messages month</th><th>Open alerts</th></tr></thead>
+            <thead><tr><th>Клиент</th><th>Код клиента</th><th>Приостановлен</th><th>Менеджеры</th><th>Диалоги</th><th>Сообщения/мес</th><th>Открытые алерты</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
                 <tr>
                   <td>{{ row.workspace.id }}</td>
                   <td>{{ row.workspace.tenant_code }}</td>
-                  <td>{{ "yes" if row.workspace.is_suspended else "no" }}</td>
+                  <td>{{ "да" if row.workspace.is_suspended else "нет" }}</td>
                   <td>{{ row.metrics.managers_active }}</td>
                   <td>{{ row.metrics.dialogs_total }}</td>
                   <td>{{ row.metrics.messages_month }}</td>
@@ -455,10 +498,10 @@
 
       {% if section == "backups" %}
         <section class="card">
-          <h2>Бэкапы</h2>
+          <h2>Резервные копии</h2>
           <form class="inline-form" method="post" action="/app/superadmin/restore">
             <div>
-              <label>Backup filename</label>
+              <label>Имя резервной копии</label>
               <input name="backup_name" placeholder="backup-20260101-010203.sqlite3" required />
             </div>
             <div><button class="btn danger" type="submit">Восстановить</button></div>
@@ -478,15 +521,15 @@
         <section class="card">
           <h2>Аудит-лог</h2>
           <table>
-            <thead><tr><th>Время</th><th>Workspace</th><th>Actor</th><th>Action</th><th>Object</th><th>Details</th></tr></thead>
+            <thead><tr><th>Время</th><th>Клиент</th><th>Исполнитель</th><th>Действие</th><th>Объект</th><th>Подробности</th></tr></thead>
             <tbody>
               {% for item in audit_items %}
                 <tr>
                   <td>{{ item.created_at }}</td>
                   <td>{{ item.workspace_id or "-" }}</td>
                   <td>{{ item.actor_user_id or "-" }}</td>
-                  <td>{{ item.action }}</td>
-                  <td>{{ item.object_type }}#{{ item.object_id }}</td>
+                  <td>{{ action_labels.get(item.action, item.action) }}</td>
+                  <td>{{ object_type_labels.get(item.object_type, item.object_type) }}#{{ item.object_id }}</td>
                   <td>{{ item.details_json }}</td>
                 </tr>
               {% endfor %}
@@ -498,20 +541,20 @@
       {% if section == "system" %}
         <section class="card">
           <h2>Системные настройки</h2>
-          <div class="muted">Базовые runtime параметры платформы.</div>
+          <div class="muted">Базовые параметры работы платформы.</div>
           <table style="min-width: 0; width:auto; margin-top:10px;">
             <tbody>
-              <tr><th>SMTP host</th><td>{{ smtp.host }}</td></tr>
-              <tr><th>SMTP port</th><td>{{ smtp.port }}</td></tr>
-              <tr><th>SMTP sender</th><td>{{ smtp.sender }}</td></tr>
+              <tr><th>SMTP-сервер</th><td>{{ smtp.host }}</td></tr>
+              <tr><th>SMTP-порт</th><td>{{ smtp.port }}</td></tr>
+              <tr><th>Отправитель SMTP</th><td>{{ smtp.sender }}</td></tr>
               <tr><th>TLS</th><td>{{ smtp.tls }}</td></tr>
               <tr><th>SSL</th><td>{{ smtp.ssl }}</td></tr>
-              <tr><th>Email verify TTL</th><td>{{ smtp.email_verify_ttl }}</td></tr>
-              <tr><th>Resend cooldown</th><td>{{ smtp.email_verify_resend_cooldown }}</td></tr>
-              <tr><th>Rate login/min</th><td>{{ security.rate_login }}</td></tr>
-              <tr><th>Rate webhook/min</th><td>{{ security.rate_webhook }}</td></tr>
-              <tr><th>Rate billing/min</th><td>{{ security.rate_billing }}</td></tr>
-              <tr><th>Force HTTPS</th><td>{{ security.force_https }}</td></tr>
+              <tr><th>TTL подтверждения email</th><td>{{ smtp.email_verify_ttl }}</td></tr>
+              <tr><th>Пауза повторной отправки (сек.)</th><td>{{ smtp.email_verify_resend_cooldown }}</td></tr>
+              <tr><th>Лимит авторизации/мин</th><td>{{ security.rate_login }}</td></tr>
+              <tr><th>Лимит вебхуков/мин</th><td>{{ security.rate_webhook }}</td></tr>
+              <tr><th>Лимит биллинга/мин</th><td>{{ security.rate_billing }}</td></tr>
+              <tr><th>Принудительный HTTPS</th><td>{{ security.force_https }}</td></tr>
             </tbody>
           </table>
         </section>
@@ -519,28 +562,28 @@
 
       {% if section == "raw_backups" %}
         <section class="card">
-          <h2>Backups JSON</h2>
+          <h2>Резервные копии (формат JSON)</h2>
           <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
         </section>
       {% endif %}
 
       {% if section == "raw_backup_check" %}
         <section class="card">
-          <h2>Backup check JSON</h2>
+          <h2>Проверка резервной копии (формат JSON)</h2>
           <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
         </section>
       {% endif %}
 
       {% if section == "raw_metrics" %}
         <section class="card">
-          <h2>Metrics JSON</h2>
+          <h2>Метрики (формат JSON)</h2>
           <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
         </section>
       {% endif %}
 
       {% if section == "raw_alerts" %}
         <section class="card">
-          <h2>Alerts JSON</h2>
+          <h2>Алерты (формат JSON)</h2>
           <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
         </section>
       {% endif %}

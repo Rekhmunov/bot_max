@@ -137,7 +137,7 @@ _SUPERADMIN_TABS = (
 
 def _require_superadmin(user: ServiceUser) -> None:
     if user.role != "superadmin":
-        raise HTTPException(status_code=403, detail="Только для superadmin")
+        raise HTTPException(status_code=403, detail="Только для суперадмина")
 
 
 def _to_iso(dt: datetime | None) -> str:
@@ -334,13 +334,13 @@ def _build_superadmin_context(
         )
 
     page_title_map = {
-        "dashboard": "Superadmin Dashboard",
-        "workspaces": "Клиенты (Workspaces)",
+        "dashboard": "Панель суперадмина",
+        "workspaces": "Клиенты (рабочие пространства)",
         "users": "Пользователи и роли",
         "plans": "Тарифы и лимиты",
         "security": "Безопасность",
         "monitoring": "Мониторинг",
-        "backups": "Бэкапы",
+        "backups": "Резервные копии",
         "audit": "Аудит-лог",
         "system": "Системные настройки",
     }
@@ -348,8 +348,8 @@ def _build_superadmin_context(
         "host": settings.smtp_host or "—",
         "port": settings.smtp_port,
         "sender": settings.smtp_sender or settings.smtp_username or "—",
-        "tls": "on" if settings.smtp_use_tls else "off",
-        "ssl": "on" if settings.smtp_use_ssl else "off",
+        "tls": "включен" if settings.smtp_use_tls else "выключен",
+        "ssl": "включен" if settings.smtp_use_ssl else "выключен",
         "email_verify_ttl": settings.email_verification_token_ttl_seconds,
         "email_verify_resend_cooldown": settings.email_verification_resend_cooldown_seconds,
     }
@@ -357,7 +357,7 @@ def _build_superadmin_context(
         "rate_login": settings.rate_limit_login_per_minute,
         "rate_webhook": settings.rate_limit_webhook_per_minute,
         "rate_billing": settings.rate_limit_billing_per_minute,
-        "force_https": "on" if settings.force_https else "off",
+        "force_https": "включен" if settings.force_https else "выключен",
     }
 
     return {
@@ -365,7 +365,7 @@ def _build_superadmin_context(
         "current_user": current_user,
         "section": active_tab,
         "active_tab": active_tab,
-        "page_title": page_title_map.get(active_tab, "Superadmin"),
+        "page_title": page_title_map.get(active_tab, "Панель суперадмина"),
         "message": message,
         "error": error,
         "stats": dashboard,
