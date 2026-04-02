@@ -327,6 +327,58 @@ async def _send_manager_invite_link_to_max(
     return True, f"Ссылка отправлена менеджеру {manager_id_clean}."
 
 
+def _build_manager_invite_link_for_copy(
+    db: Session,
+    *,
+    workspace_id: int,
+    manager_id: str,
+    actor_user_id: int | None,
+) -> tuple[bool, str, str]:
+    manager_id_clean = (manager_id or "").strip()
+    if not manager_id_clean:
+        return False, "Укажите ID менеджера.", ""
+    if not manager_id_clean.isdigit():
+        return False, "Указан некорректный ID менеджера в Max.", ""
+
+    ok_ws, _ = ensure_workspace_limits_and_state(db, workspace_id=workspace_id)
+    if not ok_ws:
+        return False, "Workspace приостановлен из-за биллинга.", ""
+
+    try:
+        manager_user = _get_or_create_manager_by_max_id(
+            db,
+            workspace_id=workspace_id,
+            manager_id=manager_id_clean,
+            actor_user_id=actor_user_id,
+        )
+    except ValueError as exc:
+        if str(exc) == "manager_limit_exceeded":
+            return False, "Ваш тарифный план не позволяет добавлять больше менеджеров.", ""
+        return False, "Менеджер не активен или заблокирован.", ""
+
+    links = _build_manager_invite_links(
+        db=db,
+        manager=manager_user,
+        workspace_id=workspace_id,
+        base_url=settings.public_base_url.rstrip("/"),
+    )
+    invite_link = (links.get("invite_link") or "").strip()
+    if not invite_link:
+        return False, "Не удалось сформировать ссылку приглашения.", ""
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=actor_user_id,
+            action="manager_invite_link_generated",
+            object_type="service_user",
+            object_id=str(manager_user.id),
+            details_json=f'{{"max_account_id":"{manager_id_clean}"}}',
+        )
+    )
+    db.commit()
+    return True, "Ссылка сформирована.", invite_link
+
+
 def _upsert_template_values_single_commit(
     db: Session,
     *,
@@ -973,6 +1025,7 @@ def _render_app_settings_page(
             "manager_id_rows": _parse_manager_ids(bot_settings.manager_account_id),
             "manager_ids_limit": _manager_limit_for_workspace(db, workspace_id=workspace_id),
             "manager_invite_send_action": "/app/settings/send-manager-link",
+            "manager_invite_copy_action": "/app/settings/copy-manager-link",
             "quick_reply_create_action": "/app/quick-replies",
             "quick_reply_delete_action_prefix": "/app/quick-replies/",
             "intro_create_action": "/app/settings/intro-steps",
@@ -985,6 +1038,7 @@ def _render_app_settings_page(
             "manager_id_rows": _parse_manager_ids(bot_settings.manager_account_id),
             "manager_ids_limit": manager_rows_limit,
             "manager_invite_send_action": "/app/settings/send-manager-link",
+            "manager_invite_copy_action": "/app/settings/copy-manager-link",
         },
     )
 
@@ -1146,6 +1200,7 @@ def admin_page(
             "manager_id_rows": _parse_manager_ids(bot_settings.manager_account_id),
             "manager_ids_limit": int(sub.manager_limit or 0),
             "manager_invite_send_action": "/admin/settings/send-manager-link",
+            "manager_invite_copy_action": "/admin/settings/copy-manager-link",
             "message": None,
             "error": None,
         },
@@ -1204,6 +1259,7 @@ async def update_settings(
                 "manager_id_rows": manager_ids,
                 "manager_ids_limit": manager_limit_value,
                 "manager_invite_send_action": "/admin/settings/send-manager-link",
+                "manager_invite_copy_action": "/admin/settings/copy-manager-link",
                 "message": None,
                 "error": "Ваш тарифный план не позволяет добавлять больше менеджеров.",
             },
@@ -1250,6 +1306,7 @@ async def update_settings(
             "manager_id_rows": manager_ids,
             "manager_ids_limit": manager_limit_value,
             "manager_invite_send_action": "/admin/settings/send-manager-link",
+            "manager_invite_copy_action": "/admin/settings/copy-manager-link",
             "message": "Настройки сохранены",
             "error": None,
         },
@@ -1303,11 +1360,56 @@ async def admin_send_manager_link(
             ),
             "manager_ids_limit": _manager_limit_for_workspace(db, workspace_id=workspace_id),
             "manager_invite_send_action": "/admin/settings/send-manager-link",
+            "manager_invite_copy_action": "/admin/settings/copy-manager-link",
             "message": (msg if ok else None),
             "error": (None if ok else msg),
         },
         status_code=(200 if ok else 400),
     )
+
+
+@app.post("/admin/settings/copy-manager-link", response_class=JSONResponse)
+async def admin_copy_manager_link(
+    request: Request,
+    _admin: str = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    _enforce_same_origin(request)
+    if _admin is None:
+        return JSONResponse({"ok": False, "error": "Сессия администратора истекла."}, status_code=401)
+    form_data = await request.form()
+    workspace_id = DEFAULT_WORKSPACE_ID
+    manager_ids = _extract_manager_ids_from_form(form_data)
+    manager_ids_csv = _normalize_manager_ids(",".join(manager_ids))
+    target_manager_id = str(form_data.get("copy_manager_id", "") or "").strip()
+    bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    manager_limit_value = max(1, int(sub.manager_limit or 0))
+    if len(manager_ids) > manager_limit_value:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Ваш тарифный план не позволяет добавлять больше менеджеров.",
+            },
+            status_code=400,
+        )
+    bot_settings.manager_account_id = manager_ids_csv
+    bot_settings.admin_account_id = str(form_data.get("admin_account_id", "") or "").strip()
+    mode = str(form_data.get("routing_mode", "round_robin") or "round_robin").strip().lower()
+    if mode not in {"round_robin", "random"}:
+        mode = "round_robin"
+    bot_settings.routing_mode = mode
+    db.add(bot_settings)
+    db.commit()
+    ok, msg, invite_link = _build_manager_invite_link_for_copy(
+        db,
+        workspace_id=workspace_id,
+        manager_id=target_manager_id,
+        actor_user_id=None,
+    )
+    if not ok:
+        return JSONResponse({"ok": False, "error": msg}, status_code=400)
+    return JSONResponse({"ok": True, "message": msg, "link": invite_link}, status_code=200)
 
 
 @app.post("/admin/quick-replies", response_class=HTMLResponse)
@@ -3184,6 +3286,58 @@ async def app_send_manager_link(
         message=(msg if ok else None),
         error=(None if ok else msg),
     )
+
+
+@app.post("/app/settings/copy-manager-link", response_class=JSONResponse)
+async def app_copy_manager_link(
+    request: Request,
+    copy_manager_id: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_settings",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    if current_user.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    form_data = await request.form()
+    manager_ids = _extract_manager_ids_from_form(form_data)
+    manager_ids_csv = _normalize_manager_ids(",".join(manager_ids))
+    target_manager_id = (copy_manager_id or "").strip()
+    settings_row = get_or_create_settings(db, workspace_id=workspace_id)
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    manager_limit_value = max(1, int(sub.manager_limit or 0))
+    if len(manager_ids) > manager_limit_value:
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "Ваш тарифный план не позволяет добавлять больше менеджеров.",
+            },
+            status_code=400,
+        )
+
+    settings_row.manager_account_id = manager_ids_csv
+    settings_row.admin_account_id = str(form_data.get("admin_account_id", "") or "").strip()
+    mode = str(form_data.get("routing_mode", "round_robin") or "round_robin").strip().lower()
+    if mode not in {"round_robin", "random"}:
+        mode = "round_robin"
+    settings_row.routing_mode = mode
+    db.add(settings_row)
+    db.commit()
+
+    ok, msg, invite_link = _build_manager_invite_link_for_copy(
+        db,
+        workspace_id=workspace_id,
+        manager_id=target_manager_id,
+        actor_user_id=current_user.id,
+    )
+    if not ok:
+        return JSONResponse({"ok": False, "error": msg}, status_code=400)
+    return JSONResponse({"ok": True, "message": msg, "link": invite_link}, status_code=200)
 
 
 @app.post("/app/settings/intro-steps", response_class=RedirectResponse)

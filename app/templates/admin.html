@@ -141,7 +141,7 @@
     }
     .manager-id-row {
       display: grid;
-      grid-template-columns: 1fr auto;
+      grid-template-columns: 1fr auto auto;
       gap: 8px;
       align-items: center;
     }
@@ -153,6 +153,21 @@
       width: 34px;
       height: 34px;
       font-size: 16px;
+      line-height: 1;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .manager-row-copy-btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #3b4d74;
+      border-radius: 8px;
+      width: 34px;
+      height: 34px;
+      font-size: 14px;
       line-height: 1;
       font-weight: 700;
       cursor: pointer;
@@ -254,6 +269,15 @@
                 aria-label="Отправить ссылку менеджеру"
                 title="Отправить ссылку менеджеру"
               >➤</button>
+              <button
+                type="button"
+                class="manager-row-copy-btn"
+                name="copy_manager_id"
+                value="{{ manager_id }}"
+                data-copy-action="{{ manager_invite_copy_action or '/app/settings/copy-manager-link' }}"
+                aria-label="Скопировать ссылку приглашения"
+                title="Скопировать ссылку приглашения"
+              >⧉</button>
             </div>
             {% endfor %}
             <div class="manager-add-row">
@@ -453,6 +477,15 @@
             aria-label="Отправить ссылку менеджеру"
             title="Отправить ссылку менеджеру"
           >➤</button>
+          <button
+            type="button"
+            class="manager-row-copy-btn"
+            name="copy_manager_id"
+            value=""
+            data-copy-action="{{ manager_invite_copy_action or '/app/settings/copy-manager-link' }}"
+            aria-label="Скопировать ссылку приглашения"
+            title="Скопировать ссылку приглашения"
+          >⧉</button>
         `;
         rowsWrap.insertBefore(row, addRow);
         const created = row.querySelector("input[name='manager_account_ids']");
@@ -464,20 +497,59 @@
         if (target.name !== "manager_account_ids") return;
         const row = target.closest(".manager-id-row");
         const sendBtn = row?.querySelector("button[name='send_manager_id']");
+        const copyBtn = row?.querySelector("button[name='copy_manager_id']");
         if (sendBtn instanceof HTMLButtonElement) {
           sendBtn.value = target.value.trim();
+        }
+        if (copyBtn instanceof HTMLButtonElement) {
+          copyBtn.value = target.value.trim();
         }
       });
       rowsWrap.addEventListener("click", (event) => {
         const target = event.target;
         if (!(target instanceof Element)) return;
         const sendBtn = target.closest("button.manager-row-send-btn");
-        if (!(sendBtn instanceof HTMLButtonElement)) return;
-        const settingsForm = sendBtn.closest("form");
+        const copyBtn = target.closest("button.manager-row-copy-btn");
+        const actionBtn = (sendBtn instanceof HTMLButtonElement) ? sendBtn : ((copyBtn instanceof HTMLButtonElement) ? copyBtn : null);
+        if (!(actionBtn instanceof HTMLButtonElement)) return;
+        const settingsForm = actionBtn.closest("form");
         if (!(settingsForm instanceof HTMLFormElement)) return;
-        const row = sendBtn.closest(".manager-id-row");
+        const row = actionBtn.closest(".manager-id-row");
         const managerInput = row?.querySelector("input[name='manager_account_ids']");
         const managerId = managerInput instanceof HTMLInputElement ? managerInput.value.trim() : "";
+        if (copyBtn instanceof HTMLButtonElement) {
+          const copyAction = copyBtn.getAttribute("data-copy-action") || "{{ manager_invite_copy_action or '/app/settings/copy-manager-link' }}";
+          const payload = new FormData(settingsForm);
+          payload.set("copy_manager_id", managerId);
+          fetch(copyAction, { method: "POST", body: payload })
+            .then((resp) => resp.json().catch(() => ({ ok: false, error: "Некорректный ответ сервера." })))
+            .then(async (data) => {
+              if (!data || !data.ok || !data.link) {
+                alert((data && data.error) ? data.error : "Не удалось сформировать ссылку.");
+                return;
+              }
+              try {
+                await navigator.clipboard.writeText(String(data.link));
+                alert("Ссылка скопирована. Можно отправить менеджеру вручную.");
+              } catch (_) {
+                const tempInput = document.createElement("input");
+                tempInput.type = "text";
+                tempInput.value = String(data.link);
+                tempInput.style.position = "fixed";
+                tempInput.style.opacity = "0";
+                document.body.appendChild(tempInput);
+                tempInput.focus();
+                tempInput.select();
+                document.execCommand("copy");
+                document.body.removeChild(tempInput);
+                alert("Ссылка скопирована. Можно отправить менеджеру вручную.");
+              }
+            })
+            .catch(() => {
+              alert("Не удалось сформировать ссылку.");
+            });
+          return;
+        }
         const action = sendBtn.getAttribute("formaction") || settingsForm.action;
         const payload = new FormData(settingsForm);
         payload.set("send_manager_id", managerId);
