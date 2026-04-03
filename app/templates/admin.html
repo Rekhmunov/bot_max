@@ -350,11 +350,15 @@
       <section class="card" style="margin-bottom:16px;">
         <h2>Подключение вашего бота Max</h2>
         <div class="hint">
-          Укажите ссылку на вашего бота в формате:
-          <code>https://max.ru/id123456789_bot</code>
+          Токен вашего бота не вижу.
+          {% if workspace_bot_token_masked %}
+            <code style="margin-left:8px;">{{ workspace_bot_token_masked }}</code>
+          {% else %}
+            <a href="#" id="token-toggle-link" style="margin-left:8px;">Ввести токен</a>
+          {% endif %}
         </div>
         <div class="hint" style="margin-top:6px;">
-          Текущая ссылка бота:
+          Ссылка вашего бота Max:
           <code>{{ workspace_bot_link or "—" }}</code>
         </div>
         <div class="hint" style="margin-top:6px;">
@@ -376,17 +380,16 @@
             value="{{ workspace_bot_link or '' }}"
             placeholder="https://max.ru/id123456789_bot"
           />
-          <label for="bot_token">Токен вашего бота Max</label>
-          <input
-            id="bot_token"
-            name="bot_token"
-            value="{{ settings.bot_token or '' }}"
-            placeholder="Вставьте токен бота"
-            autocomplete="off"
-          />
-          {% if workspace_bot_token_masked %}
-            <div class="hint">Сохраненный токен: <code>{{ workspace_bot_token_masked }}</code></div>
-          {% endif %}
+          <div id="token-input-wrap" {% if workspace_bot_token_masked %}hidden{% endif %}>
+            <label for="bot_token">Токен вашего бота Max</label>
+            <input
+              id="bot_token"
+              name="bot_token"
+              value=""
+              placeholder="Вставьте токен бота"
+              autocomplete="off"
+            />
+          </div>
           {% endif %}
           <label for="prestart_message">Сообщение до нажатия Start</label>
           <textarea id="prestart_message" name="prestart_message" required>{{ template_prestart }}</textarea>
@@ -730,6 +733,22 @@
   </div>
   <script>
     (() => {
+      const tokenLink = document.getElementById("token-toggle-link");
+      const tokenWrap = document.getElementById("token-input-wrap");
+      if (tokenLink instanceof HTMLAnchorElement && tokenWrap instanceof HTMLElement) {
+        tokenLink.addEventListener("click", (event) => {
+          event.preventDefault();
+          tokenWrap.hidden = false;
+          const tokenInput = document.getElementById("bot_token");
+          if (tokenInput instanceof HTMLInputElement) {
+            tokenInput.focus();
+          }
+          tokenLink.remove();
+        });
+      }
+    })();
+
+    (() => {
       const filesInput = document.getElementById("photos");
       const mediaSortWrap = document.getElementById("media-sort-wrap");
       const mediaSortGrid = document.getElementById("media-sort-grid");
@@ -819,6 +838,22 @@
             });
           });
           rebuildFileListAndPreview();
+        });
+      }
+    })();
+
+    (() => {
+      const tokenToggle = document.getElementById("token-toggle-link");
+      const tokenWrap = document.getElementById("token-input-wrap");
+      if (tokenToggle instanceof HTMLAnchorElement && tokenWrap instanceof HTMLElement) {
+        tokenToggle.addEventListener("click", (event) => {
+          event.preventDefault();
+          tokenWrap.hidden = false;
+          const tokenInput = document.getElementById("bot_token");
+          if (tokenInput instanceof HTMLInputElement) {
+            tokenInput.focus();
+          }
+          tokenToggle.remove();
         });
       }
     })();

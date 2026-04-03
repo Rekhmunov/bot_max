@@ -475,10 +475,10 @@ def _workspace_settings_context_for_template(
     bot_token_value = (bot_settings.bot_token or "").strip()
     masked_token = ""
     if bot_token_value:
-        if len(bot_token_value) <= 8:
+        if len(bot_token_value) <= 4:
             masked_token = "*" * len(bot_token_value)
         else:
-            masked_token = f"{bot_token_value[:4]}{'*' * max(len(bot_token_value) - 8, 4)}{bot_token_value[-4:]}"
+            masked_token = f"{bot_token_value[:2]}{'*' * max(len(bot_token_value) - 4, 4)}{bot_token_value[-2:]}"
     return {
         "workspace_bot_link": bot_link_value,
         "workspace_bot_token_masked": masked_token,
@@ -1604,10 +1604,10 @@ def _render_app_settings_page(
     bot_token_value = (bot_settings.bot_token or "").strip()
     masked_token = ""
     if bot_token_value:
-        if len(bot_token_value) <= 8:
+        if len(bot_token_value) <= 4:
             masked_token = "*" * len(bot_token_value)
         else:
-            masked_token = f"{bot_token_value[:4]}{'*' * max(len(bot_token_value) - 8, 4)}{bot_token_value[-4:]}"
+            masked_token = f"{bot_token_value[:2]}{'*' * max(len(bot_token_value) - 4, 4)}{bot_token_value[-2:]}"
     webhook_workspace_url = _workspace_webhook_url(bot_settings)
 
     return templates.TemplateResponse(
@@ -3907,9 +3907,11 @@ async def app_update_settings(
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
     token_clean = (bot_token or "").strip()
-    if not token_clean:
+    existing_token = (settings_row.bot_token or "").strip()
+    if token_clean:
+        settings_row.bot_token = token_clean
+    elif not existing_token:
         raise HTTPException(status_code=400, detail="Укажите токен вашего бота Max.")
-    settings_row.bot_token = token_clean
     normalized_link = _normalize_bot_link(bot_link or "")
     if normalized_link and not _is_valid_bot_link(normalized_link):
         raise HTTPException(
