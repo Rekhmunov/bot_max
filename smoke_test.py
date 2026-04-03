@@ -331,6 +331,27 @@ def run() -> None:
         assert deep_started.status_code == 200
         assert deep_started.json().get("flow") in {"start_prompt", "start_prompt_phone_not_required", "start_prompt_skipped_phone"}
 
+        # Regression: sender must be resolved from message.sender, not payload.user.
+        deep_started_with_actor_user = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "bot_started",
+                "user_id": "372400681880",  # bot actor/system id from webhook envelope
+                "message": {
+                    "sender": {"user_id": f"buyer_deep_actor_{uuid4().hex[:6]}"},
+                    "recipient": {"chat_id": f"chat_deep_actor_{uuid4().hex[:6]}", "chat_type": "dialog"},
+                    "body": {"text": ""},
+                },
+                "payload": "2",
+            },
+        )
+        assert deep_started_with_actor_user.status_code == 200
+        assert deep_started_with_actor_user.json().get("flow") in {
+            "start_prompt",
+            "start_prompt_phone_not_required",
+            "start_prompt_skipped_phone",
+        }
+
         # Default basic limits should include quick replies / folders.
         with SessionLocal() as db:
             from app.ops import get_or_create_subscription

@@ -40,6 +40,60 @@ def _extract_start_payload_from_text(text: str | None) -> str | None:
     return match.group(1).strip()
 
 
+def _is_start_command_text(text: str | None) -> bool:
+    value = (text or "").strip()
+    if not value:
+        return False
+    return bool(re.match(r"^/?start(?:@[a-z0-9_]+)?(?:\s+.*)?$", value, flags=re.IGNORECASE))
+
+
+def _normalize_update_type(value: Any) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    # Convert camelCase / kebab-case to snake_case.
+    snake = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", raw)
+    snake = snake.replace("-", "_").strip().lower()
+    aliases = {
+        "new_message": "message_created",
+        "message_created": "message_created",
+        "message_callback": "message_callback",
+        "bot_start": "bot_started",
+        "bot_started": "bot_started",
+    }
+    return aliases.get(snake, snake)
+
+
+def _deep_find_first(root: Any, keys: set[str]) -> Any:
+    stack = [root]
+    visited: set[int] = set()
+    while stack:
+        current = stack.pop()
+        marker = id(current)
+        if marker in visited:
+            continue
+        visited.add(marker)
+        if isinstance(current, dict):
+            for key in keys:
+                if key in current:
+                    value = current.get(key)
+                    if value is None:
+                        continue
+                    if isinstance(value, str) and not value.strip():
+                        continue
+                    return value
+            for value in current.values():
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(current, list):
+            for item in current:
+                if isinstance(item, (dict, list)):
+                    stack.append(item)
+    return None
+
+
 class MaxWebhookEvent(BaseModel):
     chat_id: str = Field(..., description="ID чата, где пришло событие")
     sender_id: str = Field(..., description="ID отправителя сообщения")
@@ -72,24 +126,27 @@ class MaxWebhookEvent(BaseModel):
         update_type = _pick_first(
             payload.get("update_type"),
             payload.get("updateType"),
+            payload.get("event_type"),
+            payload.get("eventType"),
+            payload.get("type"),
             body_root.get("update_type"),
             body_root.get("updateType"),
+            body_root.get("event_type"),
+            body_root.get("eventType"),
+            body_root.get("type"),
         )
-        update_aliases = {
-            "message_callback": "message_created",
-            "new_message": "message_created",
-            "bot_start": "bot_started",
-        }
-        if isinstance(update_type, str):
-            normalized = update_aliases.get(update_type.strip().lower())
-            if normalized:
-                update_type = normalized
+        update_type = _normalize_update_type(update_type)
         message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
         if not message and body_root:
             # Some Max webhook deliveries wrap message object under `body`.
             if isinstance(body_root.get("message"), dict):
                 message = body_root.get("message")
+        if not message:
+            deep_message = _deep_find_first(payload, {"message"})
+            if isinstance(deep_message, dict):
+                message = deep_message
         user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        chat_node = payload.get("chat") if isinstance(payload.get("chat"), dict) else {}
         sender = message.get("sender") if isinstance(message.get("sender"), dict) else {}
         recipient = message.get("recipient") if isinstance(message.get("recipient"), dict) else {}
         body = message.get("body") if isinstance(message.get("body"), dict) else {}
@@ -131,8 +188,12 @@ class MaxWebhookEvent(BaseModel):
             message.get("chatId"),
             recipient.get("chat_id"),
             recipient.get("chatId"),
+            chat_node.get("chat_id"),
+            chat_node.get("chatId"),
+            chat_node.get("id"),
             body_root.get("chat_id"),
             body_root.get("chatId"),
+            _deep_find_first(payload, {"chat_id", "chatId"}),
         )
         sender_id = _pick_first(
             payload.get("sender_id"),
@@ -140,20 +201,25 @@ class MaxWebhookEvent(BaseModel):
             message.get("sender_id"),
             message.get("senderId"),
             message.get("from_user_id"),
-            user.get("user_id"),
-            user.get("userId"),
             sender.get("user_id"),
             sender.get("id"),
+            user.get("user_id"),
+            user.get("userId"),
+            user.get("id"),
             body_root.get("sender_id"),
             body_root.get("senderId"),
             body_root.get("user_id"),
             body_root.get("userId"),
+            payload.get("user_id"),
+            payload.get("userId"),
+            _deep_find_first(payload, {"sender_id", "senderId", "user_id", "userId", "from_user_id"}),
         )
         text = _pick_first(
             payload.get("text"),
             message.get("text"),
             body.get("text"),
             body_root.get("text"),
+            _deep_find_first(payload, {"text", "message_text", "messageText"}),
             "",
         )
         message_mid = _pick_first(
@@ -198,9 +264,25 @@ class MaxWebhookEvent(BaseModel):
             body_root.get("startPayload"),
             body_root.get("start_param"),
             body_root.get("startParam"),
+            _deep_find_first(
+                payload,
+                {
+                    "start_payload",
+                    "startPayload",
+                    "start_param",
+                    "startParam",
+                    "payload",
+                    "start",
+                },
+            ),
         )
         if start_payload is None:
             start_payload = _extract_start_payload_from_text(str(text or ""))
+        if update_type is None:
+            if start_payload is not None or _is_start_command_text(str(text or "")):
+                update_type = "bot_started"
+            elif chat_id is not None and sender_id is not None:
+                update_type = "message_created"
 
         if chat_id is None or sender_id is None:
             return None
@@ -210,7 +292,13 @@ class MaxWebhookEvent(BaseModel):
             payload.get("updateId"),
             payload.get("event_id"),
             payload.get("eventId"),
+            _deep_find_first(payload, {"update_id", "updateId", "event_id", "eventId"}),
         )
+
+        if update_type is None:
+            update_type = _normalize_update_type(
+                _deep_find_first(payload, {"update_type", "updateType", "event_type", "eventType"})
+            )
 
         return cls(
             chat_id=str(chat_id),
