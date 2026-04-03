@@ -546,6 +546,37 @@ async def _auto_subscribe_workspace_webhook(settings_row: BotSettings) -> tuple[
     return False, f"Не удалось автоматически подключить webhook в Max. Код: {status_code or 'unknown'}{suffix}"
 
 
+async def _auto_unsubscribe_workspace_webhook(settings_row: BotSettings) -> tuple[bool, str | None]:
+    client, client_error = _workspace_client_or_error(settings_row)
+    if client is None:
+        return True, None
+
+    webhook_workspace_url = _workspace_webhook_url(settings_row)
+    public_url = urlsplit(webhook_workspace_url)
+    host = (public_url.hostname or "").lower()
+    if public_url.scheme != "https" or host in {"localhost", "127.0.0.1", "::1"}:
+        # In local/dev environments we skip remote unsubscribe and keep delete flow intact.
+        return True, None
+
+    unsubscribe_result = await client.unsubscribe_webhook(url=webhook_workspace_url)
+    success = bool(
+        unsubscribe_result.get("success", True)
+        or unsubscribe_result.get("ok")
+        or unsubscribe_result.get("result")
+        or unsubscribe_result.get("mock")
+    )
+    if success:
+        return True, None
+
+    status_code = unsubscribe_result.get("status_code")
+    # 404 means there is no active subscription for this URL. Treat as success.
+    if status_code == 404:
+        return True, None
+    error_details = _extract_max_error_message(unsubscribe_result)
+    suffix = f" ({error_details})" if error_details else ""
+    return False, f"Не удалось отключить webhook в Max. Код: {status_code or 'unknown'}{suffix}"
+
+
 def _localized_alert_entry(alert: TenantAlert) -> dict[str, str]:
     severity_labels = {
         "critical": "Критично",
@@ -1735,6 +1766,7 @@ def _render_app_settings_page(
             "chats_href": "/app/chats",
             "logout_action": "/app/logout",
             "settings_action": "/app/settings",
+            "token_delete_action": "/app/settings/delete-bot-token",
             "manager_id_rows": manager_id_rows,
             "manager_ids_limit": _manager_limit_for_workspace(db, workspace_id=workspace_id),
             "manager_invite_copy_action": "/app/settings/copy-manager-link",
@@ -4005,7 +4037,20 @@ async def app_update_settings(
     token_clean = (bot_token or "").strip()
     existing_token = (settings_row.bot_token or "").strip()
     if token_clean:
+        old_token = existing_token
         settings_row.bot_token = token_clean
+        # Token was explicitly provided: allow rotating token to a new value.
+        if old_token and old_token != token_clean:
+            db.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    actor_user_id=current_user.id,
+                    action="workspace_bot_token_updated",
+                    object_type="bot_settings",
+                    object_id=str(settings_row.id),
+                    details_json=safe_json_dumps({"source": "app_settings"}),
+                )
+            )
     elif not existing_token:
         raise HTTPException(status_code=400, detail="Укажите токен вашего бота Max.")
     _ensure_workspace_webhook_key(settings_row)
@@ -4036,6 +4081,43 @@ async def app_update_settings(
     )
     db.commit()
     # Manager add/remove is now handled in the manager status block actions.
+    return RedirectResponse(url="/app/settings", status_code=302)
+
+
+@app.post("/app/settings/delete-bot-token", response_class=RedirectResponse)
+async def app_delete_bot_token(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_settings",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    if current_user.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    settings_row = get_or_create_settings(db, workspace_id=workspace_id)
+    had_token = bool((settings_row.bot_token or "").strip())
+    if had_token:
+        unsubscribed_ok, unsubscribe_error = await _auto_unsubscribe_workspace_webhook(settings_row)
+        if not unsubscribed_ok:
+            raise HTTPException(status_code=400, detail=unsubscribe_error or "Не удалось отключить webhook в Max.")
+        settings_row.bot_token = ""
+        db.add(settings_row)
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=current_user.id,
+                action="workspace_bot_token_deleted",
+                object_type="bot_settings",
+                object_id=str(settings_row.id),
+                details_json='{"source":"app_settings"}',
+            )
+        )
+        db.commit()
     return RedirectResponse(url="/app/settings", status_code=302)
 
 

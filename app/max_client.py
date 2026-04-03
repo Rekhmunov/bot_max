@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import quote_plus
 
 import httpx
 
@@ -196,6 +197,12 @@ class MaxClient:
         if secret:
             payload["secret"] = str(secret).strip()
         return await self._post("/subscriptions", payload)
+
+    async def unsubscribe_webhook(self, *, url: str) -> dict[str, Any]:
+        normalized = str(url or "").strip()
+        if not normalized:
+            return {"success": False, "error": "url_required"}
+        return await self._delete(f"/subscriptions?url={quote_plus(normalized)}")
 
     async def add_member_to_chat(self, chat_id: str, account_id: str) -> dict[str, Any]:
         return await self._post(

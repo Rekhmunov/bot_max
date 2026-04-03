@@ -724,10 +724,59 @@ def run() -> None:
         assert "Осталось быстрых ответов:" in settings_page.text
         assert "Осталось папок:" in settings_page.text
         assert "Подключение вашего бота Max" in settings_page.text
-        assert "Токен вашего бота не вижу." in settings_page.text
+        assert "Токен вашего бота:" in settings_page.text
+        assert "не задан." in settings_page.text
         assert "Ввести токен" in settings_page.text
         assert "Ссылка вашего бота Max" not in settings_page.text
         assert "Webhook URL для вашего бота" not in settings_page.text
+        token_connect_save = client.post(
+            "/app/settings",
+            data={
+                "prestart_message": DEFAULT_TEMPLATES["prestart_message"],
+                "start_message": start_template,
+                "after_phone_message": after_phone_template,
+                "bot_token": "token_settings_flow_1",
+                "routing_mode": "round_robin",
+                "request_customer_phone": "1",
+            },
+            cookies=invite_flow_cookies,
+            follow_redirects=False,
+        )
+        assert token_connect_save.status_code in (302, 303)
+        settings_page_with_token = client.get("/app/settings", cookies=invite_flow_cookies, follow_redirects=False)
+        assert settings_page_with_token.status_code == 200
+        assert "Обновить" in settings_page_with_token.text
+        assert "Удалить" in settings_page_with_token.text
+        token_update_save = client.post(
+            "/app/settings",
+            data={
+                "prestart_message": DEFAULT_TEMPLATES["prestart_message"],
+                "start_message": start_template,
+                "after_phone_message": after_phone_template,
+                "bot_token": "token_settings_flow_2",
+                "routing_mode": "round_robin",
+                "request_customer_phone": "1",
+            },
+            cookies=invite_flow_cookies,
+            follow_redirects=False,
+        )
+        assert token_update_save.status_code in (302, 303)
+        with SessionLocal() as db:
+            ws_settings_after_update = get_or_create_settings(db, workspace_id=invite_flow_workspace_id)
+            assert (ws_settings_after_update.bot_token or "").strip() == "token_settings_flow_2"
+        token_delete_resp = client.post(
+            "/app/settings/delete-bot-token",
+            cookies=invite_flow_cookies,
+            follow_redirects=False,
+        )
+        assert token_delete_resp.status_code in (302, 303)
+        with SessionLocal() as db:
+            ws_settings_after_delete = get_or_create_settings(db, workspace_id=invite_flow_workspace_id)
+            assert (ws_settings_after_delete.bot_token or "").strip() == ""
+        settings_page_after_delete = client.get("/app/settings", cookies=invite_flow_cookies, follow_redirects=False)
+        assert settings_page_after_delete.status_code == 200
+        assert "не задан." in settings_page_after_delete.text
+        assert "Ввести токен" in settings_page_after_delete.text
         copy_manager_link = client.post(
             "/app/settings/copy-manager-link",
             data={
