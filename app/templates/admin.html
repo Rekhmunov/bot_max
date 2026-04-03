@@ -452,7 +452,7 @@
           <label for="title">Название в админке</label>
           <input id="title" name="title" placeholder="Прайс" required />
 
-          <label for="photos">Медиафайлы (можно несколько)</label>
+          <label for="photos">Медиафайлы (можно несколько, до 1 МБ каждый)</label>
           <input
             id="photos"
             class="quick-reply-media-input"
@@ -461,7 +461,7 @@
             multiple
             accept=".png,.jpg,.jpeg,.gif,.webp"
           />
-          <div class="hint">Сначала загрузите медиафайлы, затем заполните текст ответа.</div>
+          <div class="hint">Сначала загрузите медиафайлы (каждый до 1 МБ), затем заполните текст ответа.</div>
           <div class="media-sort-wrap" id="media-sort-wrap" hidden>
             <div class="hint">Порядок медиа (перетаскивайте влево/вправо):</div>
             <div class="media-sort-grid" id="media-sort-grid"></div>
@@ -753,6 +753,7 @@
       const mediaSortWrap = document.getElementById("media-sort-wrap");
       const mediaSortGrid = document.getElementById("media-sort-grid");
       const mediaOrderInput = document.getElementById("media_order");
+      const QUICK_REPLY_MAX_FILE_BYTES = 1 * 1024 * 1024;
       if (
         filesInput instanceof HTMLInputElement &&
         mediaSortWrap instanceof HTMLElement &&
@@ -830,6 +831,15 @@
           });
           selectedEntries = [];
           const files = Array.from(filesInput.files || []);
+          const oversized = files.find((file) => Number(file.size || 0) > QUICK_REPLY_MAX_FILE_BYTES);
+          if (oversized) {
+            alert(`Файл "${oversized.name}" больше 1 МБ. Загрузите файл размером до 1 МБ.`);
+            filesInput.value = "";
+            mediaSortGrid.innerHTML = "";
+            mediaOrderInput.value = "";
+            mediaSortWrap.hidden = true;
+            return;
+          }
           files.forEach((file, idx) => {
             selectedEntries.push({
               file,

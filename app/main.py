@@ -1189,6 +1189,7 @@ app.mount("/static", StaticFiles(directory="app/static"), name="static")
 _outbox_worker_task: asyncio.Task | None = None
 _rate_limiter = InMemoryRateLimiter()
 _MAX_UPLOAD_BYTES = int(settings.max_upload_bytes)
+_QUICK_REPLY_PHOTO_MAX_BYTES = 1 * 1024 * 1024
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _EMAIL_VERIFY_SALT = "email-verify-link"
 
@@ -1260,6 +1261,23 @@ async def _read_and_validate_upload(photo: UploadFile | None) -> tuple[str | Non
     return ext, content
 
 
+async def _read_and_validate_quick_reply_photo(photo: UploadFile | None) -> tuple[str | None, bytes | None]:
+    if not photo or not photo.filename:
+        return None, None
+    content = await photo.read()
+    ok, reason = is_safe_image(
+        filename=photo.filename,
+        content=content,
+        max_bytes=_QUICK_REPLY_PHOTO_MAX_BYTES,
+    )
+    if not ok:
+        if reason == "file_too_large":
+            raise HTTPException(status_code=413, detail="Фото для быстрого ответа должно быть не больше 1 МБ")
+        raise HTTPException(status_code=400, detail="Некорректный файл изображения")
+    ext = Path(photo.filename).suffix.lower()
+    return ext, content
+
+
 def _workspace_id_for_user(user: ServiceUser | None) -> int:
     if user is None:
         return DEFAULT_WORKSPACE_ID
@@ -1321,7 +1339,12 @@ async def _save_quick_reply_media_files(
     for upload in files:
         if not upload or not upload.filename:
             continue
-        ext, content = await _read_and_validate_upload(upload)
+        # Explicit product rule for quick-reply photos: max 1 MB.
+        if upload.size is not None and int(upload.size) > _QUICK_REPLY_PHOTO_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Фото в быстром ответе не должно превышать 1 МБ.")
+        ext, content = await _read_and_validate_quick_reply_photo(upload)
+        if len(content) > _QUICK_REPLY_PHOTO_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Фото в быстром ответе не должно превышать 1 МБ.")
         safe_name = f"{uuid4().hex}{ext}"
         target = Path("app/static/uploads") / safe_name
         target.write_bytes(content)

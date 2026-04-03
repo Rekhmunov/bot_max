@@ -312,6 +312,23 @@ def run() -> None:
         )
         assert create_reply.status_code == 200
 
+        create_reply_large_media = client.post(
+            "/admin/quick-replies",
+            data={
+                "command": f"large_{uuid4().hex[:8]}",
+                "title": "Too large photo",
+                "text": "large",
+                "media_order": "",
+            },
+            files={
+                "photos": ("oversize.jpg", b"x" * (1024 * 1024 + 1), "image/jpeg"),
+            },
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert create_reply_large_media.status_code == 413
+        assert "не должно превышать 1 МБ" in (create_reply_large_media.text or "")
+
         with SessionLocal() as db:
             ws2_settings = get_or_create_settings(db, workspace_id=2)
             ws2_settings.bot_token = "token_ws2"
