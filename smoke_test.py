@@ -312,6 +312,25 @@ def run() -> None:
         )
         assert create_reply.status_code == 200
 
+        deep_link_redirect = client.get("/c/2", follow_redirects=False)
+        assert deep_link_redirect.status_code in (302, 307)
+        deep_link_location = deep_link_redirect.headers.get("location", "")
+        assert "max.ru/" in deep_link_location
+        assert "?start=" in deep_link_location
+
+        deep_started = client.post(
+            "/webhook/max",
+            json={
+                "update_type": "bot_started",
+                "chat_id": f"chat_deep_{uuid4().hex[:6]}",
+                "sender_id": f"buyer_deep_{uuid4().hex[:6]}",
+                "payload": "2",
+                "text": "",
+            },
+        )
+        assert deep_started.status_code == 200
+        assert deep_started.json().get("flow") in {"start_prompt", "start_prompt_phone_not_required", "start_prompt_skipped_phone"}
+
         # Default basic limits should include quick replies / folders.
         with SessionLocal() as db:
             from app.ops import get_or_create_subscription

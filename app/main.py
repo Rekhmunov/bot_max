@@ -1376,6 +1376,20 @@ def _resolve_workspace_by_customer_link_code(db: Session, code: str) -> Workspac
     return get_workspace_by_tenant_code(db, raw)
 
 
+def _build_max_start_deeplink(*, tenant_code: str | None) -> str:
+    bot_profile = _build_max_bot_profile_url(settings.max_bot_account_id)
+    nickname = (bot_profile.rsplit("/", 1)[-1] if bot_profile else "").strip().lstrip("@")
+    code = (tenant_code or "").strip().lower()
+    if not nickname:
+        return bot_profile
+    if not code:
+        return f"https://max.ru/{nickname}"
+    safe_payload = re.sub(r"[^a-z0-9_-]+", "-", code).strip("-")[:128]
+    if not safe_payload:
+        return f"https://max.ru/{nickname}"
+    return f"https://max.ru/{nickname}?start={safe_payload}"
+
+
 def _manager_ids_from_settings_row(settings_row: BotSettings | None) -> set[str]:
     if settings_row is None:
         return set()
@@ -1383,6 +1397,12 @@ def _manager_ids_from_settings_row(settings_row: BotSettings | None) -> set[str]
 
 
 def _resolve_workspace_id_from_event(db: Session, event: MaxWebhookEvent) -> int:
+    payload_code = (getattr(event, "start_payload", "") or "").strip().lower()
+    if payload_code:
+        by_payload = _resolve_workspace_by_customer_link_code(db, payload_code)
+        if by_payload is not None:
+            return int(by_payload.id)
+
     sender_id = (event.sender_id or "").strip()
     chat_id = (event.chat_id or "").strip()
     if sender_id:
@@ -1446,7 +1466,7 @@ def customer_bot_link_redirect(
         raise HTTPException(status_code=404, detail="Клиент не найден")
     if not workspace.is_active or workspace.is_suspended:
         raise HTTPException(status_code=403, detail="Клиент временно недоступен")
-    bot_url = _build_max_bot_profile_url(settings.max_bot_account_id)
+    bot_url = _build_max_start_deeplink(tenant_code=workspace.tenant_code)
     if not bot_url:
         raise HTTPException(status_code=503, detail="Бот Max не настроен")
     return RedirectResponse(url=bot_url, status_code=302)
@@ -5888,7 +5908,15 @@ async def max_webhook(
     if event.update_type and event.update_type not in accepted_update_types:
         return {"ok": True, "ignored": event.update_type}
 
-    workspace_id = _resolve_workspace_id_from_event(db, event)
+    workspace_id_hint = None
+    if (event.update_type or "").strip().lower() in {"bot_started", "bot_start"}:
+        payload_value = (event.start_payload or "").strip().lower()
+        if payload_value:
+            hinted_workspace = _resolve_workspace_by_customer_link_code(db, payload_value)
+            if hinted_workspace is not None:
+                workspace_id_hint = int(hinted_workspace.id)
+
+    workspace_id = workspace_id_hint or _resolve_workspace_id_from_event(db, event)
     settings_db = get_or_create_settings(db, workspace_id=workspace_id)
     max_client = MaxClient()
 
