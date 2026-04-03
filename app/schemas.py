@@ -26,6 +26,20 @@ def _extract_phone_from_vcf(vcf_text: str | None) -> str | None:
     return match.group(1).strip()
 
 
+def _extract_start_payload_from_text(text: str | None) -> str | None:
+    value = (text or "").strip()
+    if not value:
+        return None
+    # Accept common forms:
+    # /start payload
+    # /start@bot payload
+    # start payload
+    match = re.match(r"^/?start(?:@[a-z0-9_]+)?\s+([^\s]+)$", value, flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
 class MaxWebhookEvent(BaseModel):
     chat_id: str = Field(..., description="ID чата, где пришло событие")
     sender_id: str = Field(..., description="ID отправителя сообщения")
@@ -54,7 +68,13 @@ class MaxWebhookEvent(BaseModel):
         """
         Supports both simplified payload format and official Max Update payload.
         """
-        update_type = _pick_first(payload.get("update_type"), payload.get("updateType"))
+        body_root = payload.get("body") if isinstance(payload.get("body"), dict) else {}
+        update_type = _pick_first(
+            payload.get("update_type"),
+            payload.get("updateType"),
+            body_root.get("update_type"),
+            body_root.get("updateType"),
+        )
         update_aliases = {
             "message_callback": "message_created",
             "new_message": "message_created",
@@ -65,9 +85,8 @@ class MaxWebhookEvent(BaseModel):
             if normalized:
                 update_type = normalized
         message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
-        if not message and isinstance(payload.get("body"), dict):
+        if not message and body_root:
             # Some Max webhook deliveries wrap message object under `body`.
-            body_root = payload.get("body")
             if isinstance(body_root.get("message"), dict):
                 message = body_root.get("message")
         user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
@@ -107,22 +126,34 @@ class MaxWebhookEvent(BaseModel):
 
         chat_id = _pick_first(
             payload.get("chat_id"),
+            payload.get("chatId"),
             message.get("chat_id"),
+            message.get("chatId"),
             recipient.get("chat_id"),
             recipient.get("chatId"),
+            body_root.get("chat_id"),
+            body_root.get("chatId"),
         )
         sender_id = _pick_first(
             payload.get("sender_id"),
+            payload.get("senderId"),
             message.get("sender_id"),
+            message.get("senderId"),
             message.get("from_user_id"),
             user.get("user_id"),
+            user.get("userId"),
             sender.get("user_id"),
             sender.get("id"),
+            body_root.get("sender_id"),
+            body_root.get("senderId"),
+            body_root.get("user_id"),
+            body_root.get("userId"),
         )
         text = _pick_first(
             payload.get("text"),
             message.get("text"),
             body.get("text"),
+            body_root.get("text"),
             "",
         )
         message_mid = _pick_first(
@@ -148,17 +179,28 @@ class MaxWebhookEvent(BaseModel):
         )
         start_payload = _pick_first(
             payload.get("payload"),
+            payload.get("start"),
             payload.get("start_payload"),
             payload.get("startPayload"),
             payload.get("start_param"),
             payload.get("startParam"),
             message.get("payload"),
+            message.get("start"),
             message.get("start_payload"),
             message.get("startPayload"),
             body.get("payload"),
+            body.get("start"),
             body.get("start_payload"),
             body.get("startPayload"),
+            body_root.get("payload"),
+            body_root.get("start"),
+            body_root.get("start_payload"),
+            body_root.get("startPayload"),
+            body_root.get("start_param"),
+            body_root.get("startParam"),
         )
+        if start_payload is None:
+            start_payload = _extract_start_payload_from_text(str(text or ""))
 
         if chat_id is None or sender_id is None:
             return None

@@ -211,8 +211,9 @@ def _get_or_create_conversation(
         if existing:
             return existing
         raise ValueError("dialogs_limit_exceeded")
-    # chat_id can be globally unique in legacy DBs; prefer workspace row but
-    # fallback to any existing chat_id to preserve historical continuity.
+    # chat_id is globally unique in the current schema.
+    # If we find a legacy row in another workspace for the same customer/chat,
+    # rebind it to the resolved workspace to keep tenant routing consistent.
     conversation = (
         db.query(Conversation)
         .filter(
@@ -223,6 +224,16 @@ def _get_or_create_conversation(
     )
     if conversation is None:
         conversation = db.query(Conversation).filter(Conversation.chat_id == chat_id).first()
+        if conversation is not None:
+            same_customer = (
+                str(conversation.customer_account_id or "").strip() == str(customer_id or "").strip()
+            )
+            if same_customer and int(conversation.workspace_id or DEFAULT_WORKSPACE_ID) != int(workspace_id):
+                conversation.workspace_id = workspace_id
+                conversation.is_active = True
+                db.add(conversation)
+                db.commit()
+                db.refresh(conversation)
     if conversation:
         return conversation
     conversation = Conversation(
@@ -246,13 +257,15 @@ def _get_or_create_meta(
 ) -> ConversationMeta:
     meta = (
         db.query(ConversationMeta)
-        .filter(
-            ConversationMeta.workspace_id == workspace_id,
-            ConversationMeta.conversation_id == conversation_id,
-        )
+        .filter(ConversationMeta.conversation_id == conversation_id)
         .first()
     )
     if meta:
+        if int(meta.workspace_id or DEFAULT_WORKSPACE_ID) != int(workspace_id):
+            meta.workspace_id = workspace_id
+            db.add(meta)
+            db.commit()
+            db.refresh(meta)
         return meta
     max_ticket = (
         db.query(func.max(ConversationMeta.ticket_no))
@@ -1553,12 +1566,33 @@ async def handle_customer_event(
             await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "prestart"}
 
-    # Strict flow: Start prompt is unlocked only by explicit bot_started event.
-    if not meta.start_prompt_sent and is_bot_started:
+    # Start event should always (re)run onboarding flow.
+    # This keeps behavior consistent after bot re-install / repeated Start.
+    if is_bot_started:
         meta.start_prompt_sent = True
-        db.add(meta)
-        db.commit()
-        if meta.phone_verified:
+        if require_phone:
+            if not event.contact_phone:
+                # Force explicit confirmation each time Start is pressed.
+                meta.phone_verified = False
+                db.add(meta)
+                db.commit()
+                start_text = get_template_text(db, TEMPLATE_START, workspace_id=workspace_id)
+                await _send_contact_request_prompt(
+                    db=db,
+                    conversation_id=conversation.id,
+                    client=client,
+                    chat_id=event.chat_id,
+                    user_id=event.sender_id,
+                    text=start_text,
+                )
+                return {"ok": True, "flow": "start_prompt"}
+            # If contact is already available in Start event payload, treat as verified.
+            meta.phone_verified = True
+            meta.phone_number = event.contact_phone
+            if meta.status == "new":
+                meta.status = "waiting_manager"
+            db.add(meta)
+            db.commit()
             await queue_only_send_text(
                 db,
                 conversation_id=conversation.id,
@@ -1570,28 +1604,24 @@ async def handle_customer_event(
             )
             await process_outbox_queue(db, limit=20)
             return {"ok": True, "flow": "start_prompt_skipped_phone"}
-        if require_phone:
-            start_text = get_template_text(db, TEMPLATE_START, workspace_id=workspace_id)
-            await _send_contact_request_prompt(
-                db=db,
+        else:
+            if not meta.phone_verified:
+                meta.phone_verified = True
+                if meta.status == "new":
+                    meta.status = "waiting_manager"
+                db.add(meta)
+                db.commit()
+            await queue_only_send_text(
+                db,
                 conversation_id=conversation.id,
-                client=client,
-                chat_id=event.chat_id,
-                user_id=event.sender_id,
-                text=start_text,
+                target_chat_id=event.chat_id,
+                target_user_id=event.sender_id,
+                text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
+                source="bot_system",
+                text_format="markdown",
             )
-            return {"ok": True, "flow": "start_prompt"}
-        await queue_only_send_text(
-            db,
-            conversation_id=conversation.id,
-            target_chat_id=event.chat_id,
-            target_user_id=event.sender_id,
-            text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
-            source="bot_system",
-            text_format="markdown",
-        )
-        await process_outbox_queue(db, limit=20)
-        return {"ok": True, "flow": "start_prompt_phone_not_required"}
+            await process_outbox_queue(db, limit=20)
+            return {"ok": True, "flow": "start_prompt_phone_not_required"}
 
     if phone_just_verified:
         intro_steps = (
