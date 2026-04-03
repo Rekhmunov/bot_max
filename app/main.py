@@ -52,12 +52,12 @@ from app.manager_bridge import (
     TEMPLATE_AFTER_PHONE,
     TEMPLATE_PRESTART,
     TEMPLATE_START,
-    assign_conversation_to_folder,
     block_conversation_customer,
     unblock_conversation_customer,
     create_chat_folder,
     delete_conversation,
     ensure_default_templates,
+    get_conversation_folder_ids,
     get_chat_metrics,
     get_delivery_metrics,
     get_template_text,
@@ -73,6 +73,7 @@ from app.manager_bridge import (
     process_outbox_queue,
     remove_chat_message,
     retry_failed_outbox_message,
+    replace_conversation_folder_links,
     set_template_text,
     send_admin_chat_message,
     send_admin_quick_reply,
@@ -161,6 +162,105 @@ def _safe_int(value: int | str | None, default: int, min_value: int = 0) -> int:
     except (TypeError, ValueError):
         parsed = int(default)
     return max(min_value, parsed)
+
+
+def _parse_folder_ids_form(raw: str) -> list[int]:
+    values: list[int] = []
+    seen: set[int] = set()
+    for part in re.split(r"[,\s;]+", str(raw or "")):
+        token = (part or "").strip()
+        if not token:
+            continue
+        try:
+            folder_id = int(token)
+        except (TypeError, ValueError):
+            continue
+        if folder_id <= 0 or folder_id in seen:
+            continue
+        seen.add(folder_id)
+        values.append(folder_id)
+    return values
+
+
+def _resolve_folder_ids_from_form(*, folder_ids_csv: str, folder_id: int) -> list[int]:
+    parsed = _parse_folder_ids_form(folder_ids_csv)
+    if parsed:
+        return parsed
+    fallback = int(folder_id or 0)
+    return [fallback] if fallback > 0 else []
+
+
+def _filter_threads_by_folder(threads: list[object], folder_id: int | None) -> list[object]:
+    if folder_id is None:
+        return threads
+    if int(folder_id) > 0:
+        return [
+            item
+            for item in threads
+            if int(folder_id) in [int(v) for v in (getattr(item, "folder_ids", []) or [])]
+        ]
+    return [item for item in threads if not [int(v) for v in (getattr(item, "folder_ids", []) or [])]]
+
+
+def _folder_ids_csv_for_conversation(
+    db: Session,
+    *,
+    conversation_id: int,
+    workspace_id: int,
+) -> str:
+    return ",".join(
+        str(item)
+        for item in get_conversation_folder_ids(
+            db,
+            conversation_id=conversation_id,
+            workspace_id=workspace_id,
+        )
+    )
+
+
+def _assign_new_folder_to_conversation(
+    db: Session,
+    *,
+    conversation_id: int,
+    new_folder_id: int,
+    workspace_id: int,
+) -> bool:
+    current_ids = get_conversation_folder_ids(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+    )
+    next_ids = list(current_ids)
+    if int(new_folder_id) not in next_ids:
+        next_ids.append(int(new_folder_id))
+    return replace_conversation_folder_links(
+        db=db,
+        conversation_id=conversation_id,
+        folder_ids=next_ids,
+        workspace_id=workspace_id,
+    )
+
+
+def _replace_conversation_folders_and_redirect(
+    *,
+    db: Session,
+    conversation_id: int,
+    workspace_id: int,
+    folder_ids_csv: str,
+    folder_id: int,
+) -> tuple[bool, str]:
+    next_folder_ids = _resolve_folder_ids_from_form(
+        folder_ids_csv=folder_ids_csv,
+        folder_id=folder_id,
+    )
+    ok = replace_conversation_folder_links(
+        db=db,
+        conversation_id=conversation_id,
+        folder_ids=next_folder_ids,
+        workspace_id=workspace_id,
+    )
+    multi_suffix = "1" if ok and len(next_folder_ids) > 1 else "0"
+    return ok, multi_suffix
 
 
 def _normalize_manager_ids(raw: str) -> str:
@@ -2644,11 +2744,11 @@ def admin_chat_create_folder(
                 return RedirectResponse(url=f"/admin/chats?q={q}&folder_limit=1", status_code=302)
         created = create_chat_folder(db, folder_name=folder_name, workspace_id=workspace_id)
         if conversation_id is not None:
-            assign_conversation_to_folder(
+            _assign_new_folder_to_conversation(
                 db,
                 conversation_id=conversation_id,
-                folder_id=created.id,
                 workspace_id=workspace_id,
+                new_folder_id=created.id,
             )
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
     conv_qs = f"&conversation_id={conversation_id}" if conversation_id is not None else ""
@@ -2691,22 +2791,31 @@ def admin_chat_mark_unread(
 def admin_chat_move_folder(
     conversation_id: int,
     folder_id: int = Form(0),
+    folder_ids: str = Form(""),
     q: str = Form(""),
     view: str = Form(""),
     current_folder_id: int | None = Form(default=None),
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    ok = assign_conversation_to_folder(
-        db,
+    next_folder_ids = _resolve_folder_ids_from_form(
+        folder_ids_csv=folder_ids,
+        folder_id=folder_id,
+    )
+    ok = replace_conversation_folder_links(
+        db=db,
         conversation_id=conversation_id,
-        folder_id=(folder_id if folder_id > 0 else None),
+        folder_ids=next_folder_ids,
         workspace_id=DEFAULT_WORKSPACE_ID,
     )
     suffix = "1" if ok else "0"
+    multi_suffix = "1" if ok and len(next_folder_ids) > 1 else "0"
     folder_qs = f"&folder_id={current_folder_id}" if current_folder_id is not None else ""
     return RedirectResponse(
-        url=f"/admin/chats?conversation_id={conversation_id}&q={q}&view={view}&foldered={suffix}{folder_qs}",
+        url=(
+            f"/admin/chats?conversation_id={conversation_id}&q={q}&view={view}"
+            f"&foldered={suffix}&foldered_multi={multi_suffix}{folder_qs}"
+        ),
         status_code=302,
     )
 
@@ -5722,11 +5831,11 @@ def app_chat_create_folder(
                 )
         created = create_chat_folder(db, folder_name=folder_name, workspace_id=workspace_id)
         if conversation_id is not None:
-            assign_conversation_to_folder(
+            _assign_new_folder_to_conversation(
                 db,
                 conversation_id=conversation_id,
-                folder_id=created.id,
                 workspace_id=workspace_id,
+                new_folder_id=created.id,
             )
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
     conv_qs = f"&conversation_id={conversation_id}" if conversation_id is not None else ""
@@ -5779,6 +5888,7 @@ def app_chat_mark_unread(
 def app_chat_move_folder(
     conversation_id: int,
     folder_id: int = Form(0),
+    folder_ids: str = Form(""),
     q: str = Form(""),
     view: str = Form(""),
     current_folder_id: int | None = Form(default=None),
@@ -5791,20 +5901,28 @@ def app_chat_move_folder(
         current_user=current_user,
         workspace_id=workspace_id,
     )
-    ok = assign_conversation_to_folder(
-        db,
+    next_folder_ids = _resolve_folder_ids_from_form(
+        folder_ids_csv=folder_ids,
+        folder_id=folder_id,
+    )
+    ok = replace_conversation_folder_links(
+        db=db,
         conversation_id=conversation_id,
-        folder_id=(folder_id if folder_id > 0 else None),
+        folder_ids=next_folder_ids,
         workspace_id=workspace_id,
     )
     suffix = "1" if ok else "0"
+    multi_suffix = "1" if ok and len(next_folder_ids) > 1 else "0"
     folder_qs = f"&folder_id={current_folder_id}" if current_folder_id is not None else ""
     workspace_qs = _workspace_scope_query_suffix(
         workspace_id=workspace_id,
         is_scoped=is_superadmin_scoped,
     )
     return RedirectResponse(
-        url=f"/app/chats?conversation_id={conversation_id}&q={q}&view={view}&foldered={suffix}{folder_qs}{workspace_qs}",
+        url=(
+            f"/app/chats?conversation_id={conversation_id}&q={q}&view={view}"
+            f"&foldered={suffix}&foldered_multi={multi_suffix}{folder_qs}{workspace_qs}"
+        ),
         status_code=302,
     )
 
@@ -6257,6 +6375,8 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
         op_message = "Чат перемещен в папку"
     if request.query_params.get("foldered") == "0":
         op_error = "Не удалось переместить чат в папку"
+    if request.query_params.get("foldered_multi") == "1":
+        op_message = "Чат добавлен в несколько папок"
     if request.query_params.get("blocked") == "1":
         op_message = "Пользователь заблокирован"
     if request.query_params.get("blocked") == "0":
@@ -6283,6 +6403,8 @@ def _thread_summary_dict(item: object) -> dict[str, object]:
         "last_message_preview": str(getattr(item, "last_message_preview", "") or ""),
         "folder_id": getattr(item, "folder_id", None),
         "folder_name": str(getattr(item, "folder_name", "") or ""),
+        "folder_ids": [int(v) for v in (getattr(item, "folder_ids", []) or [])],
+        "folder_names": [str(v) for v in (getattr(item, "folder_names", []) or [])],
     }
 
 
@@ -6312,11 +6434,7 @@ def _build_chat_updates_payload(
     threads_signature: str = "",
 ) -> dict[str, object]:
     threads = load_chat_threads(db, query=query, workspace_id=workspace_id)
-    if folder_id is not None:
-        if folder_id > 0:
-            threads = [item for item in threads if item.folder_id == folder_id]
-        else:
-            threads = [item for item in threads if item.folder_id is None]
+    threads = _filter_threads_by_folder(threads, folder_id)
 
     has_explicit_conversation = conversation_id is not None
     active_thread = None
@@ -6475,11 +6593,7 @@ async def _render_chat_workspace(
     op_message, op_error = _chat_op_messages(request)
 
     threads = load_chat_threads(db, query=q, workspace_id=workspace_id)
-    if folder_id is not None:
-        if folder_id > 0:
-            threads = [item for item in threads if item.folder_id == folder_id]
-        else:
-            threads = [item for item in threads if item.folder_id is None]
+    threads = _filter_threads_by_folder(threads, folder_id)
 
     has_explicit_conversation = conversation_id is not None
     active_thread = None
@@ -6603,11 +6717,11 @@ def manager_mini_create_folder(
                 )
         created = create_chat_folder(db, folder_name=folder_name, workspace_id=workspace_id)
         if conversation_id is not None:
-            assign_conversation_to_folder(
+            _assign_new_folder_to_conversation(
                 db,
                 conversation_id=conversation_id,
-                folder_id=created.id,
                 workspace_id=workspace_id,
+                new_folder_id=created.id,
             )
     return RedirectResponse(
         url=_manager_mini_url(
@@ -6665,6 +6779,7 @@ def manager_mini_move_folder(
     conversation_id: int,
     token: str,
     folder_id: int = Form(0),
+    folder_ids: str = Form(""),
     q: str = Form(""),
     view: str = Form(""),
     current_folder_id: int | None = Form(default=None),
@@ -6677,13 +6792,18 @@ def manager_mini_move_folder(
     )
     claims = _require_manager_mini_access(token=token, db=db)
     workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
-    ok = assign_conversation_to_folder(
-        db,
+    next_folder_ids = _resolve_folder_ids_from_form(
+        folder_ids_csv=folder_ids,
+        folder_id=folder_id,
+    )
+    ok = replace_conversation_folder_links(
+        db=db,
         conversation_id=conversation_id,
-        folder_id=(folder_id if folder_id > 0 else None),
+        folder_ids=next_folder_ids,
         workspace_id=workspace_id,
     )
     suffix = "1" if ok else "0"
+    multi_suffix = "1" if ok and len(next_folder_ids) > 1 else "0"
     return RedirectResponse(
         url=_manager_mini_url(
             token=token,
@@ -6691,7 +6811,7 @@ def manager_mini_move_folder(
             q=q,
             view=view,
             folder_id=current_folder_id,
-            extra=f"foldered={suffix}",
+            extra=f"foldered={suffix}&foldered_multi={multi_suffix}",
         ),
         status_code=302,
     )

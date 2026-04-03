@@ -175,6 +175,48 @@ def _ensure_lightweight_migrations() -> None:
             if "sort_order" not in folder_columns:
                 conn.execute(text("ALTER TABLE chat_folders ADD COLUMN sort_order INTEGER DEFAULT 0"))
 
+        if "conversation_folder_links" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE conversation_folder_links ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "workspace_id INTEGER DEFAULT 1, "
+                    "conversation_id INTEGER NOT NULL, "
+                    "folder_id INTEGER NOT NULL, "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_conversation_folder_links_workspace_id "
+                "ON conversation_folder_links (workspace_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_conversation_folder_links_conversation_id "
+                "ON conversation_folder_links (conversation_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_conversation_folder_links_folder_id "
+                "ON conversation_folder_links (folder_id)"
+            )
+        )
+        if "conversations" in table_names and "chat_folders" in table_names:
+            # Backfill legacy one-folder relation into many-to-many links.
+            conn.execute(
+                text(
+                    "INSERT OR IGNORE INTO conversation_folder_links "
+                    "(workspace_id, conversation_id, folder_id, created_at) "
+                    "SELECT c.workspace_id, c.id, c.folder_id, CURRENT_TIMESTAMP "
+                    "FROM conversations c "
+                    "JOIN chat_folders f ON f.id = c.folder_id AND f.workspace_id = c.workspace_id "
+                    "WHERE c.folder_id IS NOT NULL AND c.folder_id > 0"
+                )
+            )
+
         if "bot_settings" in table_names:
             settings_columns = {col["name"] for col in inspector.get_columns("bot_settings")}
             if "workspace_id" not in settings_columns:
@@ -398,6 +440,12 @@ def _ensure_lightweight_migrations() -> None:
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ix_chat_folders_workspace_name "
                 "ON chat_folders (workspace_id, name)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_conversation_folder_links_workspace_conversation_folder "
+                "ON conversation_folder_links (workspace_id, conversation_id, folder_id)"
             )
         )
         conn.execute(

@@ -19,6 +19,7 @@ from app.models import (
     ChatMessage,
     ChatFolder,
     Conversation,
+    ConversationFolderLink,
     ConversationMeta,
     CustomerProfile,
     IntroStep,
@@ -117,6 +118,8 @@ class ChatThreadItem:
     last_activity_id: int
     folder_id: int | None
     folder_name: str
+    folder_ids: list[int]
+    folder_names: list[str]
 
 
 @dataclass
@@ -1601,7 +1604,26 @@ def block_conversation(
     if bool(meta.is_blocked):
         return True
     blocked_folder = _ensure_blocked_folder(db, workspace_id=ws_id)
-    previous_folder_id = conversation.folder_id
+    current_folder_ids = get_conversation_folder_ids(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=ws_id,
+    )
+    previous_folder_id = (
+        current_folder_ids[0]
+        if current_folder_ids
+        else (conversation.folder_id if conversation.folder_id else None)
+    )
+    target_folder_ids = list(current_folder_ids)
+    if blocked_folder.id not in target_folder_ids:
+        target_folder_ids.append(blocked_folder.id)
+    replace_conversation_folder_links(
+        db,
+        conversation_id=conversation_id,
+        folder_ids=target_folder_ids,
+        workspace_id=ws_id,
+        commit=False,
+    )
     conversation.folder_id = blocked_folder.id
     meta.is_blocked = True
     meta.blocked_at = _as_naive_utc(_utc_now())
@@ -1635,17 +1657,37 @@ def unblock_conversation(
         meta = _get_or_create_meta(db, conversation_id=conversation_id, workspace_id=ws_id)
     if not bool(meta.is_blocked):
         return True
-    restore_folder_id = meta.blocked_prev_folder_id
-    if restore_folder_id is not None:
-        folder_exists = (
-            db.query(ChatFolder.id)
-            .filter(
-                ChatFolder.workspace_id == ws_id,
-                ChatFolder.id == restore_folder_id,
-            )
-            .first()
+    blocked_folder = (
+        db.query(ChatFolder.id)
+        .filter(
+            ChatFolder.workspace_id == ws_id,
+            func.lower(ChatFolder.name) == BLOCKED_FOLDER_NAME.lower(),
         )
-        conversation.folder_id = restore_folder_id if folder_exists else None
+        .first()
+    )
+    blocked_folder_id = int(blocked_folder[0]) if blocked_folder and blocked_folder[0] else None
+    current_folder_ids = get_conversation_folder_ids(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=ws_id,
+    )
+    next_folder_ids = [
+        folder_id
+        for folder_id in current_folder_ids
+        if blocked_folder_id is None or int(folder_id) != blocked_folder_id
+    ]
+    replace_conversation_folder_links(
+        db,
+        conversation_id=conversation_id,
+        folder_ids=next_folder_ids,
+        workspace_id=ws_id,
+        commit=False,
+    )
+    restore_folder_id = meta.blocked_prev_folder_id
+    if restore_folder_id is not None and restore_folder_id in next_folder_ids:
+        conversation.folder_id = restore_folder_id
+    elif next_folder_ids:
+        conversation.folder_id = int(next_folder_ids[0])
     else:
         conversation.folder_id = None
     meta.is_blocked = False
@@ -2219,6 +2261,51 @@ def load_chat_threads(
         .order_by(Conversation.id.desc())
         .all()
     )
+    conversation_ids = [int(item.id) for item in conversations]
+    folder_links_map: dict[int, list[int]] = {}
+    if conversation_ids:
+        for conv_id, folder_id in (
+            db.query(ConversationFolderLink.conversation_id, ConversationFolderLink.folder_id)
+            .filter(
+                ConversationFolderLink.workspace_id == workspace_id,
+                ConversationFolderLink.conversation_id.in_(conversation_ids),
+            )
+            .all()
+        ):
+            conv_key = int(conv_id or 0)
+            folder_key = int(folder_id or 0)
+            if conv_key <= 0 or folder_key <= 0:
+                continue
+            links = folder_links_map.setdefault(conv_key, [])
+            if folder_key not in links:
+                links.append(folder_key)
+
+    for conv in conversations:
+        links = folder_links_map.setdefault(int(conv.id), [])
+        if conv.folder_id and int(conv.folder_id) not in links:
+            links.append(int(conv.folder_id))
+
+    all_folder_ids = {
+        int(folder_id)
+        for folder_ids in folder_links_map.values()
+        for folder_id in folder_ids
+        if int(folder_id) > 0
+    }
+    folder_meta: dict[int, tuple[int, str]] = {}
+    if all_folder_ids:
+        for folder_id, sort_order, name in (
+            db.query(ChatFolder.id, ChatFolder.sort_order, ChatFolder.name)
+            .filter(
+                ChatFolder.workspace_id == workspace_id,
+                ChatFolder.id.in_(sorted(all_folder_ids)),
+            )
+            .all()
+        ):
+            folder_meta[int(folder_id)] = (int(sort_order or 0), str(name or ""))
+
+    for conv_id, folder_ids in folder_links_map.items():
+        folder_ids.sort(key=lambda fid: folder_meta.get(int(fid), (10**9, "")))
+
     needle = query.strip().lower()
     items: list[ChatThreadItem] = []
     for conv in conversations:
@@ -2287,6 +2374,15 @@ def load_chat_threads(
         if needle and needle not in searchable:
             continue
 
+        conv_folder_ids = list(folder_links_map.get(int(conv.id), []))
+        conv_folder_names = [
+            folder_meta[int(folder_id)][1]
+            for folder_id in conv_folder_ids
+            if int(folder_id) in folder_meta and folder_meta[int(folder_id)][1]
+        ]
+        primary_folder_id = int(conv_folder_ids[0]) if conv_folder_ids else None
+        primary_folder_name = conv_folder_names[0] if conv_folder_names else ""
+
         items.append(
             ChatThreadItem(
                 conversation_id=conv.id,
@@ -2301,18 +2397,10 @@ def load_chat_threads(
                 is_unread=is_unread,
                 is_blocked=is_blocked,
                 last_activity_id=last_activity_id,
-                folder_id=conv.folder_id,
-                folder_name=(
-                    db.query(ChatFolder.name)
-                    .filter(
-                        ChatFolder.workspace_id == workspace_id,
-                        ChatFolder.id == conv.folder_id,
-                    )
-                    .scalar()
-                    or ""
-                )
-                if conv.folder_id
-                else "",
+                folder_id=primary_folder_id,
+                folder_name=primary_folder_name,
+                folder_ids=conv_folder_ids,
+                folder_names=conv_folder_names,
             )
         )
     # New/unread chats first, then by latest activity.
@@ -2340,6 +2428,10 @@ def delete_conversation(
     db.query(ManagerDispatch).filter(
         ManagerDispatch.workspace_id == ws_id,
         ManagerDispatch.conversation_id == conversation_id,
+    ).delete()
+    db.query(ConversationFolderLink).filter(
+        ConversationFolderLink.workspace_id == ws_id,
+        ConversationFolderLink.conversation_id == conversation_id,
     ).delete()
     db.query(ConversationMeta).filter(
         ConversationMeta.workspace_id == ws_id,
@@ -2540,12 +2632,81 @@ def create_chat_folder(
         raise
 
 
-def assign_conversation_to_folder(
+def get_conversation_folder_links(
     db: Session,
     *,
     conversation_id: int,
-    folder_id: int | None,
     workspace_id: int | None = None,
+) -> list[ConversationFolderLink]:
+    conversation_query = db.query(Conversation).filter(Conversation.id == conversation_id)
+    if workspace_id is not None:
+        conversation_query = conversation_query.filter(Conversation.workspace_id == workspace_id)
+    conversation = conversation_query.first()
+    if conversation is None:
+        return []
+    ws_id = int(conversation.workspace_id or DEFAULT_WORKSPACE_ID)
+    links = (
+        db.query(ConversationFolderLink)
+        .filter(
+            ConversationFolderLink.workspace_id == ws_id,
+            ConversationFolderLink.conversation_id == conversation_id,
+        )
+        .order_by(ConversationFolderLink.id.asc())
+        .all()
+    )
+    if links:
+        return links
+    if conversation.folder_id:
+        folder = (
+            db.query(ChatFolder.id)
+            .filter(
+                ChatFolder.workspace_id == ws_id,
+                ChatFolder.id == int(conversation.folder_id),
+            )
+            .first()
+        )
+        if folder is not None:
+            link = ConversationFolderLink(
+                workspace_id=ws_id,
+                conversation_id=conversation_id,
+                folder_id=int(conversation.folder_id),
+            )
+            db.add(link)
+            db.commit()
+            db.refresh(link)
+            links = [link]
+    return links
+
+
+def get_conversation_folder_ids(
+    db: Session,
+    *,
+    conversation_id: int,
+    workspace_id: int | None = None,
+) -> list[int]:
+    links = get_conversation_folder_links(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+    )
+    folder_ids: list[int] = []
+    seen: set[int] = set()
+    for link in links:
+        folder_id = int(link.folder_id or 0)
+        if folder_id <= 0 or folder_id in seen:
+            continue
+        seen.add(folder_id)
+        folder_ids.append(folder_id)
+    return folder_ids
+
+
+def replace_conversation_folder_links(
+    db: Session,
+    *,
+    conversation_id: int,
+    folder_ids: list[int],
+    workspace_id: int | None = None,
+    commit: bool = True,
 ) -> bool:
     conversation_query = db.query(Conversation).filter(Conversation.id == conversation_id)
     if workspace_id is not None:
@@ -2553,22 +2714,63 @@ def assign_conversation_to_folder(
     conversation = conversation_query.first()
     if conversation is None:
         return False
-    ws_id = conversation.workspace_id
-    if folder_id is not None:
-        folder = (
-            db.query(ChatFolder)
-            .filter(
-                ChatFolder.workspace_id == ws_id,
-                ChatFolder.id == folder_id,
+    ws_id = int(conversation.workspace_id or DEFAULT_WORKSPACE_ID)
+    normalized_ids: list[int] = []
+    seen: set[int] = set()
+    for value in folder_ids:
+        folder_id = int(value or 0)
+        if folder_id <= 0 or folder_id in seen:
+            continue
+        seen.add(folder_id)
+        normalized_ids.append(folder_id)
+    if normalized_ids:
+        valid_ids = {
+            int(row[0])
+            for row in (
+                db.query(ChatFolder.id)
+                .filter(
+                    ChatFolder.workspace_id == ws_id,
+                    ChatFolder.id.in_(normalized_ids),
+                )
+                .all()
             )
-            .first()
-        )
-        if folder is None:
+        }
+        if len(valid_ids) != len(normalized_ids):
             return False
-    conversation.folder_id = folder_id
+    db.query(ConversationFolderLink).filter(
+        ConversationFolderLink.workspace_id == ws_id,
+        ConversationFolderLink.conversation_id == conversation_id,
+    ).delete()
+    for folder_id in normalized_ids:
+        db.add(
+            ConversationFolderLink(
+                workspace_id=ws_id,
+                conversation_id=conversation_id,
+                folder_id=folder_id,
+            )
+        )
+    conversation.folder_id = normalized_ids[0] if normalized_ids else None
     db.add(conversation)
-    db.commit()
+    if commit:
+        db.commit()
     return True
+
+
+def assign_conversation_to_folder(
+    db: Session,
+    *,
+    conversation_id: int,
+    folder_id: int | None,
+    workspace_id: int | None = None,
+) -> bool:
+    next_folder_ids = [int(folder_id)] if folder_id is not None else []
+    return replace_conversation_folder_links(
+        db,
+        conversation_id=conversation_id,
+        folder_ids=next_folder_ids,
+        workspace_id=workspace_id,
+        commit=True,
+    )
 
 
 def mark_thread_unread(

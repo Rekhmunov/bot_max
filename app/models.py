@@ -328,6 +328,16 @@ class ChatFolder(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
 
 
+class ConversationFolderLink(Base):
+    __tablename__ = "conversation_folder_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True, default=1)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), index=True)
+    folder_id: Mapped[int] = mapped_column(ForeignKey("chat_folders.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class ManagerDispatch(Base):
     __tablename__ = "manager_dispatches"
 
@@ -356,6 +366,13 @@ Index(
 )
 Index("ix_message_templates_workspace_key", MessageTemplate.workspace_id, MessageTemplate.template_key, unique=True)
 Index("ix_chat_folders_workspace_name", ChatFolder.workspace_id, ChatFolder.name, unique=True)
+Index(
+    "ix_conversation_folder_links_workspace_conversation_folder",
+    ConversationFolderLink.workspace_id,
+    ConversationFolderLink.conversation_id,
+    ConversationFolderLink.folder_id,
+    unique=True,
+)
 Index(
     "ix_customer_profiles_workspace_customer",
     CustomerProfile.workspace_id,
