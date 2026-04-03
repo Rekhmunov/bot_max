@@ -1210,15 +1210,60 @@ def _build_max_bot_profile_url(bot_account_id: str | None) -> str:
     if not value:
         return ""
     if value.isdigit():
-        return f"https://max.ru/{value}"
+        # Numeric bot id in Max public links is exposed as id{digits}_bot.
+        return f"https://max.ru/id{value}_bot"
     return f"https://max.ru/{value.lstrip('@')}"
 
 
-def _build_customer_bot_link(*, tenant_code: str | None) -> str:
-    code = (tenant_code or "").strip().lower()
+def _encode_base36(value: int) -> str:
+    if value <= 0:
+        return ""
+    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+    number = int(value)
+    result = ""
+    while number:
+        number, rem = divmod(number, 36)
+        result = alphabet[rem] + result
+    return result or "0"
+
+
+def _decode_base36(value: str) -> int | None:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return None
+    if not re.fullmatch(r"[0-9a-z]+", raw):
+        return None
+    try:
+        parsed = int(raw, 36)
+    except ValueError:
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _build_customer_link_code(*, workspace_id: int | None, tenant_code: str | None) -> str:
+    if workspace_id and workspace_id > 0:
+        return _encode_base36(workspace_id)
+    fallback = (tenant_code or "").strip().lower()
+    return fallback
+
+
+def _build_customer_bot_link(*, workspace_id: int | None, tenant_code: str | None) -> str:
+    code = _build_customer_link_code(workspace_id=workspace_id, tenant_code=tenant_code)
     if not code:
         return ""
     return f"{settings.public_base_url.rstrip('/')}/c/{code}"
+
+
+def _resolve_workspace_by_customer_link_code(db: Session, code: str) -> Workspace | None:
+    raw = (code or "").strip().lower()
+    if not raw:
+        return None
+    by_id = _decode_base36(raw)
+    if by_id:
+        ws = db.query(Workspace).filter(Workspace.id == by_id).first()
+        if ws is not None:
+            return ws
+    return get_workspace_by_tenant_code(db, raw)
 
 
 def _manager_ids_from_settings_row(settings_row: BotSettings | None) -> set[str]:
@@ -1286,7 +1331,7 @@ def customer_bot_link_redirect(
     tenant_code: str,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    workspace = get_workspace_by_tenant_code(db, tenant_code)
+    workspace = _resolve_workspace_by_customer_link_code(db, tenant_code)
     if workspace is None:
         raise HTTPException(status_code=404, detail="Клиент не найден")
     if not workspace.is_active or workspace.is_suspended:
@@ -1463,7 +1508,10 @@ def _render_app_settings_page(
         bot_profile_url = _build_max_bot_profile_url(bot_account_id)
         bot_profile_label = bot_account_id
     if workspace is not None:
-        customer_bot_link = _build_customer_bot_link(tenant_code=workspace.tenant_code)
+        customer_bot_link = _build_customer_bot_link(
+            workspace_id=workspace.id,
+            tenant_code=workspace.tenant_code,
+        )
     tenant_resolution_hint = (
         "Один общий бот Max используется для всех клиентов. "
         "Система автоматически определяет клиента по входящему событию "
