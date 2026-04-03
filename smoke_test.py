@@ -2,6 +2,7 @@ from urllib.parse import quote_plus, urlsplit
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+from sqlalchemy import func
 
 from app.auth import create_manager_mini_token, create_service_session
 from app.database import SessionLocal, init_db
@@ -13,6 +14,7 @@ from app.models import (
     ChatMessage,
     ChatFolder,
     Conversation,
+    ConversationFolderLink,
     ConversationMeta,
     QuickReply,
     ServiceUser,
@@ -1419,17 +1421,102 @@ def run() -> None:
 
         move_to_folder = client.post(
             f"/admin/chats/{conversation_id}/move-folder",
-            data={"folder_id": str(folder_id), "q": "", "view": "chat"},
+            data={
+                "folder_id": str(folder_id),
+                "folder_ids": str(folder_id),
+                "q": "",
+                "view": "chat",
+            },
             cookies=cookies,
             follow_redirects=False,
         )
         assert move_to_folder.status_code in (302, 303)
         assert "foldered=1" in move_to_folder.headers.get("location", "")
+        with SessionLocal() as db:
+            links_after_single_move = (
+                db.query(ConversationFolderLink)
+                .filter(
+                    ConversationFolderLink.workspace_id == 1,
+                    ConversationFolderLink.conversation_id == conversation_id,
+                )
+                .all()
+            )
+            assert len(links_after_single_move) == 1
 
         folder_page = client.get("/admin/chats", cookies=cookies)
         assert folder_page.status_code == 200
         assert "folder-chip" in folder_page.text
         assert f"/admin/chats/{conversation_id}/profile?q=" in mobile_chat_page.text
+
+        second_folder_name = f"VIP {uuid4().hex[:6]}"
+        create_second_folder = client.post(
+            "/admin/chats/folders",
+            data={"name": second_folder_name, "q": ""},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert create_second_folder.status_code in (302, 303)
+        with SessionLocal() as db:
+            second_folder = (
+                db.query(ChatFolder)
+                .filter(
+                    ChatFolder.workspace_id == 1,
+                    ChatFolder.name == second_folder_name,
+                )
+                .first()
+            )
+            if second_folder is None:
+                # Folder creation can be blocked by tariff limits in reused DB state.
+                # Create one directly so multi-folder assignment scenario stays testable.
+                last_folder = (
+                    db.query(ChatFolder)
+                    .filter(ChatFolder.workspace_id == 1)
+                    .order_by(ChatFolder.sort_order.desc(), ChatFolder.id.desc())
+                    .first()
+                )
+                next_sort = int(getattr(last_folder, "sort_order", 0) or 0) + 1
+                second_folder = ChatFolder(
+                    workspace_id=1,
+                    name=second_folder_name,
+                    sort_order=next_sort,
+                )
+                db.add(second_folder)
+                db.commit()
+                db.refresh(second_folder)
+            assert second_folder is not None
+            second_folder_id = int(second_folder.id)
+
+        multi_move = client.post(
+            f"/admin/chats/{conversation_id}/move-folder",
+            data={
+                "folder_id": str(folder_id),
+                "folder_ids": f"{folder_id},{second_folder_id}",
+                "q": "",
+                "view": "chat",
+            },
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert multi_move.status_code in (302, 303)
+        multi_location = multi_move.headers.get("location", "")
+        assert "foldered=1" in multi_location
+        assert "foldered_multi=1" in multi_location
+        with SessionLocal() as db:
+            links_after_multi_move = (
+                db.query(ConversationFolderLink)
+                .filter(
+                    ConversationFolderLink.workspace_id == 1,
+                    ConversationFolderLink.conversation_id == conversation_id,
+                )
+                .order_by(ConversationFolderLink.folder_id.asc())
+                .all()
+            )
+            assert [int(link.folder_id) for link in links_after_multi_move] == sorted(
+                [int(folder_id), int(second_folder_id)]
+            )
+        folder_filtered_page = client.get(f"/admin/chats?folder_id={second_folder_id}", cookies=cookies)
+        assert folder_filtered_page.status_code == 200
+        assert f"conversation_id={conversation_id}" in folder_filtered_page.text
 
         metrics_page = client.get("/admin/chats", cookies=cookies)
         assert metrics_page.status_code == 200
@@ -1483,7 +1570,15 @@ def run() -> None:
             )
             assert blocked_conv is not None
             assert blocked_meta is not None
-            assert blocked_conv.folder_id == blocked_folder.id
+            blocked_links = (
+                db.query(ConversationFolderLink)
+                .filter(
+                    ConversationFolderLink.workspace_id == 1,
+                    ConversationFolderLink.conversation_id == conv_for_block_id,
+                )
+                .all()
+            )
+            assert any(int(link.folder_id) == int(blocked_folder.id) for link in blocked_links)
             assert bool(blocked_meta.is_blocked) is True
             assert (blocked_meta.blocked_reason or "") == "spam"
 
@@ -1544,6 +1639,31 @@ def run() -> None:
             assert unblocked_meta is not None
             assert bool(unblocked_meta.is_blocked) is False
             assert (unblocked_meta.blocked_reason or "") == ""
+            unblocked_links = (
+                db.query(ConversationFolderLink)
+                .filter(
+                    ConversationFolderLink.workspace_id == 1,
+                    ConversationFolderLink.conversation_id == conv_for_block_id,
+                )
+                .all()
+            )
+            blocked_folder_ids = {
+                int(row[0])
+                for row in (
+                    db.query(ChatFolder.id)
+                    .filter(
+                        ChatFolder.workspace_id == 1,
+                        func.lower(ChatFolder.name) == "заблокированные пользователи",
+                    )
+                    .all()
+                )
+                if row and row[0]
+            }
+            assert all(int(link.folder_id) not in blocked_folder_ids for link in unblocked_links)
+            restored_links = [
+                link for link in unblocked_links if int(link.folder_id) not in blocked_folder_ids
+            ]
+            assert len(restored_links) >= 1
 
         unblocked_message = client.post(
             "/webhook/max/ws1key",

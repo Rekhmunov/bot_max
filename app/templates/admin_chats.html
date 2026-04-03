@@ -734,6 +734,13 @@
       background: #edf4ff;
       border: 1px solid #d7e6ff;
     }
+    .folder-chip-wrap {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      min-height: 16px;
+      align-items: center;
+    }
     .context-menu {
       position: fixed;
       z-index: 1000;
@@ -877,22 +884,76 @@
       font-size: 16px;
       font-weight: 800;
     }
+    .folder-search {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 14px;
+    }
     .folder-actions {
-      display: flex;
+      display: grid;
       gap: 8px;
-      flex-wrap: wrap;
+      max-height: 42vh;
+      overflow: auto;
+      border: 1px solid #edf1f7;
+      border-radius: 12px;
+      padding: 8px;
+      background: #fafcff;
+    }
+    .folder-empty {
+      padding: 8px 10px;
+      color: var(--muted);
+      font-size: 13px;
     }
     .folder-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
       border: 1px solid var(--line);
       border-radius: 10px;
       background: #fff;
       padding: 8px 10px;
       font-size: 13px;
       cursor: pointer;
+      width: 100%;
+      text-align: left;
     }
     .folder-btn:hover {
       background: #f6f9ff;
       border-color: #d7e6ff;
+    }
+    .folder-btn.is-active {
+      border-color: #cfe0ff;
+      background: #edf4ff;
+    }
+    .folder-check {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      border: 1px solid #b8c8e8;
+      background: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #1a4fb3;
+      font-size: 12px;
+      flex: 0 0 auto;
+    }
+    .folder-btn.is-active .folder-check {
+      border-color: #8cb1f7;
+      background: #e5efff;
+    }
+    .folder-apply {
+      border: 0;
+      border-radius: 10px;
+      background: #1e5fde;
+      color: #fff;
+      padding: 9px 12px;
+      font-weight: 700;
+      cursor: pointer;
+      width: 100%;
     }
     .folder-create {
       display: grid;
@@ -1314,6 +1375,7 @@
                 class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %} {% if thread.is_unread %}unread{% endif %}"
                 href="{{ page_query_prefix }}conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat&mark_read=1{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}"
                 data-thread-id="{{ thread.conversation_id }}"
+                data-thread-folder-ids="{{ (thread.folder_ids | join(',')) if thread.folder_ids else '' }}"
                 data-thread-unread="{{ '1' if thread.is_unread else '0' }}"
                 data-soft-nav
               >
@@ -1336,8 +1398,12 @@
                   </span>
                 </div>
                 <div class="thread-folder-row">
-                  {% if thread.folder_name %}
-                    <span class="folder-chip">{{ thread.folder_name }}</span>
+                  {% if thread.folder_names %}
+                    <span class="folder-chip-wrap">
+                      {% for folder_name in thread.folder_names %}
+                        <span class="folder-chip">{{ folder_name }}</span>
+                      {% endfor %}
+                    </span>
                   {% endif %}
                 </div>
                 <div class="thread-meta">customer_account_id: {{ thread.customer_account_id or "—" }}</div>
@@ -1898,8 +1964,22 @@
         }
         syncSendVisibility();
       });
-      window.visualViewport?.addEventListener("resize", setKeyboardInset);
-      window.visualViewport?.addEventListener("scroll", setKeyboardInset);
+      let viewportRafId = 0;
+      let viewportDebounceTimer = 0;
+      const scheduleViewportSync = () => {
+        if (viewportRafId) return;
+        viewportRafId = window.requestAnimationFrame(() => {
+          viewportRafId = 0;
+          setKeyboardInset();
+        });
+        if (viewportDebounceTimer) window.clearTimeout(viewportDebounceTimer);
+        viewportDebounceTimer = window.setTimeout(() => {
+          viewportDebounceTimer = 0;
+          setKeyboardInset();
+        }, 36);
+      };
+      window.visualViewport?.addEventListener("resize", scheduleViewportSync);
+      window.visualViewport?.addEventListener("scroll", scheduleViewportSync);
       window.addEventListener("orientationchange", () => {
         setTimeout(setKeyboardInset, 40);
       });
@@ -1971,6 +2051,7 @@
         "renamed",
         "unread",
         "foldered",
+        "foldered_multi",
         "blocked",
         "unblocked",
       ]);
@@ -2169,7 +2250,9 @@
       pop.innerHTML = `
         <div class="folder-pop-card">
           <h3 class="folder-pop-title">Поместить в папку</h3>
+          <input id="folder-search-input" class="folder-search" placeholder="Поиск папки" />
           <div class="folder-actions" id="folder-actions"></div>
+          <button class="folder-apply" type="button" id="folder-apply-btn">Применить</button>
           <form class="folder-create" id="folder-create-form">
             <input id="new-folder-name" name="name" placeholder="Новая папка" />
             <button type="submit">Создать</button>
@@ -2207,6 +2290,20 @@
       const currentFolderMoveParam = () => (
         currentFolderId === null ? "" : `&current_folder_id=${encodeURIComponent(String(currentFolderId))}`
       );
+      const currentThreadFolderIds = () => {
+        if (!selectedThreadId) return [];
+        const threadNode = document.querySelector(`.thread[data-thread-id="${selectedThreadId}"]`);
+        if (!threadNode) return [];
+        const raw = String(threadNode.getAttribute("data-thread-folder-ids") || "");
+        return raw
+          .split(",")
+          .map((v) => Number(v.trim()))
+          .filter((v) => Number.isFinite(v) && v > 0);
+      };
+      let selectedFolderIds = new Set();
+      let folderSearch = "";
+      const folderSearchInput = pop.querySelector("#folder-search-input");
+      const folderApplyBtn = pop.querySelector("#folder-apply-btn");
       const isTouchLikeViewport = () => (
         window.matchMedia("(max-width: 900px), (hover: none) and (pointer: coarse)").matches
       );
@@ -2246,6 +2343,9 @@
         folderBtn.textContent = "Поместить в папку";
         folderBtn.addEventListener("click", () => {
           hideCtx();
+          selectedFolderIds = new Set(currentThreadFolderIds());
+          folderSearch = "";
+          if (folderSearchInput) folderSearchInput.value = "";
           renderFolderButtons();
           pop.style.display = "flex";
         });
@@ -2260,41 +2360,40 @@
         const noFolder = document.createElement("button");
         noFolder.type = "button";
         noFolder.className = "folder-btn";
-        noFolder.textContent = "Без папки";
-        noFolder.addEventListener("click", async () => {
-          if (!selectedThreadId) return;
-          const response = await fetch(`${moveFolderPrefix}${selectedThreadId}/move-folder${endpointQuerySuffix}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: `folder_id=&q=${currentQ}&view=${currentView}${currentFolderMoveParam()}`,
-          });
-          if (window.__chatSoftRenderFromResponse) {
-            await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });
-          } else {
-            window.location.reload();
-          }
+        noFolder.innerHTML = `<span>Без папки</span><span class="folder-check">${selectedFolderIds.size === 0 ? "✓" : ""}</span>`;
+        noFolder.classList.toggle("is-active", selectedFolderIds.size === 0);
+        noFolder.addEventListener("click", () => {
+          selectedFolderIds.clear();
+          renderFolderButtons();
         });
         actions.appendChild(noFolder);
 
-        folders.forEach((folder) => {
+        const filtered = folders.filter((folder) =>
+          !folderSearch || String(folder.name || "").toLowerCase().includes(folderSearch)
+        );
+        if (!filtered.length) {
+          const empty = document.createElement("div");
+          empty.className = "folder-empty";
+          empty.textContent = "Папки не найдены";
+          actions.appendChild(empty);
+        }
+
+        filtered.forEach((folder) => {
           const btn = document.createElement("button");
           btn.type = "button";
           btn.className = "folder-btn";
-          btn.textContent = folder.name;
-          btn.addEventListener("click", async () => {
-            if (!selectedThreadId) return;
-            const response = await fetch(`${moveFolderPrefix}${selectedThreadId}/move-folder${endpointQuerySuffix}`, {
-              method: "POST",
-              headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body:
-                `folder_id=${encodeURIComponent(String(folder.id))}` +
-                `&q=${currentQ}&view=${currentView}${currentFolderMoveParam()}`,
-            });
-            if (window.__chatSoftRenderFromResponse) {
-              await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });
+          const active = selectedFolderIds.has(Number(folder.id));
+          btn.classList.toggle("is-active", active);
+          btn.innerHTML = `<span>${folder.name}</span><span class="folder-check">${active ? "✓" : ""}</span>`;
+          btn.addEventListener("click", () => {
+            const id = Number(folder.id || 0);
+            if (!id) return;
+            if (selectedFolderIds.has(id)) {
+              selectedFolderIds.delete(id);
             } else {
-              window.location.reload();
+              selectedFolderIds.add(id);
             }
+            renderFolderButtons();
           });
           actions.appendChild(btn);
         });
@@ -2307,6 +2406,27 @@
       pop.querySelector("#folder-close-btn").addEventListener("click", hidePop);
       pop.addEventListener("click", (e) => {
         if (e.target === pop) hidePop();
+      });
+      folderSearchInput?.addEventListener("input", () => {
+        folderSearch = String(folderSearchInput.value || "").trim().toLowerCase();
+        renderFolderButtons();
+      });
+      folderApplyBtn?.addEventListener("click", async () => {
+        if (!selectedThreadId) return;
+        const ids = Array.from(selectedFolderIds.values()).map((v) => Number(v)).filter((v) => v > 0);
+        const response = await fetch(`${moveFolderPrefix}${selectedThreadId}/move-folder${endpointQuerySuffix}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body:
+            `folder_ids=${encodeURIComponent(ids.join(","))}` +
+            `&folder_id=${ids.length ? encodeURIComponent(String(ids[0])) : ""}` +
+            `&q=${currentQ}&view=${currentView}${currentFolderMoveParam()}`,
+        });
+        if (window.__chatSoftRenderFromResponse) {
+          await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });
+        } else {
+          window.location.reload();
+        }
       });
 
       pop.querySelector("#folder-create-form").addEventListener("submit", async (e) => {

@@ -1657,15 +1657,18 @@ def unblock_conversation(
         meta = _get_or_create_meta(db, conversation_id=conversation_id, workspace_id=ws_id)
     if not bool(meta.is_blocked):
         return True
-    blocked_folder = (
-        db.query(ChatFolder.id)
-        .filter(
-            ChatFolder.workspace_id == ws_id,
-            func.lower(ChatFolder.name) == BLOCKED_FOLDER_NAME.lower(),
+    blocked_folder_ids = {
+        int(row[0])
+        for row in (
+            db.query(ChatFolder.id)
+            .filter(
+                ChatFolder.workspace_id == ws_id,
+                func.lower(ChatFolder.name) == BLOCKED_FOLDER_NAME.lower(),
+            )
+            .all()
         )
-        .first()
-    )
-    blocked_folder_id = int(blocked_folder[0]) if blocked_folder and blocked_folder[0] else None
+        if row and row[0]
+    }
     current_folder_ids = get_conversation_folder_ids(
         db,
         conversation_id=conversation_id,
@@ -1674,7 +1677,7 @@ def unblock_conversation(
     next_folder_ids = [
         folder_id
         for folder_id in current_folder_ids
-        if blocked_folder_id is None or int(folder_id) != blocked_folder_id
+        if int(folder_id) not in blocked_folder_ids
     ]
     replace_conversation_folder_links(
         db,
