@@ -2505,7 +2505,11 @@
       let currentLastMessageId = Number(initialState.active_last_message_id || 0);
       let currentThreadsSignature = String(initialState.threads_signature || "");
       let inFlight = false;
-      const pollMs = 2800;
+      const basePollMs = 2800;
+      const maxPollMs = 30000;
+      let currentPollMs = basePollMs;
+      let timer = null;
+      let stopped = false;
 
       const buildUpdatesUrl = () => {
         const qs = new URLSearchParams();
@@ -2523,8 +2527,19 @@
         return `${updatesEndpoint}?${qs.toString()}`;
       };
 
+      const scheduleNext = (delayMs) => {
+        if (stopped) return;
+        if (timer !== null) {
+          window.clearTimeout(timer);
+        }
+        timer = window.setTimeout(triggerRefreshSafe, Math.max(500, Number(delayMs || currentPollMs)));
+      };
+
       const triggerRefresh = async () => {
-        if (inFlight) return;
+        if (inFlight) {
+          scheduleNext(currentPollMs);
+          return;
+        }
         inFlight = true;
         try {
           const response = await fetch(buildUpdatesUrl(), {
@@ -2532,9 +2547,17 @@
             credentials: "same-origin",
             cache: "no-store",
           });
+          if (response.status === 429) {
+            // Adaptive backoff on server throttling to keep UI responsive under peaks.
+            currentPollMs = Math.min(maxPollMs, Math.round(currentPollMs * 1.8));
+            return;
+          }
           if (!response.ok) return;
           const payload = await response.json().catch(() => null);
           if (!payload || payload.ok !== true) return;
+          if (currentPollMs > basePollMs) {
+            currentPollMs = Math.max(basePollMs, Math.round(currentPollMs * 0.85));
+          }
 
           const nextLast = Number(payload.active_last_message_id || 0);
           const nextSig = String(payload.threads_signature || "");
@@ -2559,16 +2582,19 @@
           // Keep silent; next tick will retry.
         } finally {
           inFlight = false;
+          scheduleNext(currentPollMs);
         }
       };
 
       const triggerRefreshSafe = () => {
         triggerRefresh().catch(() => {});
       };
-      const timer = window.setInterval(triggerRefreshSafe, pollMs);
-      window.setTimeout(triggerRefreshSafe, 900);
+      scheduleNext(900);
       window.addEventListener("beforeunload", () => {
-        window.clearInterval(timer);
+        stopped = true;
+        if (timer !== null) {
+          window.clearTimeout(timer);
+        }
       });
     })();
   </script>

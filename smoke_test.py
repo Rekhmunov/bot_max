@@ -760,8 +760,8 @@ def run() -> None:
         settings_page = client.get("/app/settings", cookies=invite_flow_cookies, follow_redirects=False)
         assert settings_page.status_code == 200
         assert "Менеджеры: статусы подключения" in settings_page.text
-        assert "Осталось быстрых ответов:" in settings_page.text
-        assert "Осталось папок:" in settings_page.text
+        assert "Осталось быстрых ответов:" not in settings_page.text
+        assert "Осталось папок:" not in settings_page.text
         assert "Подключение вашего бота Max" in settings_page.text
         assert "Токен вашего бота:" in settings_page.text
         assert "не задан." in settings_page.text
@@ -946,7 +946,7 @@ def run() -> None:
             assert bool(readded_manager.is_active) is True
             assert bool(readded_manager.is_blocked) is False
 
-        # Remaining counters in "Тариф и лимиты" must reflect quick reply consumption.
+        # Remaining counters are hidden in tariff block; page should still render.
         add_quick_reply_for_invite_ws = client.post(
             "/app/quick-replies",
             data={"command": "faq", "title": "FAQ", "text": "Ответ"},
@@ -954,7 +954,8 @@ def run() -> None:
             follow_redirects=True,
         )
         assert add_quick_reply_for_invite_ws.status_code == 200
-        assert "Осталось быстрых ответов: <b>9</b>" in add_quick_reply_for_invite_ws.text
+        assert "Тариф и лимиты" in add_quick_reply_for_invite_ws.text
+        assert "Осталось быстрых ответов:" not in add_quick_reply_for_invite_ws.text
 
         # App settings must also enforce manager IDs limit on plain save.
         app_limit_email = f"limit_{uuid4().hex[:8]}@example.com"

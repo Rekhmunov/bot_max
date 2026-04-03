@@ -2711,7 +2711,6 @@ def _render_customer_profile_page(
     ]
     technical_rows = [
         {"label": "conversation_id", "value": str(conversation.id)},
-        {"label": "chat_id", "value": conversation.chat_id or "—"},
         {"label": "customer_account_id", "value": conversation.customer_account_id or "—"},
         {
             "label": "source_chat_id",
