@@ -20,6 +20,9 @@ class AppSettings(BaseSettings):
     max_api_base_url: str = "https://platform-api.max.ru"
     max_bot_token: str = ""
     max_bot_account_id: str = ""
+    # Public profile URL used for customer-facing redirects (/c/{code}).
+    # Keep explicit to avoid broken links when account id is misconfigured.
+    max_bot_public_url: str = "https://max.ru/id372400681880_bot"
     public_base_url: str = "http://localhost:8000"
     webhook_path: str = "/webhook/max"
 

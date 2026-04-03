@@ -1206,6 +1206,9 @@ def _workspace_id_for_user(user: ServiceUser | None) -> int:
 
 
 def _build_max_bot_profile_url(bot_account_id: str | None) -> str:
+    explicit_public_url = (settings.max_bot_public_url or "").strip()
+    if explicit_public_url:
+        return explicit_public_url
     value = (bot_account_id or "").strip()
     if not value:
         return ""
