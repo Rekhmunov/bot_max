@@ -513,6 +513,20 @@
       box-shadow: var(--shadow);
       word-break: break-word;
     }
+    @keyframes bubble-enter {
+      from {
+        opacity: 0;
+        transform: translateY(8px) scale(0.99);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    .bubble.is-new {
+      animation: bubble-enter .26s ease-out both;
+      transform-origin: 50% 100%;
+    }
     .bubble.customer {
       align-self: flex-start;
       border-bottom-left-radius: 6px;
@@ -1337,7 +1351,7 @@
               {% endif %}
             </h2>
             <div class="chat-sub">
-              chat_id: {{ active_thread.chat_id }} | phone_verified: {{ "да" if active_thread.phone_verified else "нет" }}
+              customer_account_id: {{ active_thread.customer_account_id or "—" }} | phone_verified: {{ "да" if active_thread.phone_verified else "нет" }}
             </div>
           </div>
           {% if show_delete_user or show_rename_user %}
@@ -2542,6 +2556,11 @@
       let currentPollMs = basePollMs;
       let timer = null;
       let stopped = false;
+      const seenMessageIds = new Set(
+        Array.from(document.querySelectorAll(".bubble[data-message-id]"))
+          .map((node) => Number(node.getAttribute("data-message-id") || 0))
+          .filter((id) => id > 0)
+      );
 
       const buildUpdatesUrl = () => {
         const qs = new URLSearchParams();
@@ -2606,6 +2625,24 @@
           if (hasMessageChanges || hasThreadsChanges) {
             if (window.__chatSoftVisit) {
               await window.__chatSoftVisit(window.location.href, { replaceHistory: true });
+              const bubbleNodes = Array.from(document.querySelectorAll(".bubble[data-message-id]"));
+              let hasAnimated = false;
+              bubbleNodes.forEach((node) => {
+                const id = Number(node.getAttribute("data-message-id") || 0);
+                if (!id || seenMessageIds.has(id)) return;
+                seenMessageIds.add(id);
+                node.classList.add("is-new");
+                hasAnimated = true;
+                window.setTimeout(() => {
+                  node.classList.remove("is-new");
+                }, 380);
+              });
+              if (hasAnimated) {
+                const wrap = document.querySelector(".messages-wrap");
+                if (wrap) {
+                  wrap.scrollTo({ top: wrap.scrollHeight, behavior: "smooth" });
+                }
+              }
             } else {
               window.location.reload();
             }

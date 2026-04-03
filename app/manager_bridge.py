@@ -103,6 +103,7 @@ class ForwardResult:
 class ChatThreadItem:
     conversation_id: int
     chat_id: str
+    customer_account_id: str
     ticket_no: int | None
     customer_label: str
     status: str
@@ -2049,6 +2050,7 @@ def load_chat_threads(
             ChatThreadItem(
                 conversation_id=conv.id,
                 chat_id=conv.chat_id,
+                customer_account_id=str(conv.customer_account_id or ""),
                 ticket_no=ticket_no,
                 customer_label=label,
                 status=status,

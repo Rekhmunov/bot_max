@@ -6029,6 +6029,7 @@ def _thread_summary_dict(item: object) -> dict[str, object]:
     return {
         "conversation_id": conversation_id,
         "chat_id": str(getattr(item, "chat_id", "") or ""),
+        "customer_account_id": str(getattr(item, "customer_account_id", "") or ""),
         "ticket_no": getattr(item, "ticket_no", None),
         "customer_label": str(getattr(item, "customer_label", "") or ""),
         "is_unread": bool(getattr(item, "is_unread", False)),
