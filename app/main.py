@@ -3984,10 +3984,11 @@ async def app_chats_page(
 ) -> HTMLResponse:
     if current_user.role == "superadmin":
         raise HTTPException(status_code=403, detail="Для superadmin доступна только панель /app/superadmin")
+    # Chat page can be reopened often during active work; keep a wider bucket.
     _check_rate_limit_or_raise(
         request,
-        scope="app_view",
-        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+        scope="app_view_page",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 20),
     )
     workspace_id, scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
         db=db,
@@ -6012,10 +6013,11 @@ def app_chats_updates(
 ) -> JSONResponse:
     if current_user.role == "superadmin":
         raise HTTPException(status_code=403, detail="Для superadmin доступна только панель /app/superadmin")
+    # Polling endpoint must have its own bucket, otherwise it can throttle page opens.
     _check_rate_limit_or_raise(
         request,
-        scope="app_view",
-        limit=max(1, int(settings.rate_limit_login_per_minute) * 6),
+        scope="app_view_updates",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 120),
     )
     workspace_id, _scoped_workspace, _is_superadmin_scoped = _resolve_app_workspace_scope(
         db=db,
