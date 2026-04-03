@@ -6,46 +6,60 @@
   <title>Админка Max Support Bot</title>
   <style>
     :root {
-      --bg: #f5f7fb;
+      --bg: #f6f8fc;
       --card: #ffffff;
       --text: #1f2430;
-      --muted: #5b6372;
-      --line: #dbe1eb;
-      --primary: #2459f2;
-      --danger: #bd2c2c;
-      --ok-bg: #e9f9ef;
-      --ok-border: #bde6ca;
-      --error-bg: #fde9e9;
-      --error-border: #f2caca;
+      --muted: #70798c;
+      --line: #e4e8f1;
+      --primary: #1976ff;
+      --primary-soft: #ebf3ff;
+      --danger: #e34a4a;
+      --danger-soft: #fff0f0;
+      --ok-bg: #eaf8f0;
+      --ok-border: #cfead8;
+      --error-bg: #fff2f2;
+      --error-border: #ffd1d1;
+      --shadow: 0 10px 28px rgba(12, 31, 66, 0.08);
+      --radius: 14px;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
       background: var(--bg);
       color: var(--text);
     }
     .container {
-      max-width: 1100px;
-      margin: 24px auto;
-      padding: 0 16px 32px;
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 14px 14px 22px;
     }
     .top {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 14px;
+      margin-bottom: 12px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 12px 14px;
     }
     h1 {
       margin: 0;
-      font-size: 26px;
+      font-size: 21px;
+      font-weight: 800;
+      line-height: 1.2;
     }
     .logout-btn {
       border: 1px solid var(--line);
-      background: white;
-      padding: 8px 12px;
-      border-radius: 8px;
+      background: #f0f3fa;
+      color: #556079;
+      padding: 8px 10px;
+      border-radius: 10px;
       cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
     }
     .grid {
       display: block;
@@ -57,27 +71,35 @@
     .card {
       background: var(--card);
       border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 16px;
-      box-shadow: 0 4px 16px rgba(0,0,0,.04);
+      border-radius: var(--radius);
+      padding: 14px;
+      box-shadow: var(--shadow);
     }
     h2 {
-      margin: 0 0 10px 0;
-      font-size: 20px;
+      margin: 0 0 12px 0;
+      font-size: 17px;
+      font-weight: 800;
     }
     label {
       display: block;
       margin: 10px 0 6px;
-      font-weight: 600;
-      font-size: 14px;
+      font-weight: 700;
+      font-size: 13px;
+      color: #4f5b73;
     }
     input, textarea {
       width: 100%;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 10px;
+      border-radius: 11px;
+      padding: 10px 11px;
       font: inherit;
       background: #fff;
+      transition: border-color .18s ease, box-shadow .18s ease;
+    }
+    input:focus, textarea:focus, select:focus {
+      outline: none;
+      border-color: #c3d7ff;
+      box-shadow: 0 0 0 3px rgba(25, 118, 255, 0.12);
     }
     textarea { min-height: 90px; resize: vertical; }
     .btn {
@@ -85,33 +107,36 @@
       background: var(--primary);
       border: 0;
       color: #fff;
-      padding: 10px 14px;
-      border-radius: 8px;
+      padding: 9px 12px;
+      border-radius: 10px;
       cursor: pointer;
       font-weight: 700;
+      font-size: 13px;
       text-decoration: none;
       display: inline-block;
     }
     .btn.secondary {
-      background: #eef2ff;
-      color: #2b3d6e;
-      border: 1px solid #cfd9ef;
+      background: #f0f3fa;
+      color: #556079;
+      border: 1px solid var(--line);
       font-weight: 600;
     }
     .edit-quick-reply-btn {
-      border: 1px solid #cfd9ef;
-      background: #eef2ff;
-      color: #2b3d6e;
-      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--primary-soft);
+      color: #2b4c89;
+      border-radius: 10px;
       padding: 6px 10px;
       cursor: pointer;
       margin-right: 6px;
+      font-weight: 700;
     }
     .notice {
       margin: 8px 0 16px;
       padding: 10px;
-      border-radius: 8px;
-      font-size: 14px;
+      border-radius: 12px;
+      font-size: 13px;
+      border: 1px solid transparent;
     }
     .notice.ok {
       background: var(--ok-bg);
@@ -130,8 +155,11 @@
     table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 10px;
-      font-size: 14px;
+      margin-top: 8px;
+      font-size: 13px;
+      background: #fff;
+      border-radius: 10px;
+      overflow: hidden;
     }
     th, td {
       border-bottom: 1px solid var(--line);
@@ -139,10 +167,17 @@
       text-align: left;
       vertical-align: top;
     }
+    th {
+      background: #fbfcff;
+      color: #556079;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .01em;
+    }
     .preview {
       max-width: 120px;
       max-height: 90px;
-      border-radius: 6px;
+      border-radius: 8px;
       border: 1px solid var(--line);
       object-fit: cover;
     }
@@ -164,7 +199,7 @@
       width: 86px;
       border: 1px solid var(--line);
       background: #fff;
-      border-radius: 8px;
+      border-radius: 10px;
       padding: 6px;
       cursor: grab;
       text-align: center;
@@ -193,12 +228,14 @@
       text-overflow: ellipsis;
     }
     .delete {
-      border: 1px solid #ebc5c5;
-      background: #fff2f2;
+      border: 1px solid #f3c4c4;
+      background: var(--danger-soft);
       color: var(--danger);
-      border-radius: 8px;
+      border-radius: 10px;
       padding: 6px 10px;
       cursor: pointer;
+      font-weight: 700;
+      font-size: 12px;
     }
     .manager-ids-wrap {
       display: grid;
@@ -215,9 +252,9 @@
     }
     .manager-row-copy-btn {
       border: 1px solid var(--line);
-      background: #fff;
-      color: #3b4d74;
-      border-radius: 8px;
+      background: var(--primary-soft);
+      color: #2b4c89;
+      border-radius: 10px;
       width: 34px;
       height: 34px;
       font-size: 14px;
@@ -237,9 +274,9 @@
     }
     .manager-status-kpi {
       border: 1px solid var(--line);
-      border-radius: 10px;
+      border-radius: 12px;
       padding: 8px 10px;
-      background: #fff;
+      background: #fbfcff;
     }
     .manager-status-kpi .label {
       font-size: 12px;
@@ -287,10 +324,10 @@
       border-color: #dbc3f5;
     }
     .manager-remove-btn {
-      border: 1px solid #ebc5c5;
-      background: #fff2f2;
+      border: 1px solid #f3c4c4;
+      background: var(--danger-soft);
       color: var(--danger);
-      border-radius: 8px;
+      border-radius: 10px;
       width: 30px;
       height: 30px;
       font-size: 14px;
@@ -308,9 +345,9 @@
     }
     .format-trigger {
       border: 1px solid var(--line);
-      background: #fff;
+      background: #f8faff;
       color: #2f3a52;
-      border-radius: 8px;
+      border-radius: 10px;
       padding: 7px 10px;
       font-size: 13px;
       cursor: pointer;
@@ -325,8 +362,8 @@
       min-width: 220px;
       background: #fff;
       border: 1px solid var(--line);
-      border-radius: 10px;
-      box-shadow: 0 10px 22px rgba(0, 0, 0, 0.08);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
       padding: 6px;
       display: none;
     }
@@ -345,10 +382,10 @@
       color: #25304a;
     }
     .format-menu button:hover {
-      background: #eef3ff;
+      background: var(--primary-soft);
     }
     code {
-      background: #eef1f8;
+      background: #eef2fa;
       padding: 2px 6px;
       border-radius: 6px;
       white-space: normal;
@@ -365,6 +402,16 @@
       align-items: center;
       gap: 8px;
     }
+    .top a[href*="/chats"] {
+      text-decoration: none;
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 9px;
+      background: var(--primary-soft);
+      padding: 7px 9px;
+      display: inline-block;
+    }
     .token-line .token-mask {
       display: inline-block;
       max-width: 100%;
@@ -376,16 +423,18 @@
         overflow-x: hidden;
       }
       .container {
-        margin: 14px auto;
-        padding: 0 10px 20px;
+        margin: 0 auto;
+        padding: 10px 10px 18px;
       }
       .top {
-        flex-direction: column;
-        align-items: flex-start;
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 11px;
         gap: 8px;
       }
       h1 {
-        font-size: 22px;
+        font-size: 18px;
         line-height: 1.2;
         overflow-wrap: anywhere;
       }
