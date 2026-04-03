@@ -1664,6 +1664,7 @@ def _render_app_settings_page(
     current_user: ServiceUser,
     message: str | None = None,
     error: str | None = None,
+    edit_quick_reply_id: int | None = None,
 ) -> HTMLResponse:
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     ok = True
@@ -1675,6 +1676,16 @@ def _render_app_settings_page(
         db.rollback()
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
     quick_replies = _load_quick_replies_with_media(db, workspace_id=workspace_id)
+    quick_reply_edit_target: QuickReply | None = None
+    if edit_quick_reply_id is not None:
+        quick_reply_edit_target = (
+            db.query(QuickReply)
+            .filter(
+                QuickReply.workspace_id == workspace_id,
+                QuickReply.id == int(edit_quick_reply_id),
+            )
+            .first()
+        )
     intro_steps = (
         db.query(IntroStep)
         .filter(IntroStep.workspace_id == workspace_id, IntroStep.is_active.is_(True))
@@ -1773,6 +1784,7 @@ def _render_app_settings_page(
             "manager_remove_action": "/app/settings/remove-manager",
             "quick_reply_create_action": "/app/quick-replies",
             "quick_reply_delete_action_prefix": "/app/quick-replies/",
+            "quick_reply_edit_target": quick_reply_edit_target,
             "intro_create_action": "/app/settings/intro-steps",
             "intro_delete_action_prefix": "/app/settings/intro-steps/",
             "email_status": email_status,
@@ -1920,6 +1932,7 @@ def logout() -> RedirectResponse:
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page(
     request: Request,
+    edit_quick_reply_id: int | None = None,
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -1934,6 +1947,16 @@ def admin_page(
         manager_status_summary=None,
     )
     replies = _load_quick_replies_with_media(db, workspace_id=workspace_id)
+    quick_reply_edit_target: QuickReply | None = None
+    if edit_quick_reply_id is not None:
+        quick_reply_edit_target = (
+            db.query(QuickReply)
+            .filter(
+                QuickReply.workspace_id == workspace_id,
+                QuickReply.id == int(edit_quick_reply_id),
+            )
+            .first()
+        )
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
     return templates.TemplateResponse(
@@ -1973,6 +1996,7 @@ def admin_page(
             },
             "message": None,
             "error": None,
+            "quick_reply_edit_target": quick_reply_edit_target,
         },
     )
 
@@ -2363,8 +2387,123 @@ async def create_quick_reply(
             },
             "message": f"Быстрый ответ /{normalized} добавлен",
             "error": None,
+            "quick_reply_edit_target": None,
         },
     )
+
+
+async def _update_quick_reply_data(
+    db: Session,
+    *,
+    reply_id: int,
+    command: str,
+    title: str,
+    text: str,
+    photos: list[UploadFile],
+    media_order: str,
+    workspace_id: int,
+    actor_user_id: int | None,
+) -> QuickReply:
+    reply = (
+        db.query(QuickReply)
+        .filter(QuickReply.id == reply_id, QuickReply.workspace_id == workspace_id)
+        .first()
+    )
+    if reply is None:
+        raise HTTPException(status_code=404, detail="Быстрый ответ не найден")
+
+    normalized = command.strip().lstrip("/").lower()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="Команда не может быть пустой")
+    duplicate = (
+        db.query(QuickReply.id)
+        .filter(
+            QuickReply.workspace_id == workspace_id,
+            QuickReply.command == normalized,
+            QuickReply.id != reply_id,
+        )
+        .first()
+    )
+    if duplicate:
+        raise HTTPException(status_code=400, detail=f"Команда /{normalized} уже существует")
+
+    reply.command = normalized
+    reply.title = title.strip()
+    reply.text = text.strip()
+    db.add(reply)
+    db.commit()
+    db.refresh(reply)
+
+    new_files = [item for item in photos if item and item.filename]
+    if new_files:
+        _delete_quick_reply_media_files(db, reply_id=reply.id)
+        sort_tokens = [token.strip() for token in (media_order or "").split(",") if token.strip()]
+        await _save_quick_reply_media_files(
+            db=db,
+            reply=reply,
+            files=new_files,
+            sort_order_tokens=sort_tokens,
+        )
+        _normalize_quick_reply_media_order(db, reply.id)
+
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=actor_user_id,
+            action="quick_reply_updated",
+            object_type="quick_reply",
+            object_id=str(reply.id),
+            details_json=safe_json_dumps({"command": reply.command, "title": reply.title}),
+        )
+    )
+    db.commit()
+    return reply
+
+
+@app.post("/admin/quick-replies/{reply_id}/update", response_class=HTMLResponse)
+async def admin_update_quick_reply(
+    request: Request,
+    reply_id: int,
+    command: str = Form(""),
+    title: str = Form(""),
+    text: str = Form(""),
+    photos: list[UploadFile] = File(default=[]),
+    media_order: str = Form(""),
+    _admin: str = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="admin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    if _admin is None:
+        return RedirectResponse(url="/admin/login", status_code=302)
+    workspace_id = DEFAULT_WORKSPACE_ID
+    try:
+        await _update_quick_reply_data(
+            db=db,
+            reply_id=reply_id,
+            command=command,
+            title=title,
+            text=text,
+            photos=photos,
+            media_order=media_order,
+            workspace_id=workspace_id,
+            actor_user_id=None,
+        )
+    except HTTPException as exc:
+        page = admin_page(
+            request=request,
+            edit_quick_reply_id=reply_id,
+            _admin=_admin,
+            db=db,
+        )
+        page.context["error"] = str(exc.detail)
+        page.status_code = int(exc.status_code)
+        return page
+    return RedirectResponse(url="/admin", status_code=302)
 
 
 @app.post("/admin/quick-replies/{reply_id}/delete", response_class=RedirectResponse)
@@ -3753,6 +3892,52 @@ async def app_create_quick_reply(
     return RedirectResponse(url="/app/settings", status_code=302)
 
 
+@app.post("/app/quick-replies/{reply_id}/update", response_class=HTMLResponse)
+async def app_update_quick_reply(
+    request: Request,
+    reply_id: int,
+    command: str = Form(""),
+    title: str = Form(""),
+    text: str = Form(""),
+    photos: list[UploadFile] = File(default=[]),
+    media_order: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    if current_user.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    try:
+        reply = await _update_quick_reply_data(
+            db=db,
+            reply_id=reply_id,
+            command=command,
+            title=title,
+            text=text,
+            photos=photos,
+            media_order=media_order,
+            workspace_id=workspace_id,
+            actor_user_id=current_user.id,
+        )
+    except HTTPException as exc:
+        page = _render_app_settings_page(
+            request,
+            db=db,
+            current_user=current_user,
+            error=str(exc.detail),
+            edit_quick_reply_id=reply_id,
+        )
+        page.status_code = int(exc.status_code)
+        return page
+    return RedirectResponse(url=f"/app/settings?edited_quick_reply={reply.id}", status_code=302)
+
+
 @app.post("/app/quick-replies/{reply_id}/delete", response_class=RedirectResponse)
 def app_delete_quick_reply(
     request: Request,
@@ -3859,6 +4044,7 @@ async def app_chats_page(
 @app.get("/app/settings", response_class=HTMLResponse)
 def app_settings_page(
     request: Request,
+    edit_quick_reply_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -3868,6 +4054,7 @@ def app_settings_page(
         request,
         db=db,
         current_user=current_user,
+        edit_quick_reply_id=edit_quick_reply_id,
     )
 
 

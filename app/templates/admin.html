@@ -48,9 +48,11 @@
       cursor: pointer;
     }
     .grid {
-      display: grid;
+      display: block;
       gap: 16px;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    }
+    .grid > .card + .card {
+      margin-top: 16px;
     }
     .card {
       background: var(--card);
@@ -87,6 +89,23 @@
       border-radius: 8px;
       cursor: pointer;
       font-weight: 700;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .btn.secondary {
+      background: #eef2ff;
+      color: #2b3d6e;
+      border: 1px solid #cfd9ef;
+      font-weight: 600;
+    }
+    .edit-quick-reply-btn {
+      border: 1px solid #cfd9ef;
+      background: #eef2ff;
+      color: #2b3d6e;
+      border-radius: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+      margin-right: 6px;
     }
     .notice {
       margin: 8px 0 16px;
@@ -529,13 +548,31 @@
       </section>
 
       <section class="card">
-        <h2>Добавить быстрый ответ</h2>
-        <form method="post" action="{{ quick_reply_create_action or '/admin/quick-replies' }}" enctype="multipart/form-data">
+        <h2 id="quick-reply-form-title">
+          {% if quick_reply_edit_target %}Редактировать быстрый ответ{% else %}Добавить быстрый ответ{% endif %}
+        </h2>
+        <form
+          method="post"
+          action="{% if quick_reply_edit_target %}{{ quick_reply_delete_action_prefix or '/admin/quick-replies/' }}{{ quick_reply_edit_target.id }}/update{% else %}{{ quick_reply_create_action or '/admin/quick-replies' }}{% endif %}"
+          enctype="multipart/form-data"
+        >
           <label for="command">Команда менеджера (без /)</label>
-          <input id="command" name="command" placeholder="price" required />
+          <input
+            id="command"
+            name="command"
+            placeholder="price"
+            required
+            value="{{ quick_reply_edit_target.command if quick_reply_edit_target else '' }}"
+          />
 
           <label for="title">Название в админке</label>
-          <input id="title" name="title" placeholder="Прайс" required />
+          <input
+            id="title"
+            name="title"
+            placeholder="Прайс"
+            required
+            value="{{ quick_reply_edit_target.title if quick_reply_edit_target else '' }}"
+          />
 
           <label for="photos">Медиафайлы (можно несколько, до 1 МБ каждый)</label>
           <input
@@ -546,7 +583,10 @@
             multiple
             accept=".png,.jpg,.jpeg,.gif,.webp"
           />
-          <div class="hint">Сначала загрузите медиафайлы (каждый до 1 МБ), затем заполните текст ответа.</div>
+          <div class="hint">
+            Сначала загрузите медиафайлы (каждый до 1 МБ), затем заполните текст ответа.
+            {% if quick_reply_edit_target %}Если новые медиа не выбраны, текущие файлы сохраняются.{% endif %}
+          </div>
           <div class="media-sort-wrap" id="media-sort-wrap" hidden>
             <div class="hint">Порядок медиа (перетаскивайте влево/вправо):</div>
             <div class="media-sort-grid" id="media-sort-grid"></div>
@@ -565,9 +605,18 @@
               <button type="button" data-format-action="link">Ссылка</button>
             </div>
           </div>
-          <textarea id="text" name="text" placeholder="Текст, который бот отправит по команде /price"></textarea>
+          <textarea id="text" name="text" placeholder="Текст, который бот отправит по команде /price">{{ quick_reply_edit_target.text if quick_reply_edit_target else '' }}</textarea>
 
-          <button class="btn" type="submit">Добавить быстрый ответ</button>
+          <button class="btn" type="submit">
+            {% if quick_reply_edit_target %}Сохранить изменения{% else %}Добавить быстрый ответ{% endif %}
+          </button>
+          {% if quick_reply_edit_target %}
+            <a
+              class="btn secondary"
+              href="{% if ui_mode == 'app' %}/app/settings{% else %}/admin{% endif %}"
+              style="margin-left:8px;"
+            >Отмена</a>
+          {% endif %}
         </form>
         <div class="hint">Менеджер вызывает ответ в чате командой вида <code>/price</code>.</div>
 
@@ -580,7 +629,7 @@
                 <th>Название</th>
                 <th>Текст</th>
                 <th>Медиа</th>
-                <th></th>
+                <th>Действия</th>
               </tr>
             </thead>
             <tbody>
@@ -603,6 +652,10 @@
                     {% endif %}
                   </td>
                   <td data-label="Действия">
+                    <form method="get" action="{% if ui_mode == 'app' %}/app/settings{% else %}/admin{% endif %}" style="display:inline;">
+                      <input type="hidden" name="edit_quick_reply_id" value="{{ item.id }}" />
+                      <button class="edit-quick-reply-btn" type="submit" title="Редактировать">✏️</button>
+                    </form>
                     <form method="post" action="{{ quick_reply_delete_action_prefix or '/admin/quick-replies/' }}{{ item.id }}/delete">
                       <button class="delete" type="submit">Удалить</button>
                     </form>
@@ -634,9 +687,6 @@
       <div class="hint">Попыток отправки: <b>{{ delivery_metrics.total_sent_attempts }}</b></div>
       <div class="hint">Среднее число повторов: <b>{{ delivery_metrics.avg_retry_count }}</b></div>
       <div class="hint">Неустранимых ошибок: <b>{{ delivery_metrics.permanent_failures }}</b></div>
-      <div class="hint">Активных чатов: <b>{{ chat_metrics.total_threads }}</b></div>
-      <div class="hint">Новых (непрочитанных) чатов: <b>{{ chat_metrics.unread_threads }}</b></div>
-      <div class="hint">Чатов с ошибками доставки: <b>{{ chat_metrics.error_threads }}</b></div>
     </section>
 
     {% if ui_mode == "app" %}

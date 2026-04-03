@@ -8,7 +8,7 @@ from app.database import SessionLocal, init_db
 from app.main import app
 from app.manager_bridge import DEFAULT_TEMPLATES
 from app.services import get_or_create_settings
-from app.models import ChatFolder, Conversation, ServiceUser, Subscription, UserSession, WebhookEvent, Workspace
+from app.models import ChatFolder, Conversation, QuickReply, ServiceUser, Subscription, UserSession, WebhookEvent, Workspace
 
 
 def run() -> None:
@@ -311,6 +311,45 @@ def run() -> None:
             cookies=cookies,
         )
         assert create_reply.status_code == 200
+
+        # Quick reply edit: open edit mode and save changes.
+        with SessionLocal() as db:
+            editable_reply = (
+                db.query(QuickReply)
+                .filter(QuickReply.workspace_id == 1, QuickReply.command == command)
+                .first()
+            )
+            assert editable_reply is not None
+            editable_reply_id = int(editable_reply.id)
+        admin_edit_page = client.get(
+            f"/admin?edit_quick_reply_id={editable_reply_id}",
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert admin_edit_page.status_code == 200
+        assert "Редактировать быстрый ответ" in admin_edit_page.text
+        updated_command = f"upd_{uuid4().hex[:8]}"
+        updated_title = "Обновленный прайс"
+        updated_text = "Обновленный текст прайса"
+        admin_update_reply = client.post(
+            f"/admin/quick-replies/{editable_reply_id}/update",
+            data={
+                "command": updated_command,
+                "title": updated_title,
+                "text": updated_text,
+                "media_order": "",
+            },
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert admin_update_reply.status_code in (302, 303)
+        assert admin_update_reply.headers.get("location", "") == "/admin"
+        admin_after_update = client.get("/admin", cookies=cookies)
+        assert admin_after_update.status_code == 200
+        assert f"/{updated_command}" in admin_after_update.text
+        assert updated_title in admin_after_update.text
+        assert updated_text in admin_after_update.text
+        command = updated_command
 
         create_reply_large_media = client.post(
             "/admin/quick-replies",
@@ -1097,7 +1136,7 @@ def run() -> None:
         )
         assert manager_relogin_login.status_code in (302, 303)
         manager_relogin_cookies = manager_relogin_login.cookies
-        manager_relogin_max_id = "93000"
+        manager_relogin_max_id = str(900000000000 + (uuid4().int % 9999999))
         relogin_copy = client.post(
             "/app/settings/copy-manager-link",
             data={"copy_manager_id": manager_relogin_max_id},
@@ -1318,6 +1357,9 @@ def run() -> None:
         assert admin_settings_page.status_code == 200
         assert "Статистика доставки сообщений" in admin_settings_page.text
         assert "Успешная доставка" in admin_settings_page.text
+        assert "Активных чатов:" not in admin_settings_page.text
+        assert "Новых (непрочитанных) чатов:" not in admin_settings_page.text
+        assert "Чатов с ошибками доставки:" not in admin_settings_page.text
 
         delete_user = client.post(
             f"/admin/chats/{conversation_id}/delete-user",

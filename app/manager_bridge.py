@@ -2119,12 +2119,13 @@ def get_delivery_metrics(db: Session, *, workspace_id: int = DEFAULT_WORKSPACE_I
         .filter(OutboxMessage.workspace_id == workspace_id, OutboxMessage.state == "failed")
         .count()
     )
+    # Count permanent failures by visible failed chat messages so the metric
+    # resets after failed messages are removed from chat history.
     permanent_failures = (
-        db.query(OutboxMessage)
+        db.query(ChatMessage)
         .filter(
-            OutboxMessage.workspace_id == workspace_id,
-            OutboxMessage.state == "failed",
-            OutboxMessage.is_permanent_failure.is_(True),
+            ChatMessage.workspace_id == workspace_id,
+            ChatMessage.delivery_state == "failed",
         )
         .count()
     )
