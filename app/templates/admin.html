@@ -50,7 +50,7 @@
     .grid {
       display: grid;
       gap: 16px;
-      grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
     }
     .card {
       background: var(--card);
@@ -187,9 +187,12 @@
     }
     .manager-id-row {
       display: grid;
-      grid-template-columns: 1fr auto auto;
+      grid-template-columns: minmax(0, 1fr) auto;
       gap: 8px;
       align-items: center;
+    }
+    .manager-id-row input {
+      min-width: 0;
     }
     .manager-row-copy-btn {
       border: 1px solid var(--line);
@@ -325,7 +328,99 @@
     .format-menu button:hover {
       background: #eef3ff;
     }
-    code { background: #eef1f8; padding: 2px 6px; border-radius: 6px; }
+    code {
+      background: #eef1f8;
+      padding: 2px 6px;
+      border-radius: 6px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .table-mobile-cards td {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .token-line {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .token-line .token-mask {
+      display: inline-block;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    @media (max-width: 760px) {
+      body {
+        overflow-x: hidden;
+      }
+      .container {
+        margin: 14px auto;
+        padding: 0 10px 20px;
+      }
+      .top {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+      h1 {
+        font-size: 22px;
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+      }
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .card {
+        min-width: 0;
+        padding: 12px;
+      }
+      .hint {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      .token-line form {
+        margin-left: 0 !important;
+      }
+      .manager-status-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .table-mobile-cards,
+      .table-mobile-cards thead,
+      .table-mobile-cards tbody,
+      .table-mobile-cards tr,
+      .table-mobile-cards th,
+      .table-mobile-cards td {
+        display: block;
+        width: 100%;
+      }
+      .table-mobile-cards thead {
+        display: none;
+      }
+      .table-mobile-cards tr {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px 10px;
+        margin-bottom: 8px;
+      }
+      .table-mobile-cards td {
+        border: 0;
+        padding: 6px 0;
+      }
+      .table-mobile-cards td::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--muted);
+        margin-bottom: 2px;
+      }
+      .table-mobile-cards td[data-label="Действия"]::before {
+        display: none;
+      }
+    }
   </style>
 </head>
 <body>
@@ -349,10 +444,10 @@
     {% if ui_mode == "app" %}
       <section class="card" style="margin-bottom:16px;">
         <h2>Подключение вашего бота Max</h2>
-        <div class="hint">
+        <div class="hint token-line">
           Токен вашего бота:
           {% if workspace_bot_token_masked %}
-            <code style="margin-left:8px;">{{ workspace_bot_token_masked }}</code>
+            <code class="token-mask" style="margin-left:8px;">{{ workspace_bot_token_masked }}</code>
             <a href="#" id="token-toggle-link" style="margin-left:8px;">Обновить</a>
             <form method="post" action="{{ token_delete_action or '/app/settings/delete-bot-token' }}" style="display:inline; margin-left:8px;">
               <button type="submit" class="delete token-delete-btn">Удалить</button>
@@ -478,7 +573,7 @@
 
         <h2 style="margin-top:16px;">Список быстрых ответов</h2>
         {% if quick_replies %}
-          <table>
+          <table class="table-mobile-cards quick-replies-table">
             <thead>
               <tr>
                 <th>Команда</th>
@@ -491,12 +586,12 @@
             <tbody>
               {% for item in quick_replies %}
                 <tr>
-                  <td><code>/{{ item.command }}</code></td>
-                  <td>{{ item.title }}</td>
-                  <td>{{ item.text }}</td>
-                  <td>
+                  <td data-label="Команда"><code>/{{ item.command }}</code></td>
+                  <td data-label="Название">{{ item.title }}</td>
+                  <td data-label="Текст">{{ item.text }}</td>
+                  <td data-label="Медиа">
                     {% if item.media_items %}
-                      <div style="display:flex; gap:6px; flex-wrap:wrap; max-width:230px;">
+                      <div style="display:flex; gap:6px; flex-wrap:wrap; max-width:100%;">
                         {% for media in item.media_items %}
                           <img class="preview" src="{{ media.media_path }}" alt="{{ item.title }}" />
                         {% endfor %}
@@ -507,7 +602,7 @@
                       —
                     {% endif %}
                   </td>
-                  <td>
+                  <td data-label="Действия">
                     <form method="post" action="{{ quick_reply_delete_action_prefix or '/admin/quick-replies/' }}{{ item.id }}/delete">
                       <button class="delete" type="submit">Удалить</button>
                     </form>
@@ -589,7 +684,7 @@
         </div>
       </div>
       {% if manager_status_rows %}
-      <table>
+      <table class="table-mobile-cards manager-status-table">
         <thead>
           <tr>
             <th>ID в Max</th>
@@ -603,14 +698,14 @@
         <tbody>
           {% for row in manager_status_rows %}
           <tr>
-            <td><code>{{ row.max_account_id }}</code></td>
-            <td>
+            <td data-label="ID в Max"><code>{{ row.max_account_id }}</code></td>
+            <td data-label="Статус">
               <span class="status-chip {{ row.status_key }}">{{ row.status_label }}</span>
             </td>
-            <td>{{ row.link_sent_at }}</td>
-            <td>{{ row.connected_at }}</td>
-            <td>{{ row.last_login_at }}</td>
-            <td>
+            <td data-label="Ссылка отправлена">{{ row.link_sent_at }}</td>
+            <td data-label="Подключился">{{ row.connected_at }}</td>
+            <td data-label="Последний вход">{{ row.last_login_at }}</td>
+            <td data-label="Действия">
               <button
                 type="button"
                 class="manager-remove-btn"
@@ -675,7 +770,7 @@
     {% if intro_steps %}
     <section class="card" style="margin-top:16px;">
       <h2>Intro шаги (после подтверждения телефона)</h2>
-      <table>
+      <table class="table-mobile-cards intro-steps-table">
         <thead>
           <tr>
             <th>#</th>
@@ -688,11 +783,11 @@
         <tbody>
           {% for step in intro_steps %}
           <tr>
-            <td>{{ step.step_order }}</td>
-            <td>{{ step.delay_seconds }}</td>
-            <td>{{ step.text }}</td>
-            <td>{{ "да" if step.is_active else "нет" }}</td>
-            <td>
+            <td data-label="#">{{ step.step_order }}</td>
+            <td data-label="Задержка (сек)">{{ step.delay_seconds }}</td>
+            <td data-label="Текст">{{ step.text }}</td>
+            <td data-label="Активен">{{ "да" if step.is_active else "нет" }}</td>
+            <td data-label="Действия">
               <form method="post" action="{{ intro_delete_action_prefix or '/app/intro-steps/' }}{{ step.id }}/delete">
                 <button class="delete" type="submit">Удалить</button>
               </form>
