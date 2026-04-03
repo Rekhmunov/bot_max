@@ -549,7 +549,11 @@ async def _dispatch_outbox(
 
     async def _send_by_chat() -> dict:
         if item.operation == "send_text":
-            return await client.send_text(chat_id=target_chat_id, text=str(payload.get("text") or ""))
+            return await client.send_text(
+                chat_id=target_chat_id,
+                text=str(payload.get("text") or ""),
+                text_format=str(payload.get("format") or "").strip().lower() or None,
+            )
         if item.operation == "send_photo":
             return await client.send_photo(
                 chat_id=target_chat_id,
@@ -568,7 +572,11 @@ async def _dispatch_outbox(
         if not target_user_id:
             return {"success": False, "error": "user_id_unavailable"}
         if item.operation == "send_text":
-            return await client.send_text_to_user(user_id=target_user_id, text=str(payload.get("text") or ""))
+            return await client.send_text_to_user(
+                user_id=target_user_id,
+                text=str(payload.get("text") or ""),
+                text_format=str(payload.get("format") or "").strip().lower() or None,
+            )
         if item.operation == "send_photo":
             return await client.send_photo_to_user(
                 user_id=target_user_id,
@@ -742,6 +750,7 @@ async def enqueue_and_process_send_text(
     text: str,
     source: str,
     link_mid: str | None = None,
+    text_format: str | None = None,
 ) -> bool:
     msg = _store_chat_message(
         db,
@@ -762,7 +771,7 @@ async def enqueue_and_process_send_text(
         target_chat_id=target_chat_id,
         target_user_id=target_user_id,
         operation="send_text",
-        payload={"text": text},
+        payload={"text": text, "format": text_format},
     )
     ok, _, _ = await _dispatch_outbox(db, client=MaxClient(), item=item)
     return ok
@@ -813,6 +822,7 @@ async def queue_only_send_text(
     source: str,
     link_mid: str | None = None,
     scheduled_for: datetime | None = None,
+    text_format: str | None = None,
 ) -> None:
     next_retry_at = _as_naive_utc(scheduled_for or _utc_now())
     msg = _store_chat_message(
@@ -834,7 +844,7 @@ async def queue_only_send_text(
         target_chat_id=target_chat_id,
         target_user_id=target_user_id,
         operation="send_text",
-        payload={"text": text},
+        payload={"text": text, "format": text_format},
         next_retry_at=next_retry_at,
     )
 
@@ -1064,6 +1074,7 @@ async def _send_manager_payload_to_conversation(
             text=get_template_text(db, TEMPLATE_AFTER_PHONE),
             source="manager",
             link_mid=manager_event.link_mid,
+            text_format="markdown",
         )
 
     if payload_text.startswith("/"):
@@ -1439,7 +1450,7 @@ async def _send_contact_request_prompt(
         target_chat_id=chat_id,
         target_user_id=user_id,
         operation="send_message",
-        payload={"text": full_text, "attachments": attachments},
+        payload={"text": full_text, "attachments": attachments, "format": "markdown"},
     )
     ok, _, result = await _dispatch_outbox(db, client=client, item=item)
     if ok:
@@ -1536,6 +1547,7 @@ async def handle_customer_event(
                 target_user_id=event.sender_id,
                 text=prestart_text,
                 source="bot_system",
+                text_format="markdown",
             )
             await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "prestart"}
@@ -1553,6 +1565,7 @@ async def handle_customer_event(
                 target_user_id=event.sender_id,
                 text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
                 source="bot_system",
+                text_format="markdown",
             )
             await process_outbox_queue(db, limit=20)
             return {"ok": True, "flow": "start_prompt_skipped_phone"}
@@ -1574,6 +1587,7 @@ async def handle_customer_event(
             target_user_id=event.sender_id,
             text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
             source="bot_system",
+            text_format="markdown",
         )
         await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "start_prompt_phone_not_required"}
@@ -1602,6 +1616,7 @@ async def handle_customer_event(
                     target_user_id=event.sender_id,
                     text=text_value,
                     source="bot_system",
+                    text_format="markdown",
                 )
             meta.intro_sent = True
             db.add(meta)
@@ -1614,6 +1629,7 @@ async def handle_customer_event(
                 target_user_id=event.sender_id,
                 text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
                 source="bot_system",
+                text_format="markdown",
             )
         await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "phone_verified"}
@@ -1773,6 +1789,7 @@ async def send_quick_reply_to_customer(
             target_user_id=customer_user_id,
             text=rendered_text,
             source=source,
+            text_format="markdown",
         )
         if not ok:
             return False
