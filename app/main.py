@@ -2883,7 +2883,6 @@ def _render_customer_profile_page(
                 or "—"
             ),
         },
-        {"label": "Статус", "value": (meta.status if meta else "—")},
         {"label": "Телефон подтвержден", "value": ("да" if meta and meta.phone_verified else "нет")},
     ]
     technical_rows = [
