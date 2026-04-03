@@ -20,6 +20,7 @@
       --shadow: 0 10px 28px rgba(12, 31, 66, 0.08);
       --radius: 14px;
       --keyboard-offset: 0px;
+      --layout-height: 100dvh;
     }
     * { box-sizing: border-box; }
     html, body { height: 100%; overflow: hidden; }
@@ -32,7 +33,7 @@
     .app {
       display: grid;
       grid-template-columns: minmax(0, 460px) minmax(0, 1fr);
-      height: var(--app-height, 100dvh);
+      height: var(--layout-height);
     }
     .chat-list {
       border-right: 1px solid var(--line);
@@ -368,7 +369,7 @@
 
     .chat-screen {
       min-width: 0;
-      height: var(--app-height, 100dvh);
+      height: var(--layout-height);
       display: grid;
       grid-template-rows: auto minmax(0, 1fr) auto;
       overflow: hidden;
@@ -1046,7 +1047,7 @@
       .app { grid-template-columns: 1fr; }
       .chat-list,
       .chat-screen {
-        height: var(--app-height, 100dvh);
+        height: var(--layout-height);
       }
       .mobile-only { display: inline-flex; }
       .desktop-only { display: none; }
