@@ -21,6 +21,9 @@
       --error-border: #ffd1d1;
       --shadow: 0 10px 28px rgba(12, 31, 66, 0.08);
       --radius: 14px;
+      --space-1: 8px;
+      --space-2: 16px;
+      --space-3: 24px;
     }
     * { box-sizing: border-box; }
     body {
@@ -32,18 +35,18 @@
     .container {
       max-width: 1160px;
       margin: 0 auto;
-      padding: 14px 14px 22px;
+      padding: var(--space-2) var(--space-2) var(--space-3);
     }
     .top {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 12px;
+      margin-bottom: var(--space-2);
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: var(--radius);
       box-shadow: var(--shadow);
-      padding: 12px 14px;
+      padding: var(--space-2);
     }
     h1 {
       margin: 0;
@@ -63,26 +66,109 @@
     }
     .grid {
       display: block;
-      gap: 16px;
+      gap: var(--space-2);
     }
     .grid > .card + .card {
-      margin-top: 16px;
+      margin-top: var(--space-2);
+    }
+    .section-gap-top {
+      margin-top: var(--space-2);
+    }
+    .section-gap-bottom {
+      margin-bottom: var(--space-2);
     }
     .card {
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      padding: 14px;
+      padding: var(--space-2);
       box-shadow: var(--shadow);
+      overflow: hidden;
     }
     h2 {
-      margin: 0 0 12px 0;
+      margin: 0 0 var(--space-2) 0;
       font-size: 17px;
       font-weight: 800;
     }
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: calc(var(--space-2) * -1) calc(var(--space-2) * -1) var(--space-2);
+      padding: 12px var(--space-2);
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #fcfdff 0%, #f8fbff 100%);
+    }
+    .card-title {
+      margin: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .section-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--primary-soft);
+      border: 1px solid #d6e4ff;
+      font-size: 14px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .card-head-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .card-head-kicker {
+      color: #4f5b73;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .subsection-title {
+      margin: var(--space-2) 0 var(--space-1);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .subsection-title .section-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 8px;
+      font-size: 12px;
+    }
+    .top-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .top-link {
+      text-decoration: none;
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 9px;
+      background: var(--primary-soft);
+      border: 1px solid #d6e4ff;
+      padding: 7px 9px;
+      display: inline-block;
+    }
     label {
       display: block;
-      margin: 10px 0 6px;
+      margin: var(--space-1) 0 6px;
       font-weight: 700;
       font-size: 13px;
       color: #4f5b73;
@@ -103,7 +189,7 @@
     }
     textarea { min-height: 90px; resize: vertical; }
     .btn {
-      margin-top: 12px;
+      margin-top: var(--space-2);
       background: var(--primary);
       border: 0;
       color: #fff;
@@ -132,7 +218,7 @@
       font-weight: 700;
     }
     .notice {
-      margin: 8px 0 16px;
+      margin: var(--space-1) 0 var(--space-2);
       padding: 10px;
       border-radius: 12px;
       font-size: 13px;
@@ -150,12 +236,12 @@
     .hint {
       color: var(--muted);
       font-size: 13px;
-      margin-top: 8px;
+      margin-top: var(--space-1);
     }
     table {
       width: 100%;
       border-collapse: collapse;
-      margin-top: 8px;
+      margin-top: 12px;
       font-size: 13px;
       background: #fff;
       border-radius: 10px;
@@ -402,21 +488,52 @@
       align-items: center;
       gap: 8px;
     }
-    .top a[href*="/chats"] {
-      text-decoration: none;
-      color: var(--primary);
-      font-size: 12px;
-      font-weight: 700;
-      border-radius: 9px;
-      background: var(--primary-soft);
-      padding: 7px 9px;
-      display: inline-block;
-    }
     .token-line .token-mask {
       display: inline-block;
       max-width: 100%;
       overflow-wrap: anywhere;
       word-break: break-word;
+    }
+    .token-delete-form {
+      display: inline;
+      margin-left: 8px;
+    }
+    .token-inline-offset {
+      margin-left: 8px;
+    }
+    .settings-row-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .settings-row-checkbox input {
+      width: auto;
+    }
+    .quick-cancel-btn {
+      margin-left: var(--space-1);
+    }
+    .media-preview-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      max-width: 100%;
+    }
+    .inline-edit-form {
+      display: inline;
+    }
+    .manager-ids-wrap {
+      margin-bottom: 10px;
+    }
+    .manager-inline-label {
+      margin-top: 0;
+    }
+    .routing-mode-select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      max-width: 420px;
     }
     @media (max-width: 760px) {
       body {
@@ -424,13 +541,13 @@
       }
       .container {
         margin: 0 auto;
-        padding: 10px 10px 18px;
+        padding: 12px 12px 20px;
       }
       .top {
         flex-direction: row;
         align-items: center;
         justify-content: space-between;
-        padding: 10px 11px;
+        padding: 12px;
         gap: 8px;
       }
       h1 {
@@ -444,6 +561,14 @@
       .card {
         min-width: 0;
         padding: 12px;
+      }
+      .card-head {
+        margin: -12px -12px 12px;
+        padding: 10px 12px;
+      }
+      .card-head-kicker {
+        padding: 3px 8px;
+        font-size: 11px;
       }
       .hint {
         overflow-wrap: anywhere;
@@ -503,8 +628,8 @@
           Админ-панель бота Max
         {% endif %}
       </h1>
-      <div style="display:flex; gap:10px; align-items:center;">
-        <a href="{{ chats_href or '/admin/chats' }}" style="text-decoration:none; color:#2459f2; font-weight:700;">Чаты</a>
+      <div class="top-actions">
+        <a class="top-link" href="{{ chats_href or '/admin/chats' }}">Чаты</a>
         <form method="post" action="{{ logout_action or '/admin/logout' }}">
           <button class="logout-btn" type="submit">Выйти</button>
         </form>
@@ -518,19 +643,24 @@
       <div class="notice error">{{ error }}</div>
     {% endif %}
     {% if (show_app_token_card | default(ui_mode == "app")) %}
-      <section class="card" style="margin-bottom:16px;">
-        <h2>Подключение вашего бота Max</h2>
+      <section class="card section-gap-bottom">
+        <div class="card-head">
+          <h2 class="card-title"><span class="section-icon">🤖</span>Подключение вашего бота Max</h2>
+          <div class="card-head-actions">
+            <span class="card-head-kicker">Max</span>
+          </div>
+        </div>
         <div class="hint token-line">
           Токен вашего бота:
           {% if workspace_bot_token_masked %}
-            <code class="token-mask" style="margin-left:8px;">{{ workspace_bot_token_masked }}</code>
-            <a href="#" id="token-toggle-link" style="margin-left:8px;">Обновить</a>
-            <form method="post" action="{{ token_delete_action or '/app/settings/delete-bot-token' }}" style="display:inline; margin-left:8px;">
+            <code class="token-mask token-inline-offset">{{ workspace_bot_token_masked }}</code>
+            <a href="#" id="token-toggle-link" class="token-inline-offset">Обновить</a>
+            <form method="post" action="{{ token_delete_action or '/app/settings/delete-bot-token' }}" class="token-delete-form">
               <button type="submit" class="delete token-delete-btn">Удалить</button>
             </form>
           {% else %}
-            <span style="margin-left:8px;">не задан.</span>
-            <a href="#" id="token-toggle-link" style="margin-left:8px;">Ввести токен</a>
+            <span class="token-inline-offset">не задан.</span>
+            <a href="#" id="token-toggle-link" class="token-inline-offset">Ввести токен</a>
           {% endif %}
         </div>
       </section>
@@ -539,7 +669,12 @@
     <div class="grid">
       {% if (show_settings_card | default(true)) %}
       <section class="card">
-        <h2>Настройки бота</h2>
+        <div class="card-head">
+          <h2 class="card-title"><span class="section-icon">⚙️</span>Настройки бота</h2>
+          <div class="card-head-actions">
+            <span class="card-head-kicker">Конфигурация</span>
+          </div>
+        </div>
         <form method="post" action="{{ settings_action or '/admin/settings' }}">
           {% if ui_mode == "app" %}
           <div id="token-input-wrap" {% if workspace_bot_token_masked %}hidden{% endif %}>
@@ -569,14 +704,13 @@
             </div>
           </div>
           <textarea id="start_message" name="start_message" required>{{ template_start }}</textarea>
-          <label style="display:flex; align-items:center; gap:8px; margin-top:10px;">
+          <label class="settings-row-checkbox">
             <input
               id="request_customer_phone"
               type="checkbox"
               name="request_customer_phone"
               value="1"
               {% if settings.request_customer_phone %}checked{% endif %}
-              style="width:auto;"
             />
             Запрос номера телефона у покупателя
           </label>
@@ -607,9 +741,15 @@
       {% endif %}
 
       <section class="card">
-        <h2 id="quick-reply-form-title">
-          {% if quick_reply_edit_target %}Редактировать быстрый ответ{% else %}Добавить быстрый ответ{% endif %}
-        </h2>
+        <div class="card-head">
+          <h2 id="quick-reply-form-title" class="card-title">
+            <span class="section-icon">💬</span>
+            {% if quick_reply_edit_target %}Редактировать быстрый ответ{% else %}Добавить быстрый ответ{% endif %}
+          </h2>
+          <div class="card-head-actions">
+            <span class="card-head-kicker">Быстрые ответы</span>
+          </div>
+        </div>
         <form
           method="post"
           action="{% if quick_reply_edit_target %}{{ quick_reply_delete_action_prefix or '/admin/quick-replies/' }}{{ quick_reply_edit_target.id }}/update{% else %}{{ quick_reply_create_action or '/admin/quick-replies' }}{% endif %}"
@@ -673,13 +813,13 @@
             <a
               class="btn secondary"
               href="{% if ui_mode in ['app', 'manager'] %}/app/settings{% else %}/admin{% endif %}"
-              style="margin-left:8px;"
+              class="quick-cancel-btn"
             >Отмена</a>
           {% endif %}
         </form>
         <div class="hint">Менеджер вызывает ответ в чате командой вида <code>/price</code>.</div>
 
-        <h2 style="margin-top:16px;">Список быстрых ответов</h2>
+        <h3 class="subsection-title"><span class="section-icon">📚</span>Список быстрых ответов</h3>
         {% if quick_replies %}
           <table class="table-mobile-cards quick-replies-table">
             <thead>
@@ -699,7 +839,7 @@
                   <td data-label="Текст">{{ item.text }}</td>
                   <td data-label="Медиа">
                     {% if item.media_items %}
-                      <div style="display:flex; gap:6px; flex-wrap:wrap; max-width:100%;">
+                      <div class="media-preview-row">
                         {% for media in item.media_items %}
                           <img class="preview" src="{{ media.media_path }}" alt="{{ item.title }}" />
                         {% endfor %}
@@ -711,7 +851,7 @@
                     {% endif %}
                   </td>
                   <td data-label="Действия">
-                    <form method="get" action="{% if ui_mode in ['app', 'manager'] %}/app/settings{% else %}/admin{% endif %}" style="display:inline;">
+                    <form method="get" action="{% if ui_mode in ['app', 'manager'] %}/app/settings{% else %}/admin{% endif %}" class="inline-edit-form">
                       <input type="hidden" name="edit_quick_reply_id" value="{{ item.id }}" />
                       <button class="edit-quick-reply-btn" type="submit" title="Редактировать">✏️</button>
                     </form>
@@ -730,8 +870,13 @@
     </div>
 
     {% if (show_webhook_card | default((show_settings_card | default(true)) and ui_mode == "admin")) %}
-      <section class="card" style="margin-top:16px;">
-        <h2>Webhook для Max</h2>
+      <section class="card section-gap-top">
+        <div class="card-head">
+          <h2 class="card-title"><span class="section-icon">🪝</span>Webhook для Max</h2>
+          <div class="card-head-actions">
+            <span class="card-head-kicker">Интеграция</span>
+          </div>
+        </div>
         <div class="hint">
           Укажите этот URL в настройках бота Max:
           <code>{{ webhook_url }}</code>
@@ -741,8 +886,13 @@
     {% endif %}
 
     {% if (show_delivery_card | default(true)) %}
-    <section class="card" style="margin-top:16px;">
-      <h2>Статистика доставки сообщений</h2>
+    <section class="card section-gap-top">
+      <div class="card-head">
+        <h2 class="card-title"><span class="section-icon">📈</span>Статистика доставки сообщений</h2>
+        <div class="card-head-actions">
+          <span class="card-head-kicker">Метрики</span>
+        </div>
+      </div>
       <div class="hint">Успешная доставка: <b>{{ delivery_metrics.success_rate }}%</b></div>
       <div class="hint">Попыток отправки: <b>{{ delivery_metrics.total_sent_attempts }}</b></div>
       <div class="hint">Среднее число повторов: <b>{{ delivery_metrics.avg_retry_count }}</b></div>
@@ -752,12 +902,17 @@
 
     {% if (show_managers_card | default(ui_mode == "app")) %}
     {% set manager_summary = manager_status_summary if manager_status_summary is defined else {"connected": 0, "pending": 0, "failed": 0, "total": 0} %}
-    <section class="card" style="margin-top:16px;">
-      <h2>Менеджеры: статусы подключения</h2>
+    <section class="card section-gap-top">
+      <div class="card-head">
+        <h2 class="card-title"><span class="section-icon">👥</span>Менеджеры: статусы подключения</h2>
+        <div class="card-head-actions">
+          <span class="card-head-kicker">Команда</span>
+        </div>
+      </div>
       {% set manager_ids = manager_id_rows if manager_id_rows is defined else [] %}
       {% set single_manager_id = (manager_ids[0] if manager_ids else "") %}
-      <div class="manager-ids-wrap" id="manager-ids-wrap" style="margin-bottom:10px;">
-        <label for="manager_account_id" style="margin-top:0;">Добавление нового менеджера</label>
+      <div class="manager-ids-wrap" id="manager-ids-wrap">
+        <label for="manager_account_id" class="manager-inline-label">Добавление нового менеджера</label>
         <div class="manager-id-row">
           <input
             id="manager_account_id"
@@ -834,7 +989,7 @@
         <div class="hint">Добавьте хотя бы один ID менеджера, чтобы отслеживать статус подключения.</div>
       {% endif %}
       <label for="routing_mode_manager" style="margin-top:14px;">Режим назначения менеджера</label>
-      <select id="routing_mode_manager" name="routing_mode" style="width:100%; border:1px solid var(--line); border-radius:8px; padding:10px; max-width:420px;">
+      <select id="routing_mode_manager" name="routing_mode" class="routing-mode-select">
         {% set mode = (settings.routing_mode or "round_robin") %}
         <option value="round_robin" {% if mode == "round_robin" %}selected{% endif %}>Распределять по очереди</option>
         <option value="random" {% if mode == "random" %}selected{% endif %}>Случайное назначение</option>
@@ -843,8 +998,13 @@
     {% endif %}
 
     {% if (show_tariff_card | default(true)) and subscription %}
-    <section class="card" style="margin-top:16px;">
-      <h2>Тариф и лимиты</h2>
+    <section class="card section-gap-top">
+      <div class="card-head">
+        <h2 class="card-title"><span class="section-icon">💳</span>Тариф и лимиты</h2>
+        <div class="card-head-actions">
+          <span class="card-head-kicker">{{ subscription.plan_code }}</span>
+        </div>
+      </div>
       <div class="hint">План: <b>{{ subscription.plan_code }}</b></div>
       <div class="hint">Статус: <b>{{ subscription.status }}</b></div>
       {% if tenant_metrics %}
@@ -863,8 +1023,13 @@
     {% endif %}
 
     {% if (show_intro_steps_card | default(true)) and intro_steps %}
-    <section class="card" style="margin-top:16px;">
-      <h2>Intro шаги (после подтверждения телефона)</h2>
+    <section class="card section-gap-top">
+      <div class="card-head">
+        <h2 class="card-title"><span class="section-icon">🧩</span>Intro шаги (после подтверждения телефона)</h2>
+        <div class="card-head-actions">
+          <span class="card-head-kicker">Автоматизация</span>
+        </div>
+      </div>
       <table class="table-mobile-cards intro-steps-table">
         <thead>
           <tr>
@@ -895,8 +1060,13 @@
     {% endif %}
 
     {% if (show_intro_form | default(false)) %}
-    <section class="card" style="margin-top:16px;">
-      <h2>Добавить intro шаг</h2>
+    <section class="card section-gap-top">
+      <div class="card-head">
+        <h2 class="card-title"><span class="section-icon">➕</span>Добавить intro шаг</h2>
+        <div class="card-head-actions">
+          <span class="card-head-kicker">Конструктор</span>
+        </div>
+      </div>
       <form method="post" action="{{ intro_create_action or '/app/intro-steps' }}">
         <label for="step_order">Порядок</label>
         <input id="step_order" name="step_order" type="number" value="1" min="1" />
