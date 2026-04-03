@@ -1863,6 +1863,37 @@
         document.close();
       }
 
+      const OP_QUERY_KEYS = new Set([
+        "sent",
+        "scheduled",
+        "quick",
+        "edited",
+        "deleted",
+        "retried",
+        "renamed",
+        "unread",
+        "foldered",
+      ]);
+
+      const stripChatOperationFlags = () => {
+        try {
+          const url = new URL(window.location.href);
+          let changed = false;
+          for (const key of OP_QUERY_KEYS) {
+            if (url.searchParams.has(key)) {
+              url.searchParams.delete(key);
+              changed = true;
+            }
+          }
+          if (!changed) return;
+          const nextQuery = url.searchParams.toString();
+          const nextUrl = `${url.pathname}${nextQuery ? `?${nextQuery}` : ""}${url.hash || ""}`;
+          window.history.replaceState({}, "", nextUrl);
+        } catch (_) {
+          // Keep chat page stable if URL parsing fails.
+        }
+      };
+
       async function softVisit(url, options = {}) {
         const response = await fetch(url, {
           method: options.method || "GET",
@@ -1875,6 +1906,7 @@
 
       window.__chatSoftRenderFromResponse = renderFromResponse;
       window.__chatSoftVisit = softVisit;
+      stripChatOperationFlags();
 
       const canInterceptClick = (event, anchor) => {
         if (!anchor) return false;

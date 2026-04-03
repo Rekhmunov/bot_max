@@ -1489,14 +1489,52 @@ def _normalize_quick_reply_media_order(db: Session, reply_id: int) -> None:
         db.commit()
 
 
-def _load_quick_replies_with_media(db: Session, *, workspace_id: int) -> list[QuickReply]:
+def _quick_reply_owner_user_id(current_user: ServiceUser | None) -> int:
+    if current_user is None:
+        return 0
+    if (current_user.role or "").strip().lower() == "manager":
+        return int(current_user.id or 0)
+    return 0
+
+
+def _settings_ui_mode(current_user: ServiceUser) -> str:
+    return "manager" if (current_user.role or "").strip().lower() == "manager" else "app"
+
+
+def _load_quick_replies_with_media(
+    db: Session,
+    *,
+    workspace_id: int,
+    owner_user_id: int = 0,
+) -> list[QuickReply]:
     replies = (
         db.query(QuickReply)
-        .filter(QuickReply.workspace_id == workspace_id)
+        .filter(
+            QuickReply.workspace_id == workspace_id,
+            QuickReply.owner_user_id == int(owner_user_id or 0),
+        )
         .order_by(QuickReply.command.asc())
         .all()
     )
     return _attach_media_to_quick_replies(db, replies)
+
+
+def _chat_scope_quick_reply_owner_id(
+    *,
+    current_user: ServiceUser | None = None,
+    manager_claims: dict | None = None,
+) -> int:
+    if current_user is not None:
+        return _quick_reply_owner_user_id(current_user)
+    if manager_claims:
+        manager_user_id = manager_claims.get("service_user_id")
+        if isinstance(manager_user_id, int) and manager_user_id > 0:
+            return int(manager_user_id)
+    return 0
+
+
+def _workspace_quick_replies_count(db: Session, *, workspace_id: int) -> int:
+    return db.query(QuickReply).filter(QuickReply.workspace_id == workspace_id).count()
 
 
 def _manager_ids_from_settings_row(settings_row: BotSettings | None) -> set[str]:
@@ -1667,6 +1705,8 @@ def _render_app_settings_page(
     edit_quick_reply_id: int | None = None,
 ) -> HTMLResponse:
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
+    is_manager_view = (current_user.role or "").strip().lower() == "manager"
     ok = True
     reason = ""
     try:
@@ -1675,13 +1715,18 @@ def _render_app_settings_page(
         # Keep settings page available on partially migrated SQLite snapshots.
         db.rollback()
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
-    quick_replies = _load_quick_replies_with_media(db, workspace_id=workspace_id)
+    quick_replies = _load_quick_replies_with_media(
+        db,
+        workspace_id=workspace_id,
+        owner_user_id=quick_reply_owner_id,
+    )
     quick_reply_edit_target: QuickReply | None = None
     if edit_quick_reply_id is not None:
         quick_reply_edit_target = (
             db.query(QuickReply)
             .filter(
                 QuickReply.workspace_id == workspace_id,
+                QuickReply.owner_user_id == quick_reply_owner_id,
                 QuickReply.id == int(edit_quick_reply_id),
             )
             .first()
@@ -1694,7 +1739,6 @@ def _render_app_settings_page(
     )
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
-    managers = list_workspace_managers(db, workspace_id=workspace_id)
     sub = None
     tenant_metrics = None
     active_alerts: list[TenantAlert] = []
@@ -1772,7 +1816,7 @@ def _render_app_settings_page(
             "tenant_alerts": active_alerts,
             "message": note,
             "error": error,
-            "ui_mode": "app",
+            "ui_mode": _settings_ui_mode(current_user),
             "current_user": current_user,
             "chats_href": "/app/chats",
             "logout_action": "/app/logout",
@@ -1805,6 +1849,14 @@ def _render_app_settings_page(
             "workspace_bot_token_masked": masked_token,
             "workspace_webhook_url": webhook_workspace_url,
             "routing_mode_label": _manager_routing_mode_label(bot_settings.routing_mode or "round_robin"),
+            "show_settings_card": not is_manager_view,
+            "show_app_token_card": not is_manager_view,
+            "show_webhook_card": not is_manager_view,
+            "show_delivery_card": not is_manager_view,
+            "show_managers_card": not is_manager_view,
+            "show_tariff_card": not is_manager_view,
+            "show_intro_steps_card": not is_manager_view,
+            "show_intro_form": False,
         },
     )
 
@@ -2232,7 +2284,9 @@ async def admin_copy_manager_link(
     quick_replies_limit_value = max(1, int(sub.quick_replies_limit or 0))
     quick_replies_count = (
         db.query(QuickReply)
-        .filter(QuickReply.workspace_id == workspace_id)
+        .filter(
+            QuickReply.workspace_id == workspace_id,
+        )
         .count()
     )
     if quick_replies_count >= quick_replies_limit_value:
@@ -2288,6 +2342,7 @@ async def create_quick_reply(
         db.query(QuickReply)
         .filter(
             QuickReply.workspace_id == workspace_id,
+            QuickReply.owner_user_id == 0,
             QuickReply.command == normalized,
         )
         .first()
@@ -2334,6 +2389,7 @@ async def create_quick_reply(
 
     reply = QuickReply(
         workspace_id=workspace_id,
+        owner_user_id=0,
         command=normalized,
         title=title.strip(),
         text=text.strip(),
@@ -2403,10 +2459,15 @@ async def _update_quick_reply_data(
     media_order: str,
     workspace_id: int,
     actor_user_id: int | None,
+    owner_user_id: int = 0,
 ) -> QuickReply:
     reply = (
         db.query(QuickReply)
-        .filter(QuickReply.id == reply_id, QuickReply.workspace_id == workspace_id)
+        .filter(
+            QuickReply.id == reply_id,
+            QuickReply.workspace_id == workspace_id,
+            QuickReply.owner_user_id == int(owner_user_id or 0),
+        )
         .first()
     )
     if reply is None:
@@ -2419,6 +2480,7 @@ async def _update_quick_reply_data(
         db.query(QuickReply.id)
         .filter(
             QuickReply.workspace_id == workspace_id,
+            QuickReply.owner_user_id == int(owner_user_id or 0),
             QuickReply.command == normalized,
             QuickReply.id != reply_id,
         )
@@ -2492,6 +2554,7 @@ async def admin_update_quick_reply(
             media_order=media_order,
             workspace_id=workspace_id,
             actor_user_id=None,
+            owner_user_id=0,
         )
     except HTTPException as exc:
         page = admin_page(
@@ -2543,6 +2606,8 @@ async def admin_chats_page(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     workspace_id = DEFAULT_WORKSPACE_ID
+    ui = _admin_chats_ui()
+    ui["current_user"] = None
     return await _render_chat_workspace(
         request=request,
         db=db,
@@ -2550,7 +2615,7 @@ async def admin_chats_page(
         q=q,
         view=view,
         folder_id=folder_id,
-        ui=_admin_chats_ui(),
+        ui=ui,
         include_removed=True,
         workspace_id=workspace_id,
     )
@@ -2846,6 +2911,7 @@ async def admin_chats_send_message(
             conversation_id=conversation_id,
             command_text=text_value,
             workspace_id=workspace_id,
+            owner_user_id=0,
         )
         suffix = "1" if sent_ok else "0"
         redirect_url = f"/admin/chats?conversation_id={conversation_id}&quick={suffix}"
@@ -2888,12 +2954,57 @@ async def admin_chats_send_quick_reply(
         conversation_id=conversation_id,
         command_text=command,
         workspace_id=workspace_id,
+        owner_user_id=0,
     )
     suffix = "1" if sent_ok else "0"
     return RedirectResponse(
         url=f"/admin/chats?conversation_id={conversation_id}&quick={suffix}",
         status_code=302,
     )
+
+
+@app.get("/app/chats/{conversation_id}/quick-options")
+def app_chats_quick_options(
+    conversation_id: int,
+    q: str = "",
+    workspace_id: int | None = None,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    resolved_workspace_id, _scoped_workspace, _is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
+    quick_replies = (
+        db.query(QuickReply)
+        .filter(
+            QuickReply.workspace_id == resolved_workspace_id,
+            QuickReply.owner_user_id == quick_reply_owner_id,
+            QuickReply.is_active.is_(True),
+        )
+        .order_by(QuickReply.command.asc())
+        .all()
+    )
+    query = q.strip().lstrip("/").lower()
+    items = []
+    for item in quick_replies:
+        if query:
+            hay = f"{item.command} {item.title} {item.text}".lower()
+            if query not in hay:
+                continue
+        items.append(
+            {
+                "command": item.command,
+                "title": item.title,
+                "text": item.text,
+                "has_image": bool(item.image_path),
+            }
+        )
+        if len(items) >= 12:
+            break
+    return {"conversation_id": conversation_id, "items": items}
 
 
 @app.get("/admin/chats/{conversation_id}/quick-options")
@@ -2908,6 +3019,7 @@ def admin_chats_quick_options(
         db.query(QuickReply)
         .filter(
             QuickReply.workspace_id == workspace_id,
+            QuickReply.owner_user_id == 0,
             QuickReply.is_active.is_(True),
         )
         .order_by(QuickReply.command.asc())
@@ -3858,21 +3970,42 @@ async def app_create_quick_reply(
         scope="app_ops",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in {"owner", "admin", "manager"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    quick_replies_limit_value = _quick_reply_limit_for_workspace(db, workspace_id=workspace_id)
+    quick_replies_count = (
+        db.query(QuickReply)
+        .filter(QuickReply.workspace_id == workspace_id)
+        .count()
+    )
+    if quick_replies_count >= quick_replies_limit_value:
+        page = _render_app_settings_page(
+            request,
+            db=db,
+            current_user=current_user,
+            error="Ваш тарифный план не позволяет создавать больше быстрых ответов.",
+        )
+        page.status_code = 400
+        return page
+    quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
     normalized = command.strip().lstrip("/").lower()
     if not normalized:
         raise HTTPException(status_code=400, detail="Команда не может быть пустой")
     exists = (
         db.query(QuickReply)
-        .filter(QuickReply.workspace_id == workspace_id, QuickReply.command == normalized)
+        .filter(
+            QuickReply.workspace_id == workspace_id,
+            QuickReply.owner_user_id == quick_reply_owner_id,
+            QuickReply.command == normalized,
+        )
         .first()
     )
     if exists:
         return RedirectResponse(url="/app/settings", status_code=302)
     reply = QuickReply(
         workspace_id=workspace_id,
+        owner_user_id=quick_reply_owner_id,
         command=normalized,
         title=title.strip(),
         text=text.strip(),
@@ -3909,9 +4042,10 @@ async def app_update_quick_reply(
         scope="app_ops",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in {"owner", "admin", "manager"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
     try:
         reply = await _update_quick_reply_data(
             db=db,
@@ -3923,6 +4057,7 @@ async def app_update_quick_reply(
             media_order=media_order,
             workspace_id=workspace_id,
             actor_user_id=current_user.id,
+            owner_user_id=quick_reply_owner_id,
         )
     except HTTPException as exc:
         page = _render_app_settings_page(
@@ -3950,12 +4085,17 @@ def app_delete_quick_reply(
         scope="app_ops",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in {"owner", "admin", "manager"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
     reply = (
         db.query(QuickReply)
-        .filter(QuickReply.workspace_id == workspace_id, QuickReply.id == reply_id)
+        .filter(
+            QuickReply.workspace_id == workspace_id,
+            QuickReply.owner_user_id == quick_reply_owner_id,
+            QuickReply.id == reply_id,
+        )
         .first()
     )
     if reply:
@@ -4028,6 +4168,7 @@ async def app_chats_page(
             "endpoint_query_suffix": endpoint_scope_suffix,
         }
     )
+    ui["current_user"] = current_user
     return await _render_chat_workspace(
         request=request,
         db=db,
@@ -5612,11 +5753,13 @@ async def app_chats_send_message(
         return RedirectResponse(url=f"{redirect_url}{workspace_qs}", status_code=302)
 
     if text_value.startswith("/") and not image_path:
+        quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
         sent_ok = await send_admin_quick_reply(
             db=db,
             conversation_id=conversation_id,
             command_text=text_value,
             workspace_id=workspace_id,
+            owner_user_id=quick_reply_owner_id,
         )
         suffix = "1" if sent_ok else "0"
         redirect_url = f"/app/chats?conversation_id={conversation_id}&quick={suffix}"
@@ -5659,11 +5802,13 @@ async def app_chats_send_quick_reply(
         current_user=current_user,
         workspace_id=workspace_id,
     )
+    quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
     sent_ok = await send_admin_quick_reply(
         db=db,
         conversation_id=conversation_id,
         command_text=command,
         workspace_id=workspace_id,
+        owner_user_id=quick_reply_owner_id,
     )
     suffix = "1" if sent_ok else "0"
     workspace_qs = _workspace_scope_query_suffix(
@@ -6075,7 +6220,7 @@ async def _render_chat_workspace(
     q: str,
     view: str,
     folder_id: int | None,
-    ui: dict[str, str | bool],
+    ui: dict[str, str | bool | ServiceUser | dict],
     include_removed: bool,
     workspace_id: int,
 ) -> HTMLResponse:
@@ -6120,6 +6265,10 @@ async def _render_chat_workspace(
         "threads_count": len(threads),
     }
 
+    quick_reply_owner_id = _chat_scope_quick_reply_owner_id(
+        current_user=ui.get("current_user") if isinstance(ui.get("current_user"), ServiceUser) else None,
+        manager_claims=ui.get("manager_claims") if isinstance(ui.get("manager_claims"), dict) else None,
+    )
     context: dict = {
         "request": request,
         "threads": threads,
@@ -6132,7 +6281,11 @@ async def _render_chat_workspace(
         "mobile_chat_view": mobile_chat_view,
         "admin_quick_options": [
             {"command": item.command, "title": item.title}
-            for item in list_active_quick_replies(db, workspace_id=workspace_id)
+            for item in list_active_quick_replies(
+                db,
+                workspace_id=workspace_id,
+                owner_user_id=quick_reply_owner_id,
+            )
         ],
         "chat_folders": [
             {"id": folder.id, "name": folder.name}
@@ -6158,6 +6311,8 @@ async def manager_mini_page(
 ) -> HTMLResponse:
     claims = _require_manager_mini_access(token=token, db=db)
     workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    ui = _manager_mini_ui(token)
+    ui["manager_claims"] = claims
     return await _render_chat_workspace(
         request=request,
         db=db,
@@ -6165,7 +6320,7 @@ async def manager_mini_page(
         q=q,
         view=view,
         folder_id=folder_id,
-        ui=_manager_mini_ui(token),
+        ui=ui,
         include_removed=False,
         workspace_id=workspace_id,
     )
@@ -6365,11 +6520,13 @@ async def manager_mini_send_message(
         image_path = f"/static/uploads/{safe_name}"
 
     if text_value.startswith("/") and not image_path:
+        quick_reply_owner_id = _chat_scope_quick_reply_owner_id(manager_claims=claims)
         sent_ok = await send_admin_quick_reply(
             db=db,
             conversation_id=conversation_id,
             command_text=text_value,
             workspace_id=workspace_id,
+            owner_user_id=quick_reply_owner_id,
         )
         suffix = "1" if sent_ok else "0"
         return RedirectResponse(

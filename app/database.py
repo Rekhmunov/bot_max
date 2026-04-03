@@ -281,6 +281,13 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE subscriptions ADD COLUMN folders_limit INTEGER DEFAULT 10")
                 )
+        if "quick_replies" in table_names:
+            qr_cols = {col["name"] for col in inspector.get_columns("quick_replies")}
+            if "owner_user_id" not in qr_cols:
+                conn.execute(
+                    text("ALTER TABLE quick_replies ADD COLUMN owner_user_id INTEGER DEFAULT 0")
+                )
+            conn.execute(text("UPDATE quick_replies SET owner_user_id = 0 WHERE owner_user_id IS NULL"))
 
         if "platform_settings" in table_names:
             platform_cols = {col["name"] for col in inspector.get_columns("platform_settings")}
@@ -337,6 +344,7 @@ def _ensure_lightweight_migrations() -> None:
         # Drop legacy global unique indexes left from single-tenant schema.
         # They conflict with new workspace-scoped unique constraints.
         conn.execute(text("DROP INDEX IF EXISTS ix_quick_replies_command"))
+        conn.execute(text("DROP INDEX IF EXISTS ix_quick_replies_workspace_command"))
         conn.execute(text("DROP INDEX IF EXISTS ix_message_templates_template_key"))
         conn.execute(text("DROP INDEX IF EXISTS ix_chat_folders_name"))
         conn.execute(text("DROP INDEX IF EXISTS ix_customer_profiles_customer_account_id"))
@@ -344,8 +352,8 @@ def _ensure_lightweight_migrations() -> None:
         # Workspace-scoped uniqueness for fresh deployments.
         conn.execute(
             text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ix_quick_replies_workspace_command "
-                "ON quick_replies (workspace_id, command)"
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_quick_replies_workspace_owner_command "
+                "ON quick_replies (workspace_id, owner_user_id, command)"
             )
         )
         conn.execute(

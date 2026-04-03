@@ -1844,6 +1844,7 @@ async def send_quick_reply_to_customer(
     command_text: str,
     customer_user_id: str | None = None,
     *,
+    owner_user_id: int = 0,
     sender_prefix: str | None = None,
     source: str = "manager",
     image_caption: str = "Менеджер отправил изображение",
@@ -1857,6 +1858,7 @@ async def send_quick_reply_to_customer(
         db.query(QuickReply)
         .filter(
             QuickReply.workspace_id == workspace_id,
+            QuickReply.owner_user_id == int(owner_user_id or 0),
             QuickReply.command == command,
             QuickReply.is_active.is_(True),
         )
@@ -1923,11 +1925,13 @@ def list_active_quick_replies(
     db: Session,
     *,
     workspace_id: int = DEFAULT_WORKSPACE_ID,
+    owner_user_id: int = 0,
 ) -> list[QuickReply]:
     return (
         db.query(QuickReply)
         .filter(
             QuickReply.workspace_id == workspace_id,
+            QuickReply.owner_user_id == int(owner_user_id or 0),
             QuickReply.is_active.is_(True),
         )
         .order_by(QuickReply.command.asc())
@@ -1941,6 +1945,7 @@ async def send_admin_quick_reply(
     conversation_id: int,
     command_text: str,
     workspace_id: int | None = None,
+    owner_user_id: int = 0,
 ) -> bool:
     conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
     if conversation is None:
@@ -1953,6 +1958,7 @@ async def send_admin_quick_reply(
         customer_chat_id=conversation.chat_id,
         customer_user_id=conversation.customer_account_id,
         command_text=command_text,
+        owner_user_id=owner_user_id,
         sender_prefix=None,
         source="bot_system",
         image_caption="Изображение от оператора",

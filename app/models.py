@@ -163,6 +163,7 @@ class QuickReply(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True, default=1)
+    owner_user_id: Mapped[int] = mapped_column(Integer, default=0, index=True)
     command: Mapped[str] = mapped_column(String(100), index=True)
     title: Mapped[str] = mapped_column(String(255))
     text: Mapped[str] = mapped_column(Text, default="")
@@ -340,7 +341,13 @@ class WebhookEvent(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
-Index("ix_quick_replies_workspace_command", QuickReply.workspace_id, QuickReply.command, unique=True)
+Index(
+    "ix_quick_replies_workspace_owner_command",
+    QuickReply.workspace_id,
+    QuickReply.owner_user_id,
+    QuickReply.command,
+    unique=True,
+)
 Index("ix_message_templates_workspace_key", MessageTemplate.workspace_id, MessageTemplate.template_key, unique=True)
 Index("ix_chat_folders_workspace_name", ChatFolder.workspace_id, ChatFolder.name, unique=True)
 Index(

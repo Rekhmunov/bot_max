@@ -494,7 +494,15 @@
 <body>
   <div class="container">
     <div class="top">
-      <h1>{% if ui_mode == "app" %}Настройки клиента{% else %}Админ-панель бота Max{% endif %}</h1>
+      <h1>
+        {% if ui_mode == "app" %}
+          Настройки клиента
+        {% elif ui_mode == "manager" %}
+          Быстрые ответы менеджера
+        {% else %}
+          Админ-панель бота Max
+        {% endif %}
+      </h1>
       <div style="display:flex; gap:10px; align-items:center;">
         <a href="{{ chats_href or '/admin/chats' }}" style="text-decoration:none; color:#2459f2; font-weight:700;">Чаты</a>
         <form method="post" action="{{ logout_action or '/admin/logout' }}">
@@ -509,7 +517,7 @@
     {% if error %}
       <div class="notice error">{{ error }}</div>
     {% endif %}
-    {% if ui_mode == "app" %}
+    {% if (show_app_token_card | default(ui_mode == "app")) %}
       <section class="card" style="margin-bottom:16px;">
         <h2>Подключение вашего бота Max</h2>
         <div class="hint token-line">
@@ -529,6 +537,7 @@
     {% endif %}
 
     <div class="grid">
+      {% if (show_settings_card | default(true)) %}
       <section class="card">
         <h2>Настройки бота</h2>
         <form method="post" action="{{ settings_action or '/admin/settings' }}">
@@ -595,6 +604,7 @@
           <button class="btn" type="submit">Сохранить настройки</button>
         </form>
       </section>
+      {% endif %}
 
       <section class="card">
         <h2 id="quick-reply-form-title">
@@ -662,7 +672,7 @@
           {% if quick_reply_edit_target %}
             <a
               class="btn secondary"
-              href="{% if ui_mode == 'app' %}/app/settings{% else %}/admin{% endif %}"
+              href="{% if ui_mode in ['app', 'manager'] %}/app/settings{% else %}/admin{% endif %}"
               style="margin-left:8px;"
             >Отмена</a>
           {% endif %}
@@ -701,7 +711,7 @@
                     {% endif %}
                   </td>
                   <td data-label="Действия">
-                    <form method="get" action="{% if ui_mode == 'app' %}/app/settings{% else %}/admin{% endif %}" style="display:inline;">
+                    <form method="get" action="{% if ui_mode in ['app', 'manager'] %}/app/settings{% else %}/admin{% endif %}" style="display:inline;">
                       <input type="hidden" name="edit_quick_reply_id" value="{{ item.id }}" />
                       <button class="edit-quick-reply-btn" type="submit" title="Редактировать">✏️</button>
                     </form>
@@ -719,7 +729,7 @@
       </section>
     </div>
 
-    {% if ui_mode != "app" %}
+    {% if (show_webhook_card | default((show_settings_card | default(true)) and ui_mode == "admin")) %}
       <section class="card" style="margin-top:16px;">
         <h2>Webhook для Max</h2>
         <div class="hint">
@@ -730,6 +740,7 @@
       </section>
     {% endif %}
 
+    {% if (show_delivery_card | default(true)) %}
     <section class="card" style="margin-top:16px;">
       <h2>Статистика доставки сообщений</h2>
       <div class="hint">Успешная доставка: <b>{{ delivery_metrics.success_rate }}%</b></div>
@@ -737,8 +748,9 @@
       <div class="hint">Среднее число повторов: <b>{{ delivery_metrics.avg_retry_count }}</b></div>
       <div class="hint">Неустранимых ошибок: <b>{{ delivery_metrics.permanent_failures }}</b></div>
     </section>
+    {% endif %}
 
-    {% if ui_mode == "app" %}
+    {% if (show_managers_card | default(ui_mode == "app")) %}
     {% set manager_summary = manager_status_summary if manager_status_summary is defined else {"connected": 0, "pending": 0, "failed": 0, "total": 0} %}
     <section class="card" style="margin-top:16px;">
       <h2>Менеджеры: статусы подключения</h2>
@@ -830,7 +842,7 @@
     </section>
     {% endif %}
 
-    {% if subscription %}
+    {% if (show_tariff_card | default(true)) and subscription %}
     <section class="card" style="margin-top:16px;">
       <h2>Тариф и лимиты</h2>
       <div class="hint">План: <b>{{ subscription.plan_code }}</b></div>
@@ -850,7 +862,7 @@
     </section>
     {% endif %}
 
-    {% if intro_steps %}
+    {% if (show_intro_steps_card | default(true)) and intro_steps %}
     <section class="card" style="margin-top:16px;">
       <h2>Intro шаги (после подтверждения телефона)</h2>
       <table class="table-mobile-cards intro-steps-table">
@@ -882,7 +894,7 @@
     </section>
     {% endif %}
 
-    {% if show_intro_form %}
+    {% if (show_intro_form | default(false)) %}
     <section class="card" style="margin-top:16px;">
       <h2>Добавить intro шаг</h2>
       <form method="post" action="{{ intro_create_action or '/app/intro-steps' }}">

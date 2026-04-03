@@ -1177,6 +1177,40 @@ def run() -> None:
             follow_redirects=False,
         )
         assert manager_relogin_by_max_id.status_code in (302, 303)
+        manager_relogin_settings = client.get(
+            "/app/settings",
+            cookies=manager_relogin_by_max_id.cookies,
+            follow_redirects=False,
+        )
+        assert manager_relogin_settings.status_code == 200
+        assert "Быстрые ответы менеджера" in manager_relogin_settings.text
+        assert "Добавить быстрый ответ" in manager_relogin_settings.text
+        assert "Настройки бота" not in manager_relogin_settings.text
+        assert "Менеджеры: статусы подключения" not in manager_relogin_settings.text
+        manager_quick_create = client.post(
+            "/app/quick-replies",
+            data={"command": "mgrsolo", "title": "Mgr solo", "text": "Только менеджер"},
+            cookies=manager_relogin_by_max_id.cookies,
+            follow_redirects=False,
+        )
+        assert manager_quick_create.status_code in (302, 303)
+        with SessionLocal() as db:
+            manager_user = (
+                db.query(ServiceUser)
+                .filter(ServiceUser.max_account_id == manager_relogin_max_id)
+                .first()
+            )
+            assert manager_user is not None
+            manager_only_reply = (
+                db.query(QuickReply)
+                .filter(
+                    QuickReply.workspace_id == manager_user.workspace_id,
+                    QuickReply.owner_user_id == manager_user.id,
+                    QuickReply.command == "mgrsolo",
+                )
+                .first()
+            )
+            assert manager_only_reply is not None
 
         admin_chats_page = client.get(
             f"/admin/chats?conversation_id={conversation_id}",
