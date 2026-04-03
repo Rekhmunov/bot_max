@@ -53,6 +53,8 @@ from app.manager_bridge import (
     TEMPLATE_PRESTART,
     TEMPLATE_START,
     assign_conversation_to_folder,
+    block_conversation_customer,
+    unblock_conversation_customer,
     create_chat_folder,
     delete_conversation,
     ensure_default_templates,
@@ -63,6 +65,7 @@ from app.manager_bridge import (
     list_chat_folders,
     load_chat_messages,
     load_chat_threads,
+    is_conversation_customer_blocked,
     mark_thread_unread,
     mark_thread_read,
     handle_customer_event,
@@ -3162,6 +3165,66 @@ def admin_chats_rename_user(
     )
 
 
+@app.post("/admin/chats/{conversation_id}/block-user", response_class=RedirectResponse)
+def admin_chats_block_conversation_customer(
+    request: Request,
+    conversation_id: int,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    workspace_id = DEFAULT_WORKSPACE_ID
+    blocked = block_conversation_customer(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+    )
+    suffix = "1" if blocked else "0"
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    return RedirectResponse(
+        url=f"/admin/chats?conversation_id={conversation_id}&q={quote_plus(q.strip())}&view={view}&blocked={suffix}{folder_qs}",
+        status_code=302,
+    )
+
+
+@app.post("/admin/chats/{conversation_id}/unblock-user", response_class=RedirectResponse)
+def admin_chats_unblock_conversation_customer(
+    request: Request,
+    conversation_id: int,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    workspace_id = DEFAULT_WORKSPACE_ID
+    unblocked = unblock_conversation_customer(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+    )
+    suffix = "1" if unblocked else "0"
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    return RedirectResponse(
+        url=f"/admin/chats?conversation_id={conversation_id}&q={quote_plus(q.strip())}&view={view}&unblocked={suffix}{folder_qs}",
+        status_code=302,
+    )
+
+
 def _require_manager_mini_access(token: str, db: Session) -> dict:
     claims = verify_manager_mini_claims(token)
     if not claims:
@@ -3237,11 +3300,14 @@ def _admin_chats_ui() -> dict[str, str | bool]:
         "show_profile_links": True,
         "show_delete_user": True,
         "show_rename_user": True,
+        "show_block_user": True,
         "allow_message_edit_actions": True,
         "send_action_prefix": "/admin/chats/",
         "send_action_suffix": "",
         "delete_user_action_prefix": "/admin/chats/",
         "rename_user_action_prefix": "/admin/chats/",
+        "block_user_action_prefix": "/admin/chats/",
+        "unblock_user_action_prefix": "/admin/chats/",
         "profile_href_prefix": "/admin/chats/",
         "mark_unread_prefix": "/admin/chats/",
         "move_folder_prefix": "/admin/chats/",
@@ -4156,10 +4222,13 @@ async def app_chats_page(
             "settings_href": settings_href,
             "logout_action": "/app/logout",
             "show_rename_user": True,
+            "show_block_user": True,
             "send_action_prefix": "/app/chats/",
             "send_action_suffix": endpoint_scope_suffix,
             "delete_user_action_prefix": "/app/chats/",
             "rename_user_action_prefix": "/app/chats/",
+            "block_user_action_prefix": "/app/chats/",
+            "unblock_user_action_prefix": "/app/chats/",
             "profile_href_prefix": "/app/chats/",
             "mark_unread_prefix": "/app/chats/",
             "move_folder_prefix": "/app/chats/",
@@ -5975,6 +6044,92 @@ def app_chats_rename_user(
     )
 
 
+@app.post("/app/chats/{conversation_id}/block-user", response_class=RedirectResponse)
+def app_chats_block_conversation_customer(
+    request: Request,
+    conversation_id: int,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    workspace_id: int | None = None,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    blocked = block_conversation_customer(
+        db,
+        conversation_id=conversation_id,
+        actor_user_id=int(current_user.id),
+        workspace_id=workspace_id,
+    )
+    suffix = "1" if blocked else "0"
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
+    return RedirectResponse(
+        url=(
+            f"/app/chats?conversation_id={conversation_id}"
+            f"&q={quote_plus(q.strip())}&view={view}&blocked={suffix}{folder_qs}{workspace_qs}"
+        ),
+        status_code=302,
+    )
+
+
+@app.post("/app/chats/{conversation_id}/unblock-user", response_class=RedirectResponse)
+def app_chats_unblock_conversation_customer(
+    request: Request,
+    conversation_id: int,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    workspace_id: int | None = None,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    unblocked = unblock_conversation_customer(
+        db,
+        conversation_id=conversation_id,
+        actor_user_id=int(current_user.id),
+        workspace_id=workspace_id,
+    )
+    suffix = "1" if unblocked else "0"
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
+    return RedirectResponse(
+        url=(
+            f"/app/chats?conversation_id={conversation_id}"
+            f"&q={quote_plus(q.strip())}&view={view}&unblocked={suffix}{folder_qs}{workspace_qs}"
+        ),
+        status_code=302,
+    )
+
+
 def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
     sent_flag = request.query_params.get("sent")
     scheduled_flag = request.query_params.get("scheduled")
@@ -6021,6 +6176,14 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
         op_message = "Чат перемещен в папку"
     if request.query_params.get("foldered") == "0":
         op_error = "Не удалось переместить чат в папку"
+    if request.query_params.get("blocked") == "1":
+        op_message = "Пользователь заблокирован"
+    if request.query_params.get("blocked") == "0":
+        op_error = "Не удалось заблокировать пользователя"
+    if request.query_params.get("unblocked") == "1":
+        op_message = "Пользователь разблокирован"
+    if request.query_params.get("unblocked") == "0":
+        op_error = "Не удалось разблокировать пользователя"
     return op_message, op_error
 
 
@@ -6033,6 +6196,7 @@ def _thread_summary_dict(item: object) -> dict[str, object]:
         "ticket_no": getattr(item, "ticket_no", None),
         "customer_label": str(getattr(item, "customer_label", "") or ""),
         "is_unread": bool(getattr(item, "is_unread", False)),
+        "is_blocked": bool(getattr(item, "is_blocked", False)),
         "is_new": str(getattr(item, "status", "") or "").strip().lower() == "new",
         "has_delivery_errors": bool(getattr(item, "has_delivery_errors", False)),
         "last_message_preview": str(getattr(item, "last_message_preview", "") or ""),
@@ -6634,6 +6798,19 @@ async def max_webhook(
             settings=settings_db,
             event=event,
         )
+
+    # Hard stop for blocked customers: do not deliver to operators, only return notice to customer.
+    if is_conversation_customer_blocked(
+        db,
+        chat_id=event.chat_id,
+        customer_id=sender_id,
+        workspace_id=workspace_id,
+    ):
+        await max_client.send_text(
+            chat_id=event.chat_id,
+            text="К сожалению, вы не можете писать в данный чат.",
+        )
+        return {"ok": True, "flow": "blocked_customer"}
 
     return await handle_customer_event(
         db=db,

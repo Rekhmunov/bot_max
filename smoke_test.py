@@ -8,7 +8,17 @@ from app.database import SessionLocal, init_db
 from app.main import app
 from app.manager_bridge import DEFAULT_TEMPLATES
 from app.services import get_or_create_settings
-from app.models import ChatFolder, Conversation, QuickReply, ServiceUser, Subscription, UserSession, WebhookEvent, Workspace
+from app.models import (
+    ChatFolder,
+    Conversation,
+    ConversationMeta,
+    QuickReply,
+    ServiceUser,
+    Subscription,
+    UserSession,
+    WebhookEvent,
+    Workspace,
+)
 
 
 def run() -> None:
@@ -1430,6 +1440,83 @@ def run() -> None:
         assert "Активных чатов:" not in admin_settings_page.text
         assert "Новых (непрочитанных) чатов:" not in admin_settings_page.text
         assert "Чатов с ошибками доставки:" not in admin_settings_page.text
+
+        # Blocking/unblocking customer should move chat to blocked folder and stop delivery.
+        with SessionLocal() as db:
+            conv_for_block = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == 1, Conversation.chat_id == chat_id)
+                .first()
+            )
+            assert conv_for_block is not None
+            conv_for_block_id = int(conv_for_block.id)
+
+        block_user = client.post(
+            f"/admin/chats/{conv_for_block_id}/block-user",
+            data={"q": "", "view": "chat"},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert block_user.status_code in (302, 303)
+        assert "blocked=1" in block_user.headers.get("location", "")
+        with SessionLocal() as db:
+            blocked_folder = (
+                db.query(ChatFolder)
+                .filter(ChatFolder.workspace_id == 1, ChatFolder.name == "Заблокированные пользователи")
+                .first()
+            )
+            assert blocked_folder is not None
+            blocked_conv = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == 1, Conversation.id == conv_for_block_id)
+                .first()
+            )
+            blocked_meta = (
+                db.query(ConversationMeta)
+                .filter(
+                    ConversationMeta.workspace_id == 1,
+                    ConversationMeta.conversation_id == conv_for_block_id,
+                )
+                .first()
+            )
+            assert blocked_conv is not None
+            assert blocked_meta is not None
+            assert blocked_conv.folder_id == blocked_folder.id
+            assert bool(blocked_meta.is_blocked) is True
+
+        blocked_message = client.post(
+            "/webhook/max/ws1key",
+            json={"update_type": "message_created", "chat_id": chat_id, "sender_id": "buyer_1", "text": "blocked ping"},
+        )
+        assert blocked_message.status_code == 200
+        assert blocked_message.json().get("flow") == "blocked_customer"
+
+        unblock_user = client.post(
+            f"/admin/chats/{conv_for_block_id}/unblock-user",
+            data={"q": "", "view": "chat"},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert unblock_user.status_code in (302, 303)
+        assert "unblocked=1" in unblock_user.headers.get("location", "")
+        with SessionLocal() as db:
+            unblocked_meta = (
+                db.query(ConversationMeta)
+                .filter(
+                    ConversationMeta.workspace_id == 1,
+                    ConversationMeta.conversation_id == conv_for_block_id,
+                )
+                .first()
+            )
+            assert unblocked_meta is not None
+            assert bool(unblocked_meta.is_blocked) is False
+
+        unblocked_message = client.post(
+            "/webhook/max/ws1key",
+            json={"update_type": "message_created", "chat_id": chat_id, "sender_id": "buyer_1", "text": "unblocked ping"},
+        )
+        assert unblocked_message.status_code == 200
+        assert unblocked_message.json().get("flow") == "queued_for_mini_app"
 
         delete_user = client.post(
             f"/admin/chats/{conversation_id}/delete-user",

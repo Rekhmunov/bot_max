@@ -446,6 +446,11 @@
       text-overflow: ellipsis;
       padding-right: 46px;
     }
+    .chat-sub-blocked {
+      color: #9c2f2f;
+      font-weight: 700;
+      white-space: normal;
+    }
     .danger-btn {
       border: 0;
       border-radius: 9px;
@@ -1015,6 +1020,18 @@
       font-weight: 700;
       cursor: pointer;
     }
+    .user-pop-submit.danger {
+      background: var(--danger);
+    }
+    .user-pop-submit.unblock {
+      background: var(--ok);
+    }
+    .user-pop-submit.warn {
+      background: #d97706;
+    }
+    .user-pop-submit.ok {
+      background: #15803d;
+    }
 
     .folder-main {
       min-width: 0;
@@ -1198,11 +1215,14 @@
   {% set show_profile_links = ui.show_profile_links if ui is defined and ui.show_profile_links is not none else true %}
   {% set show_delete_user = ui.show_delete_user if ui is defined and ui.show_delete_user is not none else true %}
   {% set show_rename_user = ui.show_rename_user if ui is defined and ui.show_rename_user is not none else true %}
+  {% set show_block_user = ui.show_block_user if ui is defined and ui.show_block_user is not none else false %}
   {% set allow_message_edit_actions = ui.allow_message_edit_actions if ui is defined and ui.allow_message_edit_actions is not none else true %}
   {% set send_action_prefix = ui.send_action_prefix if ui is defined and ui.send_action_prefix else "/admin/chats/" %}
   {% set send_action_suffix = ui.send_action_suffix if ui is defined and ui.send_action_suffix else "" %}
   {% set delete_user_action_prefix = ui.delete_user_action_prefix if ui is defined and ui.delete_user_action_prefix else "/admin/chats/" %}
   {% set rename_user_action_prefix = ui.rename_user_action_prefix if ui is defined and ui.rename_user_action_prefix else "/admin/chats/" %}
+  {% set block_user_action_prefix = ui.block_user_action_prefix if ui is defined and ui.block_user_action_prefix else "/admin/chats/" %}
+  {% set unblock_user_action_prefix = ui.unblock_user_action_prefix if ui is defined and ui.unblock_user_action_prefix else "/admin/chats/" %}
   {% set profile_href_prefix = ui.profile_href_prefix if ui is defined and ui.profile_href_prefix else "/admin/chats/" %}
   {% set mark_unread_prefix = ui.mark_unread_prefix if ui is defined and ui.mark_unread_prefix else "/admin/chats/" %}
   {% set move_folder_prefix = ui.move_folder_prefix if ui is defined and ui.move_folder_prefix else "/admin/chats/" %}
@@ -1353,8 +1373,13 @@
             <div class="chat-sub">
               customer_account_id: {{ active_thread.customer_account_id or "—" }} | phone_verified: {{ "да" if active_thread.phone_verified else "нет" }}
             </div>
+            {% if active_thread and active_thread.is_blocked %}
+              <div class="chat-sub chat-sub-blocked">
+                Пользователь заблокирован
+              </div>
+            {% endif %}
           </div>
-          {% if show_delete_user or show_rename_user %}
+          {% if show_delete_user or show_rename_user or show_block_user %}
             <button
               type="button"
               id="header-menu-btn"
@@ -1508,7 +1533,7 @@
     </div>
   {% endif %}
 
-  {% if active_thread and (show_delete_user or show_rename_user) %}
+  {% if active_thread and (show_delete_user or show_rename_user or show_block_user) %}
     <div class="context-menu header-context-menu" id="header-context-menu"></div>
 
     {% if show_delete_user %}
@@ -1529,6 +1554,54 @@
             <div class="user-pop-actions">
               <button type="button" class="user-pop-cancel" data-cancel-delete-user>Отмена</button>
               <button type="submit" class="user-pop-submit">Удалить</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if show_block_user and not active_thread.is_blocked %}
+      <div class="user-pop" id="block-user-popup">
+        <div class="user-pop-card">
+          <h3>Заблокировать пользователя?</h3>
+          <div class="thread-meta">После блокировки новые сообщения от этого покупателя не попадут в чат менеджеров и админа.</div>
+          <form
+            method="post"
+            action="{{ block_user_action_prefix }}{{ active_thread.conversation_id }}/block-user{{ endpoint_query_suffix }}"
+            data-soft-nav
+          >
+            <input type="hidden" name="q" value="{{ query }}" />
+            <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
+            {% if folder_filter is not none %}
+              <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
+            {% endif %}
+            <div class="user-pop-actions">
+              <button type="button" class="user-pop-cancel" data-cancel-block-user>Отмена</button>
+              <button type="submit" class="user-pop-submit warn">Заблокировать</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if show_block_user and active_thread.is_blocked %}
+      <div class="user-pop" id="unblock-user-popup">
+        <div class="user-pop-card">
+          <h3>Разблокировать пользователя?</h3>
+          <div class="thread-meta">Покупатель снова сможет писать в чат и сообщения будут приходить менеджерам и админу.</div>
+          <form
+            method="post"
+            action="{{ unblock_user_action_prefix }}{{ active_thread.conversation_id }}/unblock-user{{ endpoint_query_suffix }}"
+            data-soft-nav
+          >
+            <input type="hidden" name="q" value="{{ query }}" />
+            <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
+            {% if folder_filter is not none %}
+              <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
+            {% endif %}
+            <div class="user-pop-actions">
+              <button type="button" class="user-pop-cancel" data-cancel-unblock-user>Отмена</button>
+              <button type="submit" class="user-pop-submit ok">Разблокировать</button>
             </div>
           </form>
         </div>
@@ -1887,6 +1960,8 @@
         "renamed",
         "unread",
         "foldered",
+        "blocked",
+        "unblocked",
       ]);
 
       const stripChatOperationFlags = () => {
@@ -2274,8 +2349,12 @@
 
       const showDeleteUser = {{ "true" if show_delete_user else "false" }};
       const showRenameUser = {{ "true" if show_rename_user else "false" }};
+      const showBlockUser = {{ "true" if show_block_user else "false" }};
+      const isBlockedThread = {{ "true" if active_thread and active_thread.is_blocked else "false" }};
       const deletePopup = document.getElementById("delete-user-popup");
       const renamePopup = document.getElementById("rename-user-popup");
+      const blockPopup = document.getElementById("block-user-popup");
+      const unblockPopup = document.getElementById("unblock-user-popup");
       const renameInput = document.getElementById("rename-user-input");
 
       const placeFixedMenu = (menuEl, x, y) => {
@@ -2304,6 +2383,22 @@
       const closeDeletePopup = () => {
         if (!deletePopup) return;
         deletePopup.style.display = "none";
+      };
+      const openBlockPopup = () => {
+        if (!blockPopup) return;
+        blockPopup.style.display = "flex";
+      };
+      const closeBlockPopup = () => {
+        if (!blockPopup) return;
+        blockPopup.style.display = "none";
+      };
+      const openUnblockPopup = () => {
+        if (!unblockPopup) return;
+        unblockPopup.style.display = "flex";
+      };
+      const closeUnblockPopup = () => {
+        if (!unblockPopup) return;
+        unblockPopup.style.display = "none";
       };
       const openRenamePopup = () => {
         if (!renamePopup) return;
@@ -2334,6 +2429,16 @@
           deleteBtn.setAttribute("data-open-delete-user", "1");
           headerMenu.appendChild(deleteBtn);
         }
+        if (showBlockUser) {
+          const blockBtn = document.createElement("button");
+          blockBtn.type = "button";
+          blockBtn.textContent = isBlockedThread ? "Разблокировать" : "Заблокировать";
+          blockBtn.setAttribute(
+            isBlockedThread ? "data-open-unblock-user" : "data-open-block-user",
+            "1"
+          );
+          headerMenu.appendChild(blockBtn);
+        }
         const rect = headerMenuBtn.getBoundingClientRect();
         placeFixedMenu(headerMenu, rect.right - 8, rect.bottom + 6);
       };
@@ -2359,6 +2464,16 @@
         if (target.closest("[data-open-rename-user]")) {
           hideHeaderMenu();
           openRenamePopup();
+          return;
+        }
+        if (target.closest("[data-open-block-user]")) {
+          hideHeaderMenu();
+          openBlockPopup();
+          return;
+        }
+        if (target.closest("[data-open-unblock-user]")) {
+          hideHeaderMenu();
+          openUnblockPopup();
         }
       });
 
@@ -2368,11 +2483,23 @@
       document.querySelectorAll("[data-cancel-rename-user]").forEach((btn) => {
         btn.addEventListener("click", closeRenamePopup);
       });
+      document.querySelectorAll("[data-cancel-block-user]").forEach((btn) => {
+        btn.addEventListener("click", closeBlockPopup);
+      });
+      document.querySelectorAll("[data-cancel-unblock-user]").forEach((btn) => {
+        btn.addEventListener("click", closeUnblockPopup);
+      });
       deletePopup?.addEventListener("click", (e) => {
         if (e.target === deletePopup) closeDeletePopup();
       });
       renamePopup?.addEventListener("click", (e) => {
         if (e.target === renamePopup) closeRenamePopup();
+      });
+      blockPopup?.addEventListener("click", (e) => {
+        if (e.target === blockPopup) closeBlockPopup();
+      });
+      unblockPopup?.addEventListener("click", (e) => {
+        if (e.target === unblockPopup) closeUnblockPopup();
       });
 
       document.addEventListener("click", (e) => {

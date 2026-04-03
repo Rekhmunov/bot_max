@@ -285,6 +285,10 @@ class ConversationMeta(Base):
     intro_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     phone_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     unread_errors_count: Mapped[int] = mapped_column(Integer, default=0)
+    is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    blocked_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    blocked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    blocked_prev_folder_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class TenantAlert(Base):

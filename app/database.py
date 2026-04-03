@@ -104,6 +104,22 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE conversation_meta ADD COLUMN assigned_manager_id VARCHAR(255)")
                 )
+            if "is_blocked" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN is_blocked INTEGER DEFAULT 0")
+                )
+            if "blocked_at" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN blocked_at DATETIME")
+                )
+            if "blocked_by_user_id" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN blocked_by_user_id INTEGER")
+                )
+            if "blocked_prev_folder_id" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN blocked_prev_folder_id INTEGER")
+                )
 
         if "conversations" in table_names:
             conversation_columns = {col["name"] for col in inspector.get_columns("conversations")}

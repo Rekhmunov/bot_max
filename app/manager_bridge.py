@@ -68,6 +68,7 @@ DEFAULT_TEMPLATES: dict[str, str] = {
 }
 
 OUTBOX_RETRY_BACKOFF_SECONDS = (5, 20, 60, 300)
+BLOCKED_FOLDER_NAME = "Заблокированные пользователи"
 
 
 def _workspace_client(db: Session, *, workspace_id: int) -> MaxClient:
@@ -111,6 +112,7 @@ class ChatThreadItem:
     last_message_preview: str
     has_delivery_errors: bool
     is_unread: bool
+    is_blocked: bool
     last_activity_id: int
     folder_id: int | None
     folder_name: str
@@ -1505,6 +1507,207 @@ async def _send_contact_request_prompt(
     return {"success": False, **result}
 
 
+async def _send_start_fallback_prompt(
+    db: Session,
+    *,
+    conversation_id: int,
+    client: MaxClient,
+    chat_id: str,
+    user_id: str | None,
+    text: str,
+) -> dict:
+    attachments = [
+        {
+            "type": "inline_keyboard",
+            "payload": {
+                "buttons": [
+                    [
+                        {
+                            "type": "callback",
+                            "text": "Start / Начать",
+                            "payload": "customer:start_fallback",
+                        }
+                    ]
+                ]
+            },
+        }
+    ]
+    msg = _store_chat_message(
+        db,
+        conversation_id=conversation_id,
+        direction="bot",
+        source="bot_system",
+        text=text,
+        delivery_state="queued",
+        delivery_error="",
+        delivery_retry_count=0,
+        delivery_next_retry_at=_as_naive_utc(_utc_now()),
+    )
+    item = _enqueue_outbox_message(
+        db,
+        conversation_id=conversation_id,
+        chat_message_id=msg.id,
+        target_chat_id=chat_id,
+        target_user_id=user_id,
+        operation="send_message",
+        payload={"text": text, "attachments": attachments, "format": "markdown"},
+    )
+    ok, _, result = await _dispatch_outbox(db, client=client, item=item)
+    if ok:
+        return result
+    return {"success": False, **result}
+
+
+def _ensure_blocked_folder(
+    db: Session,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+) -> ChatFolder:
+    return create_chat_folder(db, folder_name=BLOCKED_FOLDER_NAME, workspace_id=workspace_id)
+
+
+def block_conversation(
+    db: Session,
+    conversation_id: int,
+    *,
+    actor_user_id: int | None = None,
+    workspace_id: int | None = None,
+) -> bool:
+    conversation_query = db.query(Conversation).filter(Conversation.id == conversation_id)
+    if workspace_id is not None:
+        conversation_query = conversation_query.filter(Conversation.workspace_id == workspace_id)
+    conversation = conversation_query.first()
+    if conversation is None:
+        return False
+    ws_id = int(conversation.workspace_id or DEFAULT_WORKSPACE_ID)
+    meta_query = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id)
+    if workspace_id is not None:
+        meta_query = meta_query.filter(ConversationMeta.workspace_id == workspace_id)
+    meta = meta_query.first()
+    if meta is None:
+        meta = _get_or_create_meta(db, conversation_id=conversation_id, workspace_id=ws_id)
+    if bool(meta.is_blocked):
+        return True
+    blocked_folder = _ensure_blocked_folder(db, workspace_id=ws_id)
+    previous_folder_id = conversation.folder_id
+    conversation.folder_id = blocked_folder.id
+    meta.is_blocked = True
+    meta.blocked_at = _as_naive_utc(_utc_now())
+    meta.blocked_by_user_id = actor_user_id
+    meta.blocked_prev_folder_id = previous_folder_id
+    db.add(conversation)
+    db.add(meta)
+    db.commit()
+    return True
+
+
+def unblock_conversation(
+    db: Session,
+    conversation_id: int,
+    *,
+    workspace_id: int | None = None,
+) -> bool:
+    conversation_query = db.query(Conversation).filter(Conversation.id == conversation_id)
+    if workspace_id is not None:
+        conversation_query = conversation_query.filter(Conversation.workspace_id == workspace_id)
+    conversation = conversation_query.first()
+    if conversation is None:
+        return False
+    ws_id = int(conversation.workspace_id or DEFAULT_WORKSPACE_ID)
+    meta_query = db.query(ConversationMeta).filter(ConversationMeta.conversation_id == conversation_id)
+    if workspace_id is not None:
+        meta_query = meta_query.filter(ConversationMeta.workspace_id == workspace_id)
+    meta = meta_query.first()
+    if meta is None:
+        meta = _get_or_create_meta(db, conversation_id=conversation_id, workspace_id=ws_id)
+    if not bool(meta.is_blocked):
+        return True
+    restore_folder_id = meta.blocked_prev_folder_id
+    if restore_folder_id is not None:
+        folder_exists = (
+            db.query(ChatFolder.id)
+            .filter(
+                ChatFolder.workspace_id == ws_id,
+                ChatFolder.id == restore_folder_id,
+            )
+            .first()
+        )
+        conversation.folder_id = restore_folder_id if folder_exists else None
+    else:
+        conversation.folder_id = None
+    meta.is_blocked = False
+    meta.blocked_at = None
+    meta.blocked_by_user_id = None
+    meta.blocked_prev_folder_id = None
+    db.add(conversation)
+    db.add(meta)
+    db.commit()
+    return True
+
+
+def block_conversation_customer(
+    db: Session,
+    conversation_id: int,
+    *,
+    actor_user_id: int | None = None,
+    workspace_id: int | None = None,
+) -> bool:
+    return block_conversation(
+        db,
+        conversation_id=conversation_id,
+        actor_user_id=actor_user_id,
+        workspace_id=workspace_id,
+    )
+
+
+def unblock_conversation_customer(
+    db: Session,
+    conversation_id: int,
+    *,
+    actor_user_id: int | None = None,  # kept for API symmetry/audit extensions
+    workspace_id: int | None = None,
+) -> bool:
+    _ = actor_user_id
+    return unblock_conversation(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+    )
+
+
+def is_conversation_customer_blocked(
+    db: Session,
+    *,
+    chat_id: str,
+    customer_id: str,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+) -> bool:
+    chat_value = str(chat_id or "").strip()
+    customer_value = str(customer_id or "").strip()
+    if not chat_value or not customer_value:
+        return False
+    conversation = (
+        db.query(Conversation)
+        .filter(
+            Conversation.workspace_id == workspace_id,
+            Conversation.chat_id == chat_value,
+            Conversation.customer_account_id == customer_value,
+        )
+        .first()
+    )
+    if conversation is None:
+        return False
+    meta = (
+        db.query(ConversationMeta)
+        .filter(
+            ConversationMeta.workspace_id == workspace_id,
+            ConversationMeta.conversation_id == conversation.id,
+        )
+        .first()
+    )
+    return bool(meta.is_blocked) if meta else False
+
+
 async def handle_customer_event(
     db: Session,
     client: MaxClient,
@@ -1580,23 +1783,35 @@ async def handle_customer_event(
         )
 
     update_type = (event.update_type or "").strip().lower()
-    is_bot_started = update_type in {"bot_started", "bot_start"}
+    is_fallback_start_callback = (str(event.callback_payload or "").strip().lower() == "customer:start_fallback")
+    is_bot_started = update_type in {"bot_started", "bot_start"} or is_fallback_start_callback
     is_message_event = update_type in {"", "message_created", "message_callback", "new_message"}
+
+    if bool(meta.is_blocked):
+        await queue_only_send_text(
+            db,
+            conversation_id=conversation.id,
+            target_chat_id=event.chat_id,
+            target_user_id=event.sender_id,
+            text="К сожалению, вы не можете писать в данный чат.",
+            source="bot_system",
+            text_format="markdown",
+        )
+        await process_outbox_queue(db, limit=20)
+        return {"ok": True, "flow": "blocked_customer"}
 
     # Message before Start (custom behavior for message_created before start)
     if not meta.start_prompt_sent and is_message_event and not is_bot_started and not event.contact_phone:
         prestart_text = get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id)
         if prestart_text:
-            await queue_only_send_text(
+            await _send_start_fallback_prompt(
                 db,
                 conversation_id=conversation.id,
-                target_chat_id=event.chat_id,
-                target_user_id=event.sender_id,
+                client=client,
+                chat_id=event.chat_id,
+                user_id=event.sender_id,
                 text=prestart_text,
-                source="bot_system",
-                text_format="markdown",
             )
-            await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "prestart"}
 
     # Start event should run onboarding only once for active dialog.
@@ -2018,6 +2233,7 @@ def load_chat_threads(
         status = meta.status if meta else "new"
         # Show unread highlight when there are unread messages OR manual reminder mark.
         is_unread = (bool(meta.is_unread) or bool(meta.manual_unread_mark)) if meta else True
+        is_blocked = bool(meta.is_blocked) if meta else False
         phone_verified = bool(meta.phone_verified) if meta else False
         ticket_no = meta.ticket_no if meta else None
         last_activity_id = last_msg.id if last_msg else conv.id
@@ -2058,6 +2274,7 @@ def load_chat_threads(
                 last_message_preview=preview,
                 has_delivery_errors=has_delivery_errors,
                 is_unread=is_unread,
+                is_blocked=is_blocked,
                 last_activity_id=last_activity_id,
                 folder_id=conv.folder_id,
                 folder_name=(
