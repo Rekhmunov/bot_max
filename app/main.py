@@ -2972,6 +2972,7 @@ def _admin_chats_ui() -> dict[str, str | bool]:
         "page_title": "Max Admin Chats",
         "page_path": "/admin/chats",
         "page_query_prefix": "/admin/chats?",
+        "updates_endpoint": "/admin/chats/updates",
         "access_token": "",
         "create_folder_action": "/admin/chats/folders",
         "show_admin_nav": True,
@@ -3001,6 +3002,7 @@ def _manager_mini_ui(token: str) -> dict[str, str | bool]:
         "page_title": "Max Manager Mini App",
         "page_path": "/mini/manager",
         "page_query_prefix": f"/mini/manager?token={token_value}&",
+        "updates_endpoint": "/mini/manager/chats/updates",
         "access_token": token,
         "create_folder_action": f"/mini/manager/chats/folders{query_suffix}",
         "show_admin_nav": True,
@@ -3817,6 +3819,7 @@ async def app_chats_page(
             "page_title": page_title,
             "page_path": "/app/chats",
             "page_query_prefix": query_scope_prefix,
+            "updates_endpoint": "/app/chats/updates",
             "create_folder_action": create_folder_action,
             "show_admin_nav": True,
             "settings_href": settings_href,
@@ -5677,6 +5680,188 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
     return op_message, op_error
 
 
+def _thread_summary_dict(item: object) -> dict[str, object]:
+    conversation_id = int(getattr(item, "conversation_id", 0) or 0)
+    return {
+        "conversation_id": conversation_id,
+        "chat_id": str(getattr(item, "chat_id", "") or ""),
+        "ticket_no": getattr(item, "ticket_no", None),
+        "customer_label": str(getattr(item, "customer_label", "") or ""),
+        "is_unread": bool(getattr(item, "is_unread", False)),
+        "is_new": str(getattr(item, "status", "") or "").strip().lower() == "new",
+        "has_delivery_errors": bool(getattr(item, "has_delivery_errors", False)),
+        "last_message_preview": str(getattr(item, "last_message_preview", "") or ""),
+        "folder_id": getattr(item, "folder_id", None),
+        "folder_name": str(getattr(item, "folder_name", "") or ""),
+    }
+
+
+def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
+    text_value = str(item.text or "")
+    return {
+        "id": int(item.id),
+        "direction": str(item.direction or ""),
+        "source": str(item.source or ""),
+        "text": text_value,
+        "image_url": str(item.image_url or ""),
+        "delivery_state": str(item.delivery_state or "sent"),
+        "delivery_error": str(item.delivery_error or ""),
+        "max_message_mid": str(item.max_message_mid or ""),
+    }
+
+
+def _build_chat_updates_payload(
+    *,
+    db: Session,
+    workspace_id: int,
+    query: str,
+    folder_id: int | None,
+    conversation_id: int | None,
+    mark_read: bool,
+    last_message_id: int | None = None,
+    threads_signature: str = "",
+) -> dict[str, object]:
+    threads = load_chat_threads(db, query=query, workspace_id=workspace_id)
+    if folder_id is not None:
+        if folder_id > 0:
+            threads = [item for item in threads if item.folder_id == folder_id]
+        else:
+            threads = [item for item in threads if item.folder_id is None]
+
+    has_explicit_conversation = conversation_id is not None
+    active_thread = None
+    if conversation_id is not None:
+        for item in threads:
+            if int(item.conversation_id) == int(conversation_id):
+                active_thread = item
+                break
+    if active_thread is None and threads and not has_explicit_conversation:
+        active_thread = threads[0]
+
+    messages: list[ChatMessage] = []
+    if active_thread is not None:
+        if mark_read:
+            mark_thread_read(db, int(active_thread.conversation_id), workspace_id=workspace_id)
+        messages = load_chat_messages(
+            db,
+            int(active_thread.conversation_id),
+            workspace_id=workspace_id,
+        )
+
+    threads_signature_source = "|".join(
+        f"{item.conversation_id}:{item.last_activity_id}:{1 if item.is_unread else 0}"
+        for item in threads
+    )
+    threads_signature = hashlib.sha256(threads_signature_source.encode("utf-8")).hexdigest()[:16]
+
+    active_last_message_id = int(messages[-1].id) if messages else 0
+    previous_last_message_id = int(last_message_id or 0)
+    previous_threads_signature = str(threads_signature or "").strip()
+    messages_changed = False
+    threads_changed = False
+    if previous_last_message_id > 0:
+        messages_changed = active_last_message_id != previous_last_message_id
+    if previous_threads_signature:
+        threads_changed = threads_signature != previous_threads_signature
+
+    return {
+        "active_conversation_id": int(active_thread.conversation_id) if active_thread is not None else 0,
+        "active_last_message_id": active_last_message_id,
+        "threads_signature": threads_signature,
+        "threads_count": len(threads),
+        "messages_changed": messages_changed,
+        "threads_changed": threads_changed,
+        "threads": [_thread_summary_dict(item) for item in threads],
+        "messages": [_message_summary_dict(item) for item in messages],
+    }
+
+
+@app.get("/admin/chats/updates", response_class=JSONResponse)
+def admin_chats_updates(
+    conversation_id: int | None = None,
+    q: str = "",
+    folder_id: int | None = None,
+    last_message_id: int = 0,
+    threads_sig: str = "",
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    payload = _build_chat_updates_payload(
+        db=db,
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        query=q,
+        folder_id=folder_id,
+        conversation_id=conversation_id,
+        mark_read=conversation_id is not None,
+        last_message_id=last_message_id,
+        threads_signature=threads_sig,
+    )
+    return JSONResponse({"ok": True, **payload}, status_code=200)
+
+
+@app.get("/app/chats/updates", response_class=JSONResponse)
+def app_chats_updates(
+    request: Request,
+    conversation_id: int | None = None,
+    q: str = "",
+    folder_id: int | None = None,
+    last_message_id: int = 0,
+    threads_sig: str = "",
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    if current_user.role == "superadmin":
+        raise HTTPException(status_code=403, detail="Для superadmin доступна только панель /app/superadmin")
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_view",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 6),
+    )
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    payload = _build_chat_updates_payload(
+        db=db,
+        workspace_id=workspace_id,
+        query=q,
+        folder_id=folder_id,
+        conversation_id=conversation_id,
+        mark_read=conversation_id is not None,
+        last_message_id=last_message_id,
+        threads_signature=threads_sig,
+    )
+    return JSONResponse({"ok": True, **payload}, status_code=200)
+
+
+@app.get("/mini/manager/chats/updates", response_class=JSONResponse)
+def manager_mini_updates(
+    request: Request,
+    token: str,
+    conversation_id: int | None = None,
+    q: str = "",
+    folder_id: int | None = None,
+    last_message_id: int = 0,
+    threads_sig: str = "",
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="mini_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 6),
+    )
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    payload = _build_chat_updates_payload(
+        db=db,
+        workspace_id=workspace_id,
+        query=q,
+        folder_id=folder_id,
+        conversation_id=conversation_id,
+        mark_read=conversation_id is not None,
+        last_message_id=last_message_id,
+        threads_signature=threads_sig,
+    )
+    return JSONResponse({"ok": True, **payload}, status_code=200)
+
+
 async def _render_chat_workspace(
     *,
     request: Request,
@@ -5715,6 +5900,17 @@ async def _render_chat_workspace(
         mark_thread_read(db, active_thread.conversation_id, workspace_id=workspace_id)
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
     mobile_chat_view = view.strip().lower() == "chat"
+    threads_signature_source = "|".join(
+        f"{item.conversation_id}:{item.last_activity_id}:{1 if item.is_unread else 0}"
+        for item in threads
+    )
+    threads_signature = hashlib.sha256(threads_signature_source.encode("utf-8")).hexdigest()[:16]
+    chat_state = {
+        "active_conversation_id": (active_thread.conversation_id if active_thread else 0),
+        "active_last_message_id": (messages[-1].id if messages else 0),
+        "threads_signature": threads_signature,
+        "threads_count": len(threads),
+    }
 
     context: dict = {
         "request": request,
@@ -5735,6 +5931,7 @@ async def _render_chat_workspace(
             for folder in list_chat_folders(db, workspace_id=workspace_id)
         ],
         "ui": ui,
+        "chat_state": chat_state,
     }
     if include_removed:
         context["removed"] = request.query_params.get("removed")

@@ -1194,6 +1194,7 @@
   {% set move_folder_prefix = ui.move_folder_prefix if ui is defined and ui.move_folder_prefix else "/admin/chats/" %}
   {% set create_folder_endpoint = ui.create_folder_endpoint if ui is defined and ui.create_folder_endpoint else "/admin/chats/folders" %}
   {% set delete_message_prefix = ui.delete_message_prefix if ui is defined and ui.delete_message_prefix else "/admin/chats/" %}
+  {% set updates_endpoint = ui.updates_endpoint if ui is defined and ui.updates_endpoint else "" %}
   {% set endpoint_query_suffix = ui.endpoint_query_suffix if ui is defined and ui.endpoint_query_suffix else "" %}
   <div class="app">
     <aside class="chat-list {% if active_thread and mobile_chat_view %}hidden-mobile{% endif %}" id="chat-list-screen">
@@ -2481,6 +2482,86 @@
       closeButtons.forEach((btn) => btn.addEventListener("click", closePopup));
       popup.addEventListener("click", (e) => {
         if (e.target === popup) closePopup();
+      });
+    })();
+
+    (() => {
+      const updatesEndpoint = "{{ updates_endpoint }}";
+      if (!updatesEndpoint) return;
+
+      const activeConversationId = {{ active_thread.conversation_id if active_thread else "null" }};
+      const queryValue = "{{ query }}";
+      const viewValue = "{{ 'chat' if mobile_chat_view else '' }}";
+      const folderFilter = {{ folder_filter if folder_filter is not none else "null" }};
+      const endpointQuerySuffix = "{{ endpoint_query_suffix }}";
+      const initialState = {{ chat_state | tojson if chat_state is defined else "{}" }};
+      let currentLastMessageId = Number(initialState.active_last_message_id || 0);
+      let currentThreadsSignature = String(initialState.threads_signature || "");
+      let inFlight = false;
+      const pollMs = 2800;
+
+      const buildUpdatesUrl = () => {
+        const qs = new URLSearchParams();
+        if (activeConversationId) qs.set("conversation_id", String(activeConversationId));
+        if (queryValue) qs.set("q", String(queryValue));
+        if (viewValue) qs.set("view", String(viewValue));
+        if (folderFilter !== null && folderFilter !== undefined) qs.set("folder_id", String(folderFilter));
+        if (currentLastMessageId > 0) qs.set("last_message_id", String(currentLastMessageId));
+        if (currentThreadsSignature) qs.set("threads_sig", currentThreadsSignature);
+        const scopeSuffix = String(endpointQuerySuffix || "").replace("?", "");
+        if (scopeSuffix) {
+          const scoped = new URLSearchParams(scopeSuffix);
+          scoped.forEach((value, key) => qs.set(key, value));
+        }
+        return `${updatesEndpoint}?${qs.toString()}`;
+      };
+
+      const triggerRefresh = async () => {
+        if (inFlight) return;
+        inFlight = true;
+        try {
+          const response = await fetch(buildUpdatesUrl(), {
+            method: "GET",
+            credentials: "same-origin",
+            cache: "no-store",
+          });
+          if (!response.ok) return;
+          const payload = await response.json().catch(() => null);
+          if (!payload || payload.ok !== true) return;
+
+          const nextLast = Number(payload.active_last_message_id || 0);
+          const nextSig = String(payload.threads_signature || "");
+          const hasMessageChanges = Boolean(payload.messages_changed);
+          const hasThreadsChanges = Boolean(payload.threads_changed);
+
+          if (nextLast > currentLastMessageId) {
+            currentLastMessageId = nextLast;
+          }
+          if (nextSig) {
+            currentThreadsSignature = nextSig;
+          }
+
+          if (hasMessageChanges || hasThreadsChanges) {
+            if (window.__chatSoftVisit) {
+              await window.__chatSoftVisit(window.location.href, { replaceHistory: true });
+            } else {
+              window.location.reload();
+            }
+          }
+        } catch (_) {
+          // Keep silent; next tick will retry.
+        } finally {
+          inFlight = false;
+        }
+      };
+
+      const triggerRefreshSafe = () => {
+        triggerRefresh().catch(() => {});
+      };
+      const timer = window.setInterval(triggerRefreshSafe, pollMs);
+      window.setTimeout(triggerRefreshSafe, 900);
+      window.addEventListener("beforeunload", () => {
+        window.clearInterval(timer);
       });
     })();
   </script>
