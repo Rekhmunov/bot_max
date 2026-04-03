@@ -69,6 +69,7 @@ DEFAULT_TEMPLATES: dict[str, str] = {
 
 OUTBOX_RETRY_BACKOFF_SECONDS = (5, 20, 60, 300)
 BLOCKED_FOLDER_NAME = "Заблокированные пользователи"
+BLOCKED_NOTICE_COOLDOWN_SECONDS = 30
 
 
 def _workspace_client(db: Session, *, workspace_id: int) -> MaxClient:
@@ -1563,6 +1564,16 @@ def _ensure_blocked_folder(
     *,
     workspace_id: int = DEFAULT_WORKSPACE_ID,
 ) -> ChatFolder:
+    existing = (
+        db.query(ChatFolder)
+        .filter(
+            ChatFolder.workspace_id == workspace_id,
+            func.lower(ChatFolder.name) == BLOCKED_FOLDER_NAME.lower(),
+        )
+        .first()
+    )
+    if existing is not None:
+        return existing
     return create_chat_folder(db, folder_name=BLOCKED_FOLDER_NAME, workspace_id=workspace_id)
 
 
@@ -1571,6 +1582,7 @@ def block_conversation(
     conversation_id: int,
     *,
     actor_user_id: int | None = None,
+    reason: str = "",
     workspace_id: int | None = None,
 ) -> bool:
     conversation_query = db.query(Conversation).filter(Conversation.id == conversation_id)
@@ -1594,6 +1606,7 @@ def block_conversation(
     meta.is_blocked = True
     meta.blocked_at = _as_naive_utc(_utc_now())
     meta.blocked_by_user_id = actor_user_id
+    meta.blocked_reason = (reason or "").strip()
     meta.blocked_prev_folder_id = previous_folder_id
     db.add(conversation)
     db.add(meta)
@@ -1638,6 +1651,7 @@ def unblock_conversation(
     meta.is_blocked = False
     meta.blocked_at = None
     meta.blocked_by_user_id = None
+    meta.blocked_reason = ""
     meta.blocked_prev_folder_id = None
     db.add(conversation)
     db.add(meta)
@@ -1650,12 +1664,14 @@ def block_conversation_customer(
     conversation_id: int,
     *,
     actor_user_id: int | None = None,
+    reason: str = "",
     workspace_id: int | None = None,
 ) -> bool:
     return block_conversation(
         db,
         conversation_id=conversation_id,
         actor_user_id=actor_user_id,
+        reason=reason,
         workspace_id=workspace_id,
     )
 
@@ -1788,16 +1804,25 @@ async def handle_customer_event(
     is_message_event = update_type in {"", "message_created", "message_callback", "new_message"}
 
     if bool(meta.is_blocked):
-        await queue_only_send_text(
-            db,
-            conversation_id=conversation.id,
-            target_chat_id=event.chat_id,
-            target_user_id=event.sender_id,
-            text="К сожалению, вы не можете писать в данный чат.",
-            source="bot_system",
-            text_format="markdown",
-        )
-        await process_outbox_queue(db, limit=20)
+        last_notice = meta.blocked_notice_sent_at
+        should_notify = True
+        if isinstance(last_notice, datetime):
+            delta = _as_naive_utc(_utc_now()) - _as_naive_utc(last_notice)
+            should_notify = delta.total_seconds() >= BLOCKED_NOTICE_COOLDOWN_SECONDS
+        if should_notify:
+            await queue_only_send_text(
+                db,
+                conversation_id=conversation.id,
+                target_chat_id=event.chat_id,
+                target_user_id=event.sender_id,
+                text="К сожалению, вы не можете писать в данный чат.",
+                source="bot_system",
+                text_format="markdown",
+            )
+            await process_outbox_queue(db, limit=20)
+            meta.blocked_notice_sent_at = _as_naive_utc(_utc_now())
+            db.add(meta)
+            db.commit()
         return {"ok": True, "flow": "blocked_customer"}
 
     # Message before Start (custom behavior for message_created before start)
@@ -2486,9 +2511,33 @@ def create_chat_folder(
         sort_order=(int(max_sort or 0) + 1),
     )
     db.add(folder)
-    db.commit()
-    db.refresh(folder)
-    return folder
+    try:
+        db.commit()
+        db.refresh(folder)
+        return folder
+    except IntegrityError:
+        # Concurrent/create-race safe path for workspace+name unique index.
+        db.rollback()
+        existing = (
+            db.query(ChatFolder)
+            .filter(
+                ChatFolder.workspace_id == workspace_id,
+                ChatFolder.name == normalized,
+            )
+            .first()
+        )
+        if existing is None:
+            existing = (
+                db.query(ChatFolder)
+                .filter(
+                    ChatFolder.workspace_id == workspace_id,
+                    func.lower(ChatFolder.name) == normalized.lower(),
+                )
+                .first()
+            )
+        if existing is not None:
+            return existing
+        raise
 
 
 def assign_conversation_to_folder(

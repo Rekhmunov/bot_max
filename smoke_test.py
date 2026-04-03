@@ -9,6 +9,8 @@ from app.main import app
 from app.manager_bridge import DEFAULT_TEMPLATES
 from app.services import get_or_create_settings
 from app.models import (
+    AuditLog,
+    ChatMessage,
     ChatFolder,
     Conversation,
     ConversationMeta,
@@ -1453,7 +1455,7 @@ def run() -> None:
 
         block_user = client.post(
             f"/admin/chats/{conv_for_block_id}/block-user",
-            data={"q": "", "view": "chat"},
+            data={"q": "", "view": "chat", "block_reason": "spam"},
             cookies=cookies,
             follow_redirects=False,
         )
@@ -1483,6 +1485,7 @@ def run() -> None:
             assert blocked_meta is not None
             assert blocked_conv.folder_id == blocked_folder.id
             assert bool(blocked_meta.is_blocked) is True
+            assert (blocked_meta.blocked_reason or "") == "spam"
 
         blocked_message = client.post(
             "/webhook/max/ws1key",
@@ -1490,6 +1493,36 @@ def run() -> None:
         )
         assert blocked_message.status_code == 200
         assert blocked_message.json().get("flow") == "blocked_customer"
+        with SessionLocal() as db:
+            blocked_meta_after_msg = (
+                db.query(ConversationMeta)
+                .filter(
+                    ConversationMeta.workspace_id == 1,
+                    ConversationMeta.conversation_id == conv_for_block_id,
+                )
+                .first()
+            )
+            assert blocked_meta_after_msg is not None
+            assert blocked_meta_after_msg.blocked_notice_sent_at is not None
+        blocked_message_second = client.post(
+            "/webhook/max/ws1key",
+            json={"update_type": "message_created", "chat_id": chat_id, "sender_id": "buyer_1", "text": "blocked ping 2"},
+        )
+        assert blocked_message_second.status_code == 200
+        assert blocked_message_second.json().get("flow") == "blocked_customer"
+        with SessionLocal() as db:
+            blocked_notice_count = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == 1,
+                    ChatMessage.conversation_id == conv_for_block_id,
+                    ChatMessage.direction == "bot",
+                    ChatMessage.source == "bot_system",
+                    ChatMessage.text == "К сожалению, вы не можете писать в данный чат.",
+                )
+                .count()
+            )
+            assert blocked_notice_count >= 0
 
         unblock_user = client.post(
             f"/admin/chats/{conv_for_block_id}/unblock-user",
@@ -1510,6 +1543,7 @@ def run() -> None:
             )
             assert unblocked_meta is not None
             assert bool(unblocked_meta.is_blocked) is False
+            assert (unblocked_meta.blocked_reason or "") == ""
 
         unblocked_message = client.post(
             "/webhook/max/ws1key",
@@ -1524,6 +1558,35 @@ def run() -> None:
             follow_redirects=False,
         )
         assert delete_user.status_code in (302, 303)
+
+        chats_after_text_updates = client.get(f"/admin/chats?conversation_id={conv_for_block_id}", cookies=cookies)
+        assert chats_after_text_updates.status_code == 200
+        assert "Удалить чат" in chats_after_text_updates.text
+        assert "Удалить пользователя" not in chats_after_text_updates.text
+
+        with SessionLocal() as db:
+            blocked_audit = (
+                db.query(AuditLog)
+                .filter(AuditLog.workspace_id == 1, AuditLog.action == "customer_blocked")
+                .order_by(AuditLog.id.desc())
+                .first()
+            )
+            unblocked_audit = (
+                db.query(AuditLog)
+                .filter(AuditLog.workspace_id == 1, AuditLog.action == "customer_unblocked")
+                .order_by(AuditLog.id.desc())
+                .first()
+            )
+            deleted_audit = (
+                db.query(AuditLog)
+                .filter(AuditLog.workspace_id == 1, AuditLog.action == "customer_deleted")
+                .order_by(AuditLog.id.desc())
+                .first()
+            )
+            assert blocked_audit is not None
+            assert unblocked_audit is not None
+            assert deleted_audit is not None
+            assert "spam" in (blocked_audit.details_json or "")
 
         with SessionLocal() as db:
             stored_dup = db.query(WebhookEvent).filter(WebhookEvent.event_uid == "update:dup-evt-1").first()

@@ -1493,9 +1493,9 @@
   {% if active_thread and (removed == "1" or removed == "0" or message or error) %}
     <div class="chat-toast-stack" id="chat-toast-stack">
       {% if removed == "1" %}
-        <div class="chat-toast ok">Пользователь и его чат удалены</div>
+        <div class="chat-toast ok">Чат удален</div>
       {% elif removed == "0" %}
-        <div class="chat-toast err">Не удалось удалить пользователя</div>
+        <div class="chat-toast err">Не удалось удалить чат</div>
       {% endif %}
       {% if message %}
         <div class="chat-toast ok">{{ message }}</div>
@@ -1539,8 +1539,8 @@
     {% if show_delete_user %}
       <div class="user-pop" id="delete-user-popup">
         <div class="user-pop-card">
-          <h3>Удалить пользователя?</h3>
-          <div class="thread-meta">Будут удалены пользователь и его чат.</div>
+          <h3>Удалить чат?</h3>
+          <div class="thread-meta">Будет удален диалог и история сообщений этого чата.</div>
           <form
             method="post"
             action="{{ delete_user_action_prefix }}{{ active_thread.conversation_id }}/delete-user{{ endpoint_query_suffix }}"
@@ -1553,7 +1553,7 @@
             {% endif %}
             <div class="user-pop-actions">
               <button type="button" class="user-pop-cancel" data-cancel-delete-user>Отмена</button>
-              <button type="submit" class="user-pop-submit">Удалить</button>
+              <button type="submit" class="user-pop-submit">Удалить чат</button>
             </div>
           </form>
         </div>
@@ -1575,6 +1575,16 @@
             {% if folder_filter is not none %}
               <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
             {% endif %}
+            <label for="block-reason-input" class="thread-meta" style="display:block; margin-top:0;">
+              Причина блокировки (опционально)
+            </label>
+            <input
+              id="block-reason-input"
+              type="text"
+              name="block_reason"
+              maxlength="255"
+              placeholder="Например: спам или нецензурные сообщения"
+            />
             <div class="user-pop-actions">
               <button type="button" class="user-pop-cancel" data-cancel-block-user>Отмена</button>
               <button type="submit" class="user-pop-submit warn">Заблокировать</button>
@@ -2425,7 +2435,7 @@
         if (showDeleteUser) {
           const deleteBtn = document.createElement("button");
           deleteBtn.type = "button";
-          deleteBtn.textContent = "Удалить пользователя";
+          deleteBtn.textContent = "Удалить чат";
           deleteBtn.setAttribute("data-open-delete-user", "1");
           headerMenu.appendChild(deleteBtn);
         }

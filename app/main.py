@@ -3120,6 +3120,7 @@ async def admin_chats_retry_message(
 @app.post("/admin/chats/{conversation_id}/delete-user", response_class=RedirectResponse)
 async def admin_chats_delete_conversation(
     conversation_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -3129,6 +3130,18 @@ async def admin_chats_delete_conversation(
         conversation_id=conversation_id,
         workspace_id=workspace_id,
     )
+    if deleted:
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=int(current_user.id),
+                action="customer_deleted",
+                object_type="conversation",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"source": "admin_chats"}),
+            )
+        )
+        db.commit()
     suffix = "1" if deleted else "0"
     return RedirectResponse(url=f"/admin/chats?removed={suffix}", status_code=302)
 
@@ -3169,9 +3182,11 @@ def admin_chats_rename_user(
 def admin_chats_block_conversation_customer(
     request: Request,
     conversation_id: int,
+    block_reason: str = Form(""),
     q: str = Form(""),
     view: str = Form(""),
     folder_id: int | None = Form(default=None),
+    current_user: ServiceUser = Depends(require_service_user),
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -3185,8 +3200,22 @@ def admin_chats_block_conversation_customer(
     blocked = block_conversation_customer(
         db,
         conversation_id=conversation_id,
+        actor_user_id=int(current_user.id),
+        reason=block_reason,
         workspace_id=workspace_id,
     )
+    if blocked:
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=int(current_user.id),
+                action="customer_blocked",
+                object_type="conversation",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"reason": (block_reason or "").strip()}),
+            )
+        )
+        db.commit()
     suffix = "1" if blocked else "0"
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
     return RedirectResponse(
@@ -3202,6 +3231,7 @@ def admin_chats_unblock_conversation_customer(
     q: str = Form(""),
     view: str = Form(""),
     folder_id: int | None = Form(default=None),
+    current_user: ServiceUser = Depends(require_service_user),
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -3215,8 +3245,21 @@ def admin_chats_unblock_conversation_customer(
     unblocked = unblock_conversation_customer(
         db,
         conversation_id=conversation_id,
+        actor_user_id=int(current_user.id),
         workspace_id=workspace_id,
     )
+    if unblocked:
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=int(current_user.id),
+                action="customer_unblocked",
+                object_type="conversation",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"source": "admin_chats"}),
+            )
+        )
+        db.commit()
     suffix = "1" if unblocked else "0"
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
     return RedirectResponse(
@@ -5995,6 +6038,18 @@ async def app_chats_delete_conversation(
         workspace_id=workspace_id,
     )
     deleted = delete_conversation(db, conversation_id=conversation_id, workspace_id=workspace_id)
+    if deleted:
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=int(current_user.id),
+                action="customer_deleted",
+                object_type="conversation",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"source": "app_chats"}),
+            )
+        )
+        db.commit()
     suffix = "1" if deleted else "0"
     workspace_qs = _workspace_scope_query_suffix(
         workspace_id=workspace_id,
@@ -6048,6 +6103,7 @@ def app_chats_rename_user(
 def app_chats_block_conversation_customer(
     request: Request,
     conversation_id: int,
+    block_reason: str = Form(""),
     q: str = Form(""),
     view: str = Form(""),
     folder_id: int | None = Form(default=None),
@@ -6070,8 +6126,21 @@ def app_chats_block_conversation_customer(
         db,
         conversation_id=conversation_id,
         actor_user_id=int(current_user.id),
+        reason=block_reason,
         workspace_id=workspace_id,
     )
+    if blocked:
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=int(current_user.id),
+                action="customer_blocked",
+                object_type="conversation",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"reason": (block_reason or "").strip()}),
+            )
+        )
+        db.commit()
     suffix = "1" if blocked else "0"
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
     workspace_qs = _workspace_scope_query_suffix(
@@ -6115,6 +6184,18 @@ def app_chats_unblock_conversation_customer(
         actor_user_id=int(current_user.id),
         workspace_id=workspace_id,
     )
+    if unblocked:
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=int(current_user.id),
+                action="customer_unblocked",
+                object_type="conversation",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"source": "app_chats"}),
+            )
+        )
+        db.commit()
     suffix = "1" if unblocked else "0"
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
     workspace_qs = _workspace_scope_query_suffix(
@@ -6798,19 +6879,6 @@ async def max_webhook(
             settings=settings_db,
             event=event,
         )
-
-    # Hard stop for blocked customers: do not deliver to operators, only return notice to customer.
-    if is_conversation_customer_blocked(
-        db,
-        chat_id=event.chat_id,
-        customer_id=sender_id,
-        workspace_id=workspace_id,
-    ):
-        await max_client.send_text(
-            chat_id=event.chat_id,
-            text="К сожалению, вы не можете писать в данный чат.",
-        )
-        return {"ok": True, "flow": "blocked_customer"}
 
     return await handle_customer_event(
         db=db,

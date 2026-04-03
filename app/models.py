@@ -289,6 +289,8 @@ class ConversationMeta(Base):
     blocked_by_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     blocked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     blocked_prev_folder_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    blocked_reason: Mapped[str] = mapped_column(Text, default="")
+    blocked_notice_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class TenantAlert(Base):

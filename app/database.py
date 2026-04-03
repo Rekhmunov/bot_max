@@ -120,6 +120,22 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE conversation_meta ADD COLUMN blocked_prev_folder_id INTEGER")
                 )
+            if "blocked_reason" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN blocked_reason TEXT DEFAULT ''")
+                )
+            if "blocked_notice_sent_at" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN blocked_notice_sent_at DATETIME")
+                )
+            if "blocked_reason" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN blocked_reason TEXT DEFAULT ''")
+                )
+            if "blocked_notice_last_sent_at" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN blocked_notice_last_sent_at DATETIME")
+                )
 
         if "conversations" in table_names:
             conversation_columns = {col["name"] for col in inspector.get_columns("conversations")}
