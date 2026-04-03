@@ -121,7 +121,6 @@ from app.services import (
     create_workspace_with_owner,
     ensure_default_workspace,
     get_or_create_settings,
-    get_workspace_by_tenant_code,
     list_workspace_managers,
 )
 from fastapi.templating import Jinja2Templates
@@ -437,6 +436,63 @@ def _manager_routing_mode_label(mode: str) -> str:
     return "По очереди"
 
 
+def _normalize_bot_link(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    if raw.startswith("max.ru/"):
+        return f"https://{raw}"
+    return f"https://max.ru/{raw.lstrip('/')}"
+
+
+def _is_valid_bot_link(value: str) -> bool:
+    link = (value or "").strip().lower()
+    return bool(re.fullmatch(r"https://max\.ru/id\d+_bot", link))
+
+
+def _ensure_workspace_webhook_key(settings_row: BotSettings) -> str:
+    current = (settings_row.webhook_key or "").strip()
+    if current:
+        return current
+    settings_row.webhook_key = secrets.token_urlsafe(18).replace("-", "").replace("_", "")[:32]
+    return settings_row.webhook_key
+
+
+def _workspace_webhook_url(settings_row: BotSettings) -> str:
+    key = _ensure_workspace_webhook_key(settings_row)
+    base = settings.public_base_url.rstrip("/")
+    return f"{base}{webhook_path}/{key}"
+
+
+def _workspace_settings_context_for_template(
+    *,
+    bot_settings: BotSettings,
+    webhook_url: str,
+) -> dict[str, str]:
+    bot_link_value = (bot_settings.bot_link or "").strip()
+    bot_token_value = (bot_settings.bot_token or "").strip()
+    masked_token = ""
+    if bot_token_value:
+        if len(bot_token_value) <= 8:
+            masked_token = "*" * len(bot_token_value)
+        else:
+            masked_token = f"{bot_token_value[:4]}{'*' * max(len(bot_token_value) - 8, 4)}{bot_token_value[-4:]}"
+    return {
+        "workspace_bot_link": bot_link_value,
+        "workspace_bot_token_masked": masked_token,
+        "workspace_webhook_url": webhook_url,
+    }
+
+
+def _workspace_client_or_error(settings_row: BotSettings) -> tuple[MaxClient | None, str | None]:
+    token = (settings_row.bot_token or "").strip()
+    if not token:
+        return None, "Укажите токен вашего бота Max в настройках."
+    return MaxClient(token=token), None
+
+
 def _localized_alert_entry(alert: TenantAlert) -> dict[str, str]:
     severity_labels = {
         "critical": "Критично",
@@ -709,7 +765,11 @@ async def _send_manager_invite_link_to_max(
         f"Ссылка для входа: {links['invite_link']}\n"
         f"Mini-app: {links['mini_link']}"
     )
-    send_result = await MaxClient().send_text_to_user(user_id=manager_id_clean, text=message_text)
+    settings_row = get_or_create_settings(db, workspace_id=workspace_id)
+    client, client_error = _workspace_client_or_error(settings_row)
+    if client is None:
+        return False, client_error or "Укажите токен вашего бота Max в настройках."
+    send_result = await client.send_text_to_user(user_id=manager_id_clean, text=message_text)
     sent_ok = bool(send_result.get("success", True) or send_result.get("message") or send_result.get("mock"))
     if not sent_ok:
         db.add(
@@ -1312,97 +1372,27 @@ def _load_quick_replies_with_media(db: Session, *, workspace_id: int) -> list[Qu
     return _attach_media_to_quick_replies(db, replies)
 
 
-def _build_max_bot_profile_url(bot_account_id: str | None) -> str:
-    explicit_public_url = (settings.max_bot_public_url or "").strip()
-    if explicit_public_url:
-        return explicit_public_url
-    value = (bot_account_id or "").strip()
-    if not value:
-        return ""
-    if value.isdigit():
-        # Numeric bot id in Max public links is exposed as id{digits}_bot.
-        return f"https://max.ru/id{value}_bot"
-    return f"https://max.ru/{value.lstrip('@')}"
-
-
-def _encode_base36(value: int) -> str:
-    if value <= 0:
-        return ""
-    alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
-    number = int(value)
-    result = ""
-    while number:
-        number, rem = divmod(number, 36)
-        result = alphabet[rem] + result
-    return result or "0"
-
-
-def _decode_base36(value: str) -> int | None:
-    raw = (value or "").strip().lower()
-    if not raw:
-        return None
-    if not re.fullmatch(r"[0-9a-z]+", raw):
-        return None
-    try:
-        parsed = int(raw, 36)
-    except ValueError:
-        return None
-    return parsed if parsed > 0 else None
-
-
-def _build_customer_link_code(*, workspace_id: int | None, tenant_code: str | None) -> str:
-    if workspace_id and workspace_id > 0:
-        return _encode_base36(workspace_id)
-    fallback = (tenant_code or "").strip().lower()
-    return fallback
-
-
-def _build_customer_bot_link(*, workspace_id: int | None, tenant_code: str | None) -> str:
-    code = _build_customer_link_code(workspace_id=workspace_id, tenant_code=tenant_code)
-    if not code:
-        return ""
-    return f"{settings.public_base_url.rstrip('/')}/c/{code}"
-
-
-def _resolve_workspace_by_customer_link_code(db: Session, code: str) -> Workspace | None:
-    raw = (code or "").strip().lower()
-    if not raw:
-        return None
-    by_id = _decode_base36(raw)
-    if by_id:
-        ws = db.query(Workspace).filter(Workspace.id == by_id).first()
-        if ws is not None:
-            return ws
-    return get_workspace_by_tenant_code(db, raw)
-
-
-def _build_max_start_deeplink(*, tenant_code: str | None) -> str:
-    bot_profile = _build_max_bot_profile_url(settings.max_bot_account_id)
-    nickname = (bot_profile.rsplit("/", 1)[-1] if bot_profile else "").strip().lstrip("@")
-    code = (tenant_code or "").strip().lower()
-    if not nickname:
-        return bot_profile
-    if not code:
-        return f"https://max.ru/{nickname}"
-    safe_payload = re.sub(r"[^a-z0-9_-]+", "-", code).strip("-")[:128]
-    if not safe_payload:
-        return f"https://max.ru/{nickname}"
-    return f"https://max.ru/{nickname}?start={safe_payload}"
-
-
 def _manager_ids_from_settings_row(settings_row: BotSettings | None) -> set[str]:
     if settings_row is None:
         return set()
     return {item.strip() for item in _parse_manager_ids(settings_row.manager_account_id) if item.strip()}
 
 
-def _resolve_workspace_id_from_event(db: Session, event: MaxWebhookEvent) -> int:
-    payload_code = (getattr(event, "start_payload", "") or "").strip().lower()
-    if payload_code:
-        by_payload = _resolve_workspace_by_customer_link_code(db, payload_code)
-        if by_payload is not None:
-            return int(by_payload.id)
+def _resolve_workspace_by_webhook_key(db: Session, key: str) -> int | None:
+    normalized = (key or "").strip()
+    if not normalized:
+        return None
+    row = (
+        db.query(BotSettings.workspace_id)
+        .filter(BotSettings.webhook_key == normalized)
+        .first()
+    )
+    if row and row[0]:
+        return int(row[0])
+    return None
 
+
+def _resolve_workspace_id_from_event(db: Session, event: MaxWebhookEvent) -> int:
     sender_id = (event.sender_id or "").strip()
     chat_id = (event.chat_id or "").strip()
     if sender_id:
@@ -1416,7 +1406,6 @@ def _resolve_workspace_id_from_event(db: Session, event: MaxWebhookEvent) -> int
         )
         if manager_row and manager_row[0]:
             return int(manager_row[0])
-        # Fallback for manager IDs configured in settings before/without local manager row.
         for settings_row in db.query(BotSettings).order_by(BotSettings.id.asc()).all():
             if sender_id in _manager_ids_from_settings_row(settings_row):
                 return int(settings_row.workspace_id or DEFAULT_WORKSPACE_ID)
@@ -1454,22 +1443,6 @@ def _sha256(value: str) -> str:
 
 def _json_escape(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)[1:-1]
-
-
-@app.get("/c/{tenant_code}", response_class=RedirectResponse)
-def customer_bot_link_redirect(
-    tenant_code: str,
-    db: Session = Depends(get_db),
-) -> RedirectResponse:
-    workspace = _resolve_workspace_by_customer_link_code(db, tenant_code)
-    if workspace is None:
-        raise HTTPException(status_code=404, detail="Клиент не найден")
-    if not workspace.is_active or workspace.is_suspended:
-        raise HTTPException(status_code=403, detail="Клиент временно недоступен")
-    bot_url = _build_max_start_deeplink(tenant_code=workspace.tenant_code)
-    if not bot_url:
-        raise HTTPException(status_code=503, detail="Бот Max не настроен")
-    return RedirectResponse(url=bot_url, status_code=302)
 
 
 def _email_verify_serializer() -> URLSafeTimedSerializer:
@@ -1624,25 +1597,18 @@ def _render_app_settings_page(
         tenant_metrics=tenant_metrics,
         manager_status_summary=manager_status_summary,
     )
-    bot_profile_url = ""
-    bot_profile_label = ""
-    customer_bot_link = ""
-    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    bot_account_id = (settings.max_bot_account_id or "").strip()
-    if bot_account_id:
-        bot_profile_url = _build_max_bot_profile_url(bot_account_id)
-        bot_profile_label = bot_account_id
-    if workspace is not None:
-        customer_bot_link = _build_customer_bot_link(
-            workspace_id=workspace.id,
-            tenant_code=workspace.tenant_code,
-        )
-    tenant_resolution_hint = (
-        "Один общий бот Max используется для всех клиентов. "
-        "Система автоматически определяет клиента по входящему событию "
-        "(sender_id менеджера, chat_id, профили/история) и направляет диалоги "
-        "в нужный workspace."
-    )
+    _ensure_workspace_webhook_key(bot_settings)
+    db.add(bot_settings)
+    db.flush()
+    bot_link_value = (bot_settings.bot_link or "").strip()
+    bot_token_value = (bot_settings.bot_token or "").strip()
+    masked_token = ""
+    if bot_token_value:
+        if len(bot_token_value) <= 8:
+            masked_token = "*" * len(bot_token_value)
+        else:
+            masked_token = f"{bot_token_value[:4]}{'*' * max(len(bot_token_value) - 8, 4)}{bot_token_value[-4:]}"
+    webhook_workspace_url = _workspace_webhook_url(bot_settings)
 
     return templates.TemplateResponse(
         request,
@@ -1660,7 +1626,7 @@ def _render_app_settings_page(
             "quick_replies": quick_replies,
             "intro_steps": intro_steps,
             "webhook_path": webhook_path,
-            "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+            "webhook_url": webhook_workspace_url,
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
             "subscription": sub,
@@ -1695,10 +1661,9 @@ def _render_app_settings_page(
             "usage_limits": usage_limits,
             "usage_used": usage_used,
             "usage_remaining": usage_remaining,
-            "bot_profile_url": bot_profile_url,
-            "bot_profile_label": bot_profile_label,
-            "customer_bot_link": customer_bot_link,
-            "tenant_resolution_hint": tenant_resolution_hint,
+            "workspace_bot_link": bot_link_value,
+            "workspace_bot_token_masked": masked_token,
+            "workspace_webhook_url": webhook_workspace_url,
             "routing_mode_label": _manager_routing_mode_label(bot_settings.routing_mode or "round_robin"),
         },
     )
@@ -1832,6 +1797,7 @@ def admin_page(
 ) -> HTMLResponse:
     workspace_id = DEFAULT_WORKSPACE_ID
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
+    webhook_workspace_url = _workspace_webhook_url(bot_settings)
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
     tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
     usage_limits, usage_used, usage_remaining = _build_usage_context(
@@ -1857,7 +1823,7 @@ def admin_page(
             ),
             "quick_replies": replies,
             "webhook_path": webhook_path,
-            "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+            "webhook_url": webhook_workspace_url,
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
             "subscription": sub,
@@ -1910,6 +1876,7 @@ async def update_settings(
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
     tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
     manager_limit_value = max(1, int(sub.manager_limit or 0))
+    webhook_workspace_url = _workspace_webhook_url(bot_settings)
     if len(manager_ids) > manager_limit_value:
         replies = _load_quick_replies_with_media(db, workspace_id=workspace_id)
         chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
@@ -1926,7 +1893,7 @@ async def update_settings(
                 "template_after_phone": after_phone_message,
                 "quick_replies": replies,
                 "webhook_path": webhook_path,
-                "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+                "webhook_url": webhook_workspace_url,
                 "chat_metrics": chat_metrics,
                 "delivery_metrics": delivery_metrics,
                 "subscription": sub,
@@ -1985,7 +1952,7 @@ async def update_settings(
             ),
             "quick_replies": replies,
             "webhook_path": webhook_path,
-            "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+            "webhook_url": webhook_workspace_url,
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
             "subscription": sub,
@@ -2019,6 +1986,8 @@ async def admin_send_manager_link(
         return RedirectResponse(url="/admin/login", status_code=302)
     form_data = await request.form()
     workspace_id = DEFAULT_WORKSPACE_ID
+    settings_row = get_or_create_settings(db, workspace_id=workspace_id)
+    webhook_workspace_url = _workspace_webhook_url(settings_row)
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
     tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
     target_manager_id = str(form_data.get("send_manager_id", "") or "").strip()
@@ -2034,7 +2003,7 @@ async def admin_send_manager_link(
         "admin.html",
         {
             "request": request,
-            "settings": get_or_create_settings(db, workspace_id=workspace_id),
+            "settings": settings_row,
             "template_prestart": get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id),
             "template_start": get_template_text(db, TEMPLATE_START, workspace_id=workspace_id),
             "template_after_phone": get_template_text(
@@ -2044,7 +2013,7 @@ async def admin_send_manager_link(
             ),
             "quick_replies": _load_quick_replies_with_media(db, workspace_id=workspace_id),
             "webhook_path": webhook_path,
-            "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+            "webhook_url": webhook_workspace_url,
             "chat_metrics": get_chat_metrics(db, workspace_id=workspace_id),
             "delivery_metrics": get_delivery_metrics(db, workspace_id=workspace_id),
             "subscription": sub,
@@ -2155,6 +2124,7 @@ async def create_quick_reply(
     if _admin is None:
         return RedirectResponse(url="/admin/login", status_code=302)
     workspace_id = DEFAULT_WORKSPACE_ID
+    webhook_workspace_url = _workspace_webhook_url(get_or_create_settings(db, workspace_id=workspace_id))
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
 
     normalized = command.strip().lstrip("/")
@@ -2190,7 +2160,7 @@ async def create_quick_reply(
                 ),
                 "quick_replies": replies,
                 "webhook_path": webhook_path,
-                "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+                "webhook_url": webhook_workspace_url,
                 "chat_metrics": chat_metrics,
                 "delivery_metrics": delivery_metrics,
                 "subscription": sub,
@@ -2229,6 +2199,7 @@ async def create_quick_reply(
     _normalize_quick_reply_media_order(db, reply.id)
 
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
+    webhook_workspace_url = _workspace_webhook_url(bot_settings)
     replies = _load_quick_replies_with_media(db, workspace_id=workspace_id)
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
@@ -2248,7 +2219,7 @@ async def create_quick_reply(
             ),
             "quick_replies": replies,
             "webhook_path": webhook_path,
-            "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
+            "webhook_url": webhook_workspace_url,
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
             "subscription": sub,
@@ -3102,26 +3073,6 @@ def _build_manager_invite_links(
     }
 
 
-async def _send_manager_invite_message(
-    *,
-    manager_id: str,
-    invite_link: str,
-    mini_link: str,
-) -> bool:
-    target = (manager_id or "").strip()
-    if not target:
-        return False
-    text = (
-        "Подключение к FeedPilot\n"
-        "Для начала работы откройте ссылку и задайте пароль:\n"
-        f"{invite_link}\n\n"
-        "После активации можно сразу работать в mini-app:\n"
-        f"{mini_link}"
-    )
-    result = await MaxClient().send_text_to_user(user_id=target, text=text)
-    return bool(result.get("success", True) or result.get("message"))
-
-
 def _manager_invite_context(
     *,
     db: Session,
@@ -3936,6 +3887,8 @@ async def app_update_settings(
     prestart_message: str = Form(""),
     start_message: str = Form(""),
     after_phone_message: str = Form(""),
+    bot_token: str = Form(""),
+    bot_link: str = Form(""),
     manager_account_id: str = Form(""),
     admin_account_id: str = Form(""),
     routing_mode: str = Form("round_robin"),
@@ -3953,6 +3906,18 @@ async def app_update_settings(
     if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
+    token_clean = (bot_token or "").strip()
+    if not token_clean:
+        raise HTTPException(status_code=400, detail="Укажите токен вашего бота Max.")
+    settings_row.bot_token = token_clean
+    normalized_link = _normalize_bot_link(bot_link or "")
+    if normalized_link and not _is_valid_bot_link(normalized_link):
+        raise HTTPException(
+            status_code=400,
+            detail="Ссылка бота должна быть формата https://max.ru/id123456789_bot",
+        )
+    settings_row.bot_link = normalized_link
+    _ensure_workspace_webhook_key(settings_row)
     settings_row.admin_account_id = admin_account_id.strip()
     mode = (routing_mode or "round_robin").strip().lower()
     if mode not in {"round_robin", "random"}:
@@ -5855,12 +5820,9 @@ async def manager_mini_send_message(
     )
 
 
-@app.post(webhook_path)
-@app.post("/webhook/max")
-@app.post("/max-webhook")
-@app.post("/max-webhok")
-@app.post("/webhok/max")
+@app.post(f"{webhook_path}/{{webhook_key}}")
 async def max_webhook(
+    webhook_key: str,
     request: Request,
     payload: dict = Body(...),
     db: Session = Depends(get_db),
@@ -5908,20 +5870,11 @@ async def max_webhook(
     if event.update_type and event.update_type not in accepted_update_types:
         return {"ok": True, "ignored": event.update_type}
 
-    workspace_id_hint = None
-    if (event.update_type or "").strip().lower() in {"bot_started", "bot_start"}:
-        payload_value = (event.start_payload or "").strip().lower()
-        if payload_value:
-            hinted_workspace = _resolve_workspace_by_customer_link_code(db, payload_value)
-            if hinted_workspace is not None:
-                workspace_id_hint = int(hinted_workspace.id)
-
-    workspace_id = workspace_id_hint or _resolve_workspace_id_from_event(db, event)
+    workspace_id = _resolve_workspace_by_webhook_key(db, webhook_key) or _resolve_workspace_id_from_event(db, event)
     settings_db = get_or_create_settings(db, workspace_id=workspace_id)
-    max_client = MaxClient()
-
-    if event.sender_id == settings.max_bot_account_id:
-        return {"ok": True}
+    max_client, client_error = _workspace_client_or_error(settings_db)
+    if client_error or max_client is None:
+        return {"ok": True, "ignored": "bot_token_not_configured"}
 
     sender_id = (event.sender_id or "").strip()
     if settings_db.admin_account_id and sender_id == (settings_db.admin_account_id or "").strip():

@@ -150,6 +150,9 @@ class BotSettings(Base):
         Text,
         default="Менеджер подключен к диалогу.",
     )
+    bot_token: Mapped[str] = mapped_column(Text, default="")
+    bot_link: Mapped[str] = mapped_column(String(255), default="")
+    webhook_key: Mapped[str] = mapped_column(String(96), default="", index=True)
     request_customer_phone: Mapped[bool] = mapped_column(Boolean, default=True)
     routing_mode: Mapped[str] = mapped_column(String(20), default="round_robin")
     routing_rr_cursor: Mapped[int] = mapped_column(Integer, default=0)

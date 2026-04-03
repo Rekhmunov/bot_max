@@ -348,9 +348,19 @@
     {% endif %}
     {% if ui_mode == "app" %}
       <section class="card" style="margin-bottom:16px;">
-        <h2>Подключение покупателей к общему боту Max</h2>
-        <div class="hint"><b>Ссылка на общий бот Max для покупателей:</b> <code>{{ customer_bot_link or "—" }}</code></div>
-        <div class="hint" style="margin-top:6px;"><b>Как определяется клиент (tenant):</b> система автоматически определяет рабочее пространство по данным события (ID менеджера, чат/профиль покупателя). Для каждого клиента отдельный бот не создается — используется один общий бот Max.</div>
+        <h2>Подключение вашего бота Max</h2>
+        <div class="hint">
+          Укажите ссылку на вашего бота в формате:
+          <code>https://max.ru/id123456789_bot</code>
+        </div>
+        <div class="hint" style="margin-top:6px;">
+          Текущая ссылка бота:
+          <code>{{ workspace_bot_link or "—" }}</code>
+        </div>
+        <div class="hint" style="margin-top:6px;">
+          Webhook URL для вашего бота:
+          <code>{{ workspace_webhook_url or webhook_url }}</code>
+        </div>
       </section>
     {% endif %}
 
@@ -358,6 +368,26 @@
       <section class="card">
         <h2>Настройки бота</h2>
         <form method="post" action="{{ settings_action or '/admin/settings' }}">
+          {% if ui_mode == "app" %}
+          <label for="bot_link">Ссылка вашего бота Max</label>
+          <input
+            id="bot_link"
+            name="bot_link"
+            value="{{ workspace_bot_link or '' }}"
+            placeholder="https://max.ru/id123456789_bot"
+          />
+          <label for="bot_token">Токен вашего бота Max</label>
+          <input
+            id="bot_token"
+            name="bot_token"
+            value="{{ settings.bot_token or '' }}"
+            placeholder="Вставьте токен бота"
+            autocomplete="off"
+          />
+          {% if workspace_bot_token_masked %}
+            <div class="hint">Сохраненный токен: <code>{{ workspace_bot_token_masked }}</code></div>
+          {% endif %}
+          {% endif %}
           <label for="prestart_message">Сообщение до нажатия Start</label>
           <textarea id="prestart_message" name="prestart_message" required>{{ template_prestart }}</textarea>
 

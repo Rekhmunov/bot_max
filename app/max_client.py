@@ -8,9 +8,9 @@ from app.config import settings
 
 
 class MaxClient:
-    def __init__(self) -> None:
+    def __init__(self, *, token: str | None = None) -> None:
         self.base_url = settings.max_api_base_url.rstrip("/")
-        self.token = settings.max_bot_token
+        self.token = (token if token is not None else settings.max_bot_token)
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}

@@ -143,6 +143,29 @@ def _ensure_lightweight_migrations() -> None:
             settings_columns = {col["name"] for col in inspector.get_columns("bot_settings")}
             if "workspace_id" not in settings_columns:
                 conn.execute(text("ALTER TABLE bot_settings ADD COLUMN workspace_id INTEGER DEFAULT 1"))
+            if "bot_token" not in settings_columns:
+                conn.execute(text("ALTER TABLE bot_settings ADD COLUMN bot_token TEXT DEFAULT ''"))
+            if "bot_link" not in settings_columns:
+                conn.execute(text("ALTER TABLE bot_settings ADD COLUMN bot_link VARCHAR(255) DEFAULT ''"))
+            if "webhook_key" not in settings_columns:
+                conn.execute(text("ALTER TABLE bot_settings ADD COLUMN webhook_key VARCHAR(96) DEFAULT ''"))
+            # Backfill missing keys and normalize duplicates to keep unique index creation safe.
+            rows = conn.execute(text("SELECT id, webhook_key FROM bot_settings ORDER BY id ASC")).fetchall()
+            seen_webhook_keys: set[str] = set()
+            for row in rows:
+                row_id = int(row[0])
+                raw_key = str(row[1] or "").strip()
+                key_value = raw_key
+                if not key_value:
+                    key_value = f"wk_{row_id:08d}"
+                while key_value in seen_webhook_keys:
+                    key_value = f"{key_value}_{row_id}"
+                seen_webhook_keys.add(key_value)
+                if key_value != raw_key:
+                    conn.execute(
+                        text("UPDATE bot_settings SET webhook_key = :key WHERE id = :row_id"),
+                        {"key": key_value, "row_id": row_id},
+                    )
             if "routing_mode" not in settings_columns:
                 conn.execute(text("ALTER TABLE bot_settings ADD COLUMN routing_mode VARCHAR(20) DEFAULT 'round_robin'"))
             if "routing_rr_cursor" not in settings_columns:
@@ -337,5 +360,11 @@ def _ensure_lightweight_migrations() -> None:
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ix_customer_profiles_workspace_customer "
                 "ON customer_profiles (workspace_id, customer_account_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_bot_settings_workspace_webhook_key "
+                "ON bot_settings (workspace_id, webhook_key)"
             )
         )

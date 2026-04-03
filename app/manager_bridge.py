@@ -31,6 +31,7 @@ from app.models import (
     ServiceUser,
 )
 from app.schemas import MaxWebhookEvent
+from app.services import get_or_create_settings
 from app.ops import (
     can_create_dialog,
     can_send_message_this_month,
@@ -67,6 +68,12 @@ DEFAULT_TEMPLATES: dict[str, str] = {
 }
 
 OUTBOX_RETRY_BACKOFF_SECONDS = (5, 20, 60, 300)
+
+
+def _workspace_client(db: Session, *, workspace_id: int) -> MaxClient:
+    settings_row = db.query(BotSettings).filter(BotSettings.workspace_id == workspace_id).first()
+    token = (settings_row.bot_token if settings_row is not None else "") or ""
+    return MaxClient(token=token.strip())
 
 
 def _parse_manager_ids(raw_value: str) -> list[str]:
@@ -724,9 +731,9 @@ async def process_outbox_queue(
     items = query.order_by(OutboxMessage.next_retry_at.asc(), OutboxMessage.id.asc()).limit(limit).all()
     if not items:
         return 0
-    client = MaxClient()
     processed = 0
     for item in items:
+        client = _workspace_client(db, workspace_id=item.workspace_id)
         await _dispatch_outbox(db, client=client, item=item)
         processed += 1
     return processed
@@ -751,7 +758,8 @@ async def retry_failed_outbox_message(
     item.next_retry_at = _as_naive_utc(_utc_now())
     db.add(item)
     db.commit()
-    ok, _, _ = await _dispatch_outbox(db, client=MaxClient(), item=item)
+    client = _workspace_client(db, workspace_id=item.workspace_id)
+    ok, _, _ = await _dispatch_outbox(db, client=client, item=item)
     return ok
 
 
@@ -787,7 +795,8 @@ async def enqueue_and_process_send_text(
         operation="send_text",
         payload={"text": text, "format": text_format},
     )
-    ok, _, _ = await _dispatch_outbox(db, client=MaxClient(), item=item)
+    client = _workspace_client(db, workspace_id=item.workspace_id)
+    ok, _, _ = await _dispatch_outbox(db, client=client, item=item)
     return ok
 
 
@@ -822,7 +831,8 @@ async def enqueue_and_process_send_photo(
         operation="send_photo",
         payload={"photo_url": photo_url, "caption": caption},
     )
-    ok, _, _ = await _dispatch_outbox(db, client=MaxClient(), item=item)
+    client = _workspace_client(db, workspace_id=item.workspace_id)
+    ok, _, _ = await _dispatch_outbox(db, client=client, item=item)
     return ok
 
 
@@ -1161,7 +1171,8 @@ async def _send_manager_text_with_attachments(
         operation="send_message",
         payload={"text": text, "attachments": attachments or []},
     )
-    ok, _, _ = await _dispatch_outbox(db, client=MaxClient(), item=item)
+    client = _workspace_client(db, workspace_id=item.workspace_id)
+    ok, _, _ = await _dispatch_outbox(db, client=client, item=item)
     return ok
 
 
@@ -1288,13 +1299,27 @@ async def _send_first_ticket_from_mode(
     rows = _filter_threads_for_manager(db, manager_id=manager_id, mode=mode)
     if not rows:
         msg = "Подходящих тикетов нет." if mode != "new" else "Новых тикетов нет."
-        await MaxClient().send_text_to_user(user_id=manager_id, text=msg)
+        manager_workspace = (
+            db.query(ServiceUser.workspace_id)
+            .filter(ServiceUser.role == "manager", ServiceUser.max_account_id == manager_id)
+            .scalar()
+            or DEFAULT_WORKSPACE_ID
+        )
+        client = _workspace_client(db, workspace_id=int(manager_workspace))
+        await client.send_text_to_user(user_id=manager_id, text=msg)
         return {"ok": True, "empty": True, "mode": mode}
 
     thread, meta = rows[0]
     conversation = db.query(Conversation).filter(Conversation.id == thread.conversation_id).first()
     if conversation is None:
-        await MaxClient().send_text_to_user(user_id=manager_id, text="Тикет не найден.")
+        manager_workspace = (
+            db.query(ServiceUser.workspace_id)
+            .filter(ServiceUser.role == "manager", ServiceUser.max_account_id == manager_id)
+            .scalar()
+            or DEFAULT_WORKSPACE_ID
+        )
+        client = _workspace_client(db, workspace_id=int(manager_workspace))
+        await client.send_text_to_user(user_id=manager_id, text="Тикет не найден.")
         return {"ok": True, "error": "conversation_not_found"}
     text = _ticket_brief_for_manager(db, conversation=conversation, meta=meta)
     attachments = _make_panel_keyboard_for_ticket(meta.ticket_no, meta.status)
@@ -1317,7 +1342,14 @@ async def _apply_ticket_action(
 ) -> dict:
     meta, conversation = _load_meta_for_ticket(db, ticket_no)
     if meta is None or conversation is None:
-        await MaxClient().send_text_to_user(
+        manager_workspace = (
+            db.query(ServiceUser.workspace_id)
+            .filter(ServiceUser.role == "manager", ServiceUser.max_account_id == manager_id)
+            .scalar()
+            or DEFAULT_WORKSPACE_ID
+        )
+        client = _workspace_client(db, workspace_id=int(manager_workspace))
+        await client.send_text_to_user(
             user_id=manager_id,
             text=f"Тикет T-{ticket_no} не найден.",
         )
@@ -1889,7 +1921,7 @@ async def send_admin_quick_reply(
     conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
     if conversation is None:
         return False
-    client = MaxClient()
+    client = _workspace_client(db, workspace_id=conversation.workspace_id)
     return await send_quick_reply_to_customer(
         db=db,
         client=client,
@@ -2391,7 +2423,7 @@ async def update_chat_message_text(
         return None
     text_value = new_text.strip()
     if msg.max_message_mid:
-        client = MaxClient()
+        client = _workspace_client(db, workspace_id=msg.workspace_id)
         await client.edit_message(message_id=msg.max_message_mid, text=text_value)
     msg.text = text_value
     db.add(msg)
@@ -2413,7 +2445,7 @@ async def remove_chat_message(
     if not msg:
         return False
     if msg.max_message_mid:
-        client = MaxClient()
+        client = _workspace_client(db, workspace_id=msg.workspace_id)
         await client.delete_message(message_id=msg.max_message_mid)
     db.delete(msg)
     db.commit()
