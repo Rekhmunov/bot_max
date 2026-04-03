@@ -1277,7 +1277,7 @@
             {% for thread in threads %}
               <a
                 class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %} {% if thread.is_unread %}unread{% endif %}"
-                href="{{ page_query_prefix }}conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}"
+                href="{{ page_query_prefix }}conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat&mark_read=1{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}"
                 data-thread-id="{{ thread.conversation_id }}"
                 data-thread-unread="{{ '1' if thread.is_unread else '0' }}"
                 data-soft-nav

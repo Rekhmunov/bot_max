@@ -2614,7 +2614,7 @@ def admin_chat_mark_unread(
     )
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
     return RedirectResponse(
-        url=f"/admin/chats?conversation_id={target_conversation}&q={q}&view={view}&unread={suffix}{folder_qs}",
+        url=f"/admin/chats?conversation_id={target_conversation}&q={q}&view={view}&mark_read=0&unread={suffix}{folder_qs}",
         status_code=302,
     )
 
@@ -5517,7 +5517,7 @@ def app_chat_mark_unread(
         is_scoped=is_superadmin_scoped,
     )
     return RedirectResponse(
-        url=f"/app/chats?conversation_id={target_conversation}&q={q}&view={view}&unread={suffix}{folder_qs}{workspace_qs}",
+        url=f"/app/chats?conversation_id={target_conversation}&q={q}&view={view}&mark_read=0&unread={suffix}{folder_qs}{workspace_qs}",
         status_code=302,
     )
 
@@ -5991,7 +5991,7 @@ def admin_chats_updates(
         query=q,
         folder_id=folder_id,
         conversation_id=conversation_id,
-        mark_read=conversation_id is not None,
+        mark_read=False,
         last_message_id=last_message_id,
         threads_signature=threads_sig,
     )
@@ -6029,7 +6029,7 @@ def app_chats_updates(
         query=q,
         folder_id=folder_id,
         conversation_id=conversation_id,
-        mark_read=conversation_id is not None,
+        mark_read=False,
         last_message_id=last_message_id,
         threads_signature=threads_sig,
     )
@@ -6060,7 +6060,7 @@ def manager_mini_updates(
         query=q,
         folder_id=folder_id,
         conversation_id=conversation_id,
-        mark_read=conversation_id is not None,
+        mark_read=False,
         last_message_id=last_message_id,
         threads_signature=threads_sig,
     )
@@ -6101,9 +6101,10 @@ async def _render_chat_workspace(
         active_thread = threads[0]
 
     messages = []
+    mark_read_requested = request.query_params.get("mark_read") == "1"
     opened_unread_same = request.query_params.get("opened_same_unread") == "1"
     if active_thread:
-        if not opened_unread_same:
+        if mark_read_requested and not opened_unread_same:
             mark_thread_read(db, active_thread.conversation_id, workspace_id=workspace_id)
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
     mobile_chat_view = view.strip().lower() == "chat"
@@ -6251,7 +6252,7 @@ def manager_mini_mark_unread(
             q=q,
             view=view,
             folder_id=folder_id,
-            extra=f"unread={suffix}",
+            extra=f"mark_read=0&unread={suffix}",
         ),
         status_code=302,
     )

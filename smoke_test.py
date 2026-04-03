@@ -1335,6 +1335,41 @@ def run() -> None:
         mark_unread_other_location = mark_unread_other.headers.get("location", "")
         assert f"conversation_id={conversation_id}" in mark_unread_other_location
         assert "unread=1" in mark_unread_other_location
+        # Polling must not clear unread by itself.
+        updates_keep_unread = client.get(
+            f"/admin/chats/updates?conversation_id={conversation_id}&last_message_id=0&threads_sig=",
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert updates_keep_unread.status_code == 200
+        with SessionLocal() as db:
+            from app.models import ConversationMeta
+            unread_meta = (
+                db.query(ConversationMeta)
+                .filter(ConversationMeta.workspace_id == 1, ConversationMeta.conversation_id == conversation_id)
+                .first()
+            )
+            assert unread_meta is not None
+            assert bool(unread_meta.is_unread) is True
+            assert bool(unread_meta.manual_unread_mark) is True
+
+        # Explicit opening with mark_read=1 should clear unread marker.
+        explicit_open_read = client.get(
+            f"/admin/chats?conversation_id={conversation_id}&view=chat&mark_read=1",
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert explicit_open_read.status_code == 200
+        with SessionLocal() as db:
+            from app.models import ConversationMeta
+            read_meta = (
+                db.query(ConversationMeta)
+                .filter(ConversationMeta.workspace_id == 1, ConversationMeta.conversation_id == conversation_id)
+                .first()
+            )
+            assert read_meta is not None
+            assert bool(read_meta.is_unread) is False
+            assert bool(read_meta.manual_unread_mark) is False
 
         move_to_folder = client.post(
             f"/admin/chats/{conversation_id}/move-folder",

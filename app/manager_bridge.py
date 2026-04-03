@@ -2009,7 +2009,8 @@ def load_chat_threads(
             if not preview and last_msg.image_url:
                 preview = "[изображение]"
         status = meta.status if meta else "new"
-        is_unread = bool(meta.is_unread) if meta else True
+        # Show unread highlight when there are unread messages OR manual reminder mark.
+        is_unread = (bool(meta.is_unread) or bool(meta.manual_unread_mark)) if meta else True
         phone_verified = bool(meta.phone_verified) if meta else False
         ticket_no = meta.ticket_no if meta else None
         last_activity_id = last_msg.id if last_msg else conv.id
@@ -2308,10 +2309,9 @@ def mark_thread_unread(
     meta = query.first()
     if meta is None:
         return False
-    if meta.status == "new" and meta.is_unread:
+    if bool(meta.manual_unread_mark):
         return True
-    meta.status = "new"
-    meta.is_unread = True
+    meta.manual_unread_mark = True
     db.add(meta)
     db.commit()
     return True
@@ -2357,9 +2357,10 @@ def mark_thread_read(
     meta = query.first()
     if meta is None:
         return
-    if meta.status != "read" or meta.is_unread:
+    if meta.status != "read" or meta.is_unread or bool(meta.manual_unread_mark):
         meta.status = "read"
         meta.is_unread = False
+        meta.manual_unread_mark = False
         db.add(meta)
         db.commit()
 
