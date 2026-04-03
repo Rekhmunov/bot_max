@@ -220,9 +220,34 @@ def sign_in_service_user_with_reason(
         .filter(ServiceUser.username == normalized, ServiceUser.is_active.is_(True))
         .first()
     )
+    password_verified = False
+    if user is None:
+        # Managers often identify themselves by Max account ID.
+        # Allow fallback login by max_account_id for manager role only.
+        manager_candidates = (
+            db.query(ServiceUser)
+            .filter(
+                ServiceUser.role == "manager",
+                ServiceUser.max_account_id == normalized,
+                ServiceUser.is_active.is_(True),
+                ServiceUser.is_blocked.is_(False),
+            )
+            .all()
+        )
+        matched_candidates = [
+            candidate
+            for candidate in manager_candidates
+            if verify_password(password=password, password_hash=candidate.password_hash)
+        ]
+        if len(matched_candidates) == 1:
+            user = matched_candidates[0]
+            password_verified = True
+        elif len(matched_candidates) > 1:
+            return {"status": "invalid_credentials", "user": None, "workspace": None}
+
     if user is None or user.is_blocked:
         return {"status": "invalid_credentials", "user": None, "workspace": None}
-    if not verify_password(password=password, password_hash=user.password_hash):
+    if not password_verified and not verify_password(password=password, password_hash=user.password_hash):
         return {"status": "invalid_credentials", "user": None, "workspace": None}
     if user.role != "superadmin" and user.workspace_id:
         workspace = db.query(Workspace).filter(Workspace.id == user.workspace_id).first()

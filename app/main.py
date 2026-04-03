@@ -2455,6 +2455,7 @@ def admin_chat_create_folder(
 @app.post("/admin/chats/{conversation_id}/mark-unread", response_class=RedirectResponse)
 def admin_chat_mark_unread(
     conversation_id: int,
+    current_conversation_id: int | None = Form(default=None),
     q: str = Form(""),
     view: str = Form(""),
     folder_id: int | None = Form(default=None),
@@ -2467,9 +2468,14 @@ def admin_chat_mark_unread(
         workspace_id=DEFAULT_WORKSPACE_ID,
     )
     suffix = "1" if ok else "0"
+    target_conversation = (
+        current_conversation_id
+        if current_conversation_id is not None
+        else conversation_id
+    )
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
     return RedirectResponse(
-        url=f"/admin/chats?conversation_id={conversation_id}&q={q}&view={view}&unread={suffix}{folder_qs}",
+        url=f"/admin/chats?conversation_id={target_conversation}&q={q}&view={view}&unread={suffix}{folder_qs}",
         status_code=302,
     )
 
@@ -5298,6 +5304,7 @@ def app_chat_create_folder(
 @app.post("/app/chats/{conversation_id}/mark-unread", response_class=RedirectResponse)
 def app_chat_mark_unread(
     conversation_id: int,
+    current_conversation_id: int | None = Form(default=None),
     q: str = Form(""),
     view: str = Form(""),
     folder_id: int | None = Form(default=None),
@@ -5312,13 +5319,18 @@ def app_chat_mark_unread(
     )
     ok = mark_thread_unread(db, conversation_id=conversation_id, workspace_id=workspace_id)
     suffix = "1" if ok else "0"
+    target_conversation = (
+        current_conversation_id
+        if current_conversation_id is not None
+        else conversation_id
+    )
     folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
     workspace_qs = _workspace_scope_query_suffix(
         workspace_id=workspace_id,
         is_scoped=is_superadmin_scoped,
     )
     return RedirectResponse(
-        url=f"/app/chats?conversation_id={conversation_id}&q={q}&view={view}&unread={suffix}{folder_qs}{workspace_qs}",
+        url=f"/app/chats?conversation_id={target_conversation}&q={q}&view={view}&unread={suffix}{folder_qs}{workspace_qs}",
         status_code=302,
     )
 
@@ -5805,6 +5817,7 @@ def app_chats_updates(
     conversation_id: int | None = None,
     q: str = "",
     folder_id: int | None = None,
+    workspace_id: int | None = None,
     last_message_id: int = 0,
     threads_sig: str = "",
     current_user: ServiceUser = Depends(require_service_user),
@@ -5817,7 +5830,11 @@ def app_chats_updates(
         scope="app_view",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 6),
     )
-    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    workspace_id, _scoped_workspace, _is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
     payload = _build_chat_updates_payload(
         db=db,
         workspace_id=workspace_id,
@@ -5896,8 +5913,10 @@ async def _render_chat_workspace(
         active_thread = threads[0]
 
     messages = []
+    opened_unread_same = request.query_params.get("opened_same_unread") == "1"
     if active_thread:
-        mark_thread_read(db, active_thread.conversation_id, workspace_id=workspace_id)
+        if not opened_unread_same:
+            mark_thread_read(db, active_thread.conversation_id, workspace_id=workspace_id)
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
     mobile_chat_view = view.strip().lower() == "chat"
     threads_signature_source = "|".join(
@@ -6017,6 +6036,7 @@ def manager_mini_mark_unread(
     request: Request,
     conversation_id: int,
     token: str,
+    current_conversation_id: int | None = Form(default=None),
     q: str = Form(""),
     view: str = Form(""),
     folder_id: int | None = Form(default=None),
@@ -6031,10 +6051,15 @@ def manager_mini_mark_unread(
     workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
     ok = mark_thread_unread(db, conversation_id=conversation_id, workspace_id=workspace_id)
     suffix = "1" if ok else "0"
+    target_conversation = (
+        current_conversation_id
+        if current_conversation_id is not None
+        else conversation_id
+    )
     return RedirectResponse(
         url=_manager_mini_url(
             token=token,
-            conversation_id=conversation_id,
+            conversation_id=target_conversation,
             q=q,
             view=view,
             folder_id=folder_id,

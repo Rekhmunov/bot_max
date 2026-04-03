@@ -2088,10 +2088,17 @@
           unreadBtn.textContent = "Отметить непрочитанным";
           unreadBtn.addEventListener("click", async () => {
             hideCtx();
+            const activeConversationInput = document.querySelector("input[name='conversation_id']");
+            const activeConversationId = activeConversationInput instanceof HTMLInputElement
+              ? Number(activeConversationInput.value || 0)
+              : 0;
             const response = await fetch(`${markUnreadPrefix}${threadId}/mark-unread${endpointQuerySuffix}`, {
               method: "POST",
               headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body: `q=${currentQ}&view=${currentView}${currentFolderParam()}`,
+              body:
+                `q=${currentQ}&view=${currentView}` +
+                `&current_conversation_id=${encodeURIComponent(String(activeConversationId || threadId))}` +
+                `${currentFolderParam()}`,
             });
             if (window.__chatSoftRenderFromResponse) {
               await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });

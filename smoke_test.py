@@ -1082,6 +1082,62 @@ def run() -> None:
         assert app_settings_after_copy.status_code == 200
         assert "Ожидает подключения" in app_settings_after_copy.text or "Подключен" in app_settings_after_copy.text
 
+        # Manager should be able to sign in again after logout using max_account_id + password.
+        manager_relogin_email = f"manager_relogin_{uuid4().hex[:8]}@example.com"
+        manager_relogin_register = client.post(
+            "/app/register",
+            data={"email": manager_relogin_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert manager_relogin_register.status_code in (302, 303)
+        manager_relogin_login = client.post(
+            "/app/login",
+            data={"username": manager_relogin_email, "password": "StrongPass#123"},
+            follow_redirects=False,
+        )
+        assert manager_relogin_login.status_code in (302, 303)
+        manager_relogin_cookies = manager_relogin_login.cookies
+        manager_relogin_max_id = "93000"
+        relogin_copy = client.post(
+            "/app/settings/copy-manager-link",
+            data={"copy_manager_id": manager_relogin_max_id},
+            cookies=manager_relogin_cookies,
+            follow_redirects=False,
+        )
+        assert relogin_copy.status_code == 200
+        relogin_link = str(relogin_copy.json().get("link", "")).strip()
+        assert relogin_link
+        relogin_invite_path = urlsplit(relogin_link).path
+        relogin_invite_open = client.get(relogin_invite_path, follow_redirects=False)
+        assert relogin_invite_open.status_code == 200
+        relogin_set_password = client.post(
+            relogin_invite_path,
+            data={
+                "manager_password": "Relogin#123",
+                "manager_password_confirm": "Relogin#123",
+            },
+            follow_redirects=False,
+        )
+        assert relogin_set_password.status_code in (302, 303)
+        manager_login_by_max_id = client.post(
+            "/app/login",
+            data={"username": manager_relogin_max_id, "password": "Relogin#123"},
+            follow_redirects=False,
+        )
+        assert manager_login_by_max_id.status_code in (302, 303)
+        manager_logout = client.post(
+            "/app/logout",
+            cookies=manager_login_by_max_id.cookies,
+            follow_redirects=False,
+        )
+        assert manager_logout.status_code in (302, 303)
+        manager_relogin_by_max_id = client.post(
+            "/app/login",
+            data={"username": manager_relogin_max_id, "password": "Relogin#123"},
+            follow_redirects=False,
+        )
+        assert manager_relogin_by_max_id.status_code in (302, 303)
+
         admin_chats_page = client.get(
             f"/admin/chats?conversation_id={conversation_id}",
             cookies=cookies,
@@ -1201,12 +1257,44 @@ def run() -> None:
 
         mark_unread = client.post(
             f"/admin/chats/{conversation_id}/mark-unread",
-            data={"q": "", "view": "chat"},
+            data={"q": "", "view": "chat", "current_conversation_id": str(conversation_id)},
             cookies=cookies,
             follow_redirects=False,
         )
         assert mark_unread.status_code in (302, 303)
         assert "unread=1" in mark_unread.headers.get("location", "")
+
+        second_chat_id = f"chat_{uuid4().hex[:8]}"
+        second_buyer_id = f"buyer_{uuid4().hex[:8]}"
+        second_start = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "bot_started",
+                "chat_id": second_chat_id,
+                "sender_id": second_buyer_id,
+                "text": "",
+            },
+        )
+        assert second_start.status_code == 200
+        with SessionLocal() as db:
+            second_conversation = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == 1, Conversation.chat_id == second_chat_id)
+                .first()
+            )
+            assert second_conversation is not None
+            second_conversation_id = int(second_conversation.id)
+
+        mark_unread_other = client.post(
+            f"/admin/chats/{second_conversation_id}/mark-unread",
+            data={"q": "", "view": "chat", "current_conversation_id": str(conversation_id)},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert mark_unread_other.status_code in (302, 303)
+        mark_unread_other_location = mark_unread_other.headers.get("location", "")
+        assert f"conversation_id={conversation_id}" in mark_unread_other_location
+        assert "unread=1" in mark_unread_other_location
 
         move_to_folder = client.post(
             f"/admin/chats/{conversation_id}/move-folder",
