@@ -946,6 +946,8 @@
     (() => {
       const rowsWrap = document.getElementById("manager-ids-wrap");
       if (!rowsWrap) return;
+      const managerSection = rowsWrap.closest("section");
+      const clickScope = managerSection instanceof HTMLElement ? managerSection : rowsWrap;
       const showToast = (message, kind = "ok") => {
         const toast = document.createElement("div");
         toast.textContent = String(message || "");
@@ -992,7 +994,7 @@
           copyBtn.value = target.value.trim();
         }
       });
-      rowsWrap.addEventListener("click", (event) => {
+      clickScope.addEventListener("click", (event) => {
         const target = event.target;
         if (!(target instanceof Element)) return;
         const removeBtn = target.closest("button.manager-remove-btn");

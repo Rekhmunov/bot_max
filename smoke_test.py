@@ -3,12 +3,12 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from app.auth import create_manager_mini_token
+from app.auth import create_manager_mini_token, create_service_session
 from app.database import SessionLocal, init_db
 from app.main import app
 from app.manager_bridge import DEFAULT_TEMPLATES
 from app.services import get_or_create_settings
-from app.models import ChatFolder, Conversation, ServiceUser, Subscription, WebhookEvent, Workspace
+from app.models import ChatFolder, Conversation, ServiceUser, Subscription, UserSession, WebhookEvent, Workspace
 
 
 def run() -> None:
@@ -743,10 +743,46 @@ def run() -> None:
         assert copy_payload.get("ok") is True
         copied_link = str(copy_payload.get("link", "")).strip()
         assert copied_link
+        copy_manager_link_second = client.post(
+            "/app/settings/copy-manager-link",
+            data={
+                "copy_manager_id": "90001",
+                "routing_mode": "round_robin",
+                "admin_account_id": "",
+            },
+            cookies=invite_flow_cookies,
+            follow_redirects=False,
+        )
+        assert copy_manager_link_second.status_code == 200
+        assert copy_manager_link_second.json().get("ok") is True
         invite_path = urlsplit(copied_link).path
         invite_page = client.get(invite_path, follow_redirects=False)
         assert invite_page.status_code == 200
         assert "Создание пароля менеджера" in invite_page.text
+
+        with SessionLocal() as db:
+            removable_manager = (
+                db.query(ServiceUser)
+                .filter(
+                    ServiceUser.workspace_id == invite_flow_workspace_id,
+                    ServiceUser.role == "manager",
+                    ServiceUser.max_account_id == "90001",
+                )
+                .first()
+            )
+            assert removable_manager is not None
+            create_service_session(
+                db,
+                user_id=int(removable_manager.id),
+                ip_address="127.0.0.1",
+                user_agent="smoke/remove-manager",
+            )
+            active_sessions_before = (
+                db.query(UserSession)
+                .filter(UserSession.user_id == removable_manager.id, UserSession.is_revoked.is_(False))
+                .count()
+            )
+            assert active_sessions_before >= 1
 
         delete_manager_resp = client.post(
             "/app/settings/remove-manager",
@@ -764,6 +800,7 @@ def run() -> None:
         delete_payload = delete_manager_resp.json()
         assert delete_payload.get("ok") is True
         with SessionLocal() as db:
+            conversation_count_before = db.query(Conversation).count()
             invite_flow_settings = get_or_create_settings(db, workspace_id=invite_flow_workspace_id)
             current_ids = [item.strip() for item in (invite_flow_settings.manager_account_id or "").split(",") if item.strip()]
             assert current_ids == ["90000"]
@@ -776,9 +813,24 @@ def run() -> None:
                 )
                 .first()
             )
-            if removed_manager is not None:
-                assert bool(removed_manager.is_active) is False
-                assert bool(removed_manager.is_blocked) is True
+            assert removed_manager is not None
+            assert bool(removed_manager.is_active) is False
+            assert bool(removed_manager.is_blocked) is True
+            active_sessions_after = (
+                db.query(UserSession)
+                .filter(UserSession.user_id == removed_manager.id, UserSession.is_revoked.is_(False))
+                .count()
+            )
+            assert active_sessions_after == 0
+            revoked_sessions_after = (
+                db.query(UserSession)
+                .filter(UserSession.user_id == removed_manager.id, UserSession.is_revoked.is_(True))
+                .count()
+            )
+            assert revoked_sessions_after >= 1
+            conversation_count_after = db.query(Conversation).count()
+            # Manager removal must not wipe user chat history.
+            assert conversation_count_after == conversation_count_before
 
         # Remaining counters in "Тариф и лимиты" must reflect quick reply consumption.
         add_quick_reply_for_invite_ws = client.post(
