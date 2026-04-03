@@ -718,6 +718,22 @@
   </div>
   <script>
     (() => {
+      const tokenLink = document.getElementById("token-toggle-link");
+      const tokenWrap = document.getElementById("token-input-wrap");
+      if (tokenLink instanceof HTMLAnchorElement && tokenWrap instanceof HTMLElement) {
+        tokenLink.addEventListener("click", (event) => {
+          event.preventDefault();
+          tokenWrap.hidden = false;
+          const tokenInput = document.getElementById("bot_token");
+          if (tokenInput instanceof HTMLInputElement) {
+            tokenInput.focus();
+          }
+          tokenLink.remove();
+        });
+      }
+    })();
+
+    (() => {
       const filesInput = document.getElementById("photos");
       const mediaSortWrap = document.getElementById("media-sort-wrap");
       const mediaSortGrid = document.getElementById("media-sort-grid");
