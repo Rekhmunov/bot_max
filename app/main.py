@@ -1205,6 +1205,22 @@ def _workspace_id_for_user(user: ServiceUser | None) -> int:
     return int(user.workspace_id or DEFAULT_WORKSPACE_ID)
 
 
+def _build_max_bot_profile_url(bot_account_id: str | None) -> str:
+    value = (bot_account_id or "").strip()
+    if not value:
+        return ""
+    if value.isdigit():
+        return f"https://max.ru/{value}"
+    return f"https://max.ru/{value.lstrip('@')}"
+
+
+def _build_customer_bot_link(*, tenant_code: str | None) -> str:
+    code = (tenant_code or "").strip().lower()
+    if not code:
+        return ""
+    return f"{settings.public_base_url.rstrip('/')}/c/{code}"
+
+
 def _manager_ids_from_settings_row(settings_row: BotSettings | None) -> set[str]:
     if settings_row is None:
         return set()
@@ -1263,6 +1279,22 @@ def _sha256(value: str) -> str:
 
 def _json_escape(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)[1:-1]
+
+
+@app.get("/c/{tenant_code}", response_class=RedirectResponse)
+def customer_bot_link_redirect(
+    tenant_code: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    workspace = get_workspace_by_tenant_code(db, tenant_code)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Клиент не найден")
+    if not workspace.is_active or workspace.is_suspended:
+        raise HTTPException(status_code=403, detail="Клиент временно недоступен")
+    bot_url = _build_max_bot_profile_url(settings.max_bot_account_id)
+    if not bot_url:
+        raise HTTPException(status_code=503, detail="Бот Max не настроен")
+    return RedirectResponse(url=bot_url, status_code=302)
 
 
 def _email_verify_serializer() -> URLSafeTimedSerializer:
@@ -1424,13 +1456,14 @@ def _render_app_settings_page(
     )
     bot_profile_url = ""
     bot_profile_label = ""
+    customer_bot_link = ""
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
     bot_account_id = (settings.max_bot_account_id or "").strip()
     if bot_account_id:
-        if bot_account_id.isdigit():
-            bot_profile_url = f"https://max.ru/{bot_account_id}"
-        else:
-            bot_profile_url = f"https://max.ru/{bot_account_id.lstrip('@')}"
+        bot_profile_url = _build_max_bot_profile_url(bot_account_id)
         bot_profile_label = bot_account_id
+    if workspace is not None:
+        customer_bot_link = _build_customer_bot_link(tenant_code=workspace.tenant_code)
     tenant_resolution_hint = (
         "Один общий бот Max используется для всех клиентов. "
         "Система автоматически определяет клиента по входящему событию "
@@ -1491,6 +1524,7 @@ def _render_app_settings_page(
             "usage_remaining": usage_remaining,
             "bot_profile_url": bot_profile_url,
             "bot_profile_label": bot_profile_label,
+            "customer_bot_link": customer_bot_link,
             "tenant_resolution_hint": tenant_resolution_hint,
             "routing_mode_label": _manager_routing_mode_label(bot_settings.routing_mode or "round_robin"),
         },
