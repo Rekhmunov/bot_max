@@ -357,14 +357,6 @@
             <a href="#" id="token-toggle-link" style="margin-left:8px;">Ввести токен</a>
           {% endif %}
         </div>
-        <div class="hint" style="margin-top:6px;">
-          Ссылка вашего бота Max:
-          <code>{{ workspace_bot_link or "—" }}</code>
-        </div>
-        <div class="hint" style="margin-top:6px;">
-          Webhook URL для вашего бота:
-          <code>{{ workspace_webhook_url or webhook_url }}</code>
-        </div>
       </section>
     {% endif %}
 
@@ -373,13 +365,6 @@
         <h2>Настройки бота</h2>
         <form method="post" action="{{ settings_action or '/admin/settings' }}">
           {% if ui_mode == "app" %}
-          <label for="bot_link">Ссылка вашего бота Max</label>
-          <input
-            id="bot_link"
-            name="bot_link"
-            value="{{ workspace_bot_link or '' }}"
-            placeholder="https://max.ru/id123456789_bot"
-          />
           <div id="token-input-wrap" {% if workspace_bot_token_masked %}hidden{% endif %}>
             <label for="bot_token">Токен вашего бота Max</label>
             <input
@@ -733,22 +718,6 @@
   </div>
   <script>
     (() => {
-      const tokenLink = document.getElementById("token-toggle-link");
-      const tokenWrap = document.getElementById("token-input-wrap");
-      if (tokenLink instanceof HTMLAnchorElement && tokenWrap instanceof HTMLElement) {
-        tokenLink.addEventListener("click", (event) => {
-          event.preventDefault();
-          tokenWrap.hidden = false;
-          const tokenInput = document.getElementById("bot_token");
-          if (tokenInput instanceof HTMLInputElement) {
-            tokenInput.focus();
-          }
-          tokenLink.remove();
-        });
-      }
-    })();
-
-    (() => {
       const filesInput = document.getElementById("photos");
       const mediaSortWrap = document.getElementById("media-sort-wrap");
       const mediaSortGrid = document.getElementById("media-sort-grid");
@@ -848,22 +817,6 @@
             });
           });
           rebuildFileListAndPreview();
-        });
-      }
-    })();
-
-    (() => {
-      const tokenToggle = document.getElementById("token-toggle-link");
-      const tokenWrap = document.getElementById("token-input-wrap");
-      if (tokenToggle instanceof HTMLAnchorElement && tokenWrap instanceof HTMLElement) {
-        tokenToggle.addEventListener("click", (event) => {
-          event.preventDefault();
-          tokenWrap.hidden = false;
-          const tokenInput = document.getElementById("bot_token");
-          if (tokenInput instanceof HTMLInputElement) {
-            tokenInput.focus();
-          }
-          tokenToggle.remove();
         });
       }
     })();

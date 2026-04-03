@@ -183,6 +183,20 @@ class MaxClient:
     async def delete_message(self, *, message_id: str) -> dict[str, Any]:
         return await self._delete(f"/messages?message_id={message_id}")
 
+    async def subscribe_webhook(
+        self,
+        *,
+        url: str,
+        update_types: list[str] | None = None,
+        secret: str | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {"url": str(url or "").strip()}
+        if update_types:
+            payload["update_types"] = [str(item).strip() for item in update_types if str(item).strip()]
+        if secret:
+            payload["secret"] = str(secret).strip()
+        return await self._post("/subscriptions", payload)
+
     async def add_member_to_chat(self, chat_id: str, account_id: str) -> dict[str, Any]:
         return await self._post(
             f"/chats/{chat_id}/members",

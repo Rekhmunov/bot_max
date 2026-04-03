@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote_plus
 from urllib.parse import urlencode
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -491,6 +492,58 @@ def _workspace_client_or_error(settings_row: BotSettings) -> tuple[MaxClient | N
     if not token:
         return None, "Укажите токен вашего бота Max в настройках."
     return MaxClient(token=token), None
+
+
+def _extract_max_error_message(result: dict) -> str:
+    response_payload = result.get("response")
+    if isinstance(response_payload, dict):
+        for key in ("message", "error", "detail", "description"):
+            value = response_payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    details = result.get("details")
+    if isinstance(details, str) and details.strip():
+        return details.strip()
+    return ""
+
+
+async def _auto_subscribe_workspace_webhook(settings_row: BotSettings) -> tuple[bool, str | None]:
+    client, client_error = _workspace_client_or_error(settings_row)
+    if client is None:
+        return False, client_error or "Укажите токен вашего бота Max в настройках."
+
+    webhook_workspace_url = _workspace_webhook_url(settings_row)
+    public_url = urlsplit(webhook_workspace_url)
+    host = (public_url.hostname or "").lower()
+    if public_url.scheme != "https" or host in {"localhost", "127.0.0.1", "::1"}:
+        # In local/dev environments we skip remote subscribe and keep save flow intact.
+        return True, None
+    webhook_secret_value = (settings.webhook_secret or "").strip() or None
+    subscribe_result = await client.subscribe_webhook(
+        url=webhook_workspace_url,
+        update_types=["message_created", "message_callback", "bot_started"],
+        secret=webhook_secret_value,
+    )
+    success = bool(
+        subscribe_result.get("success", True)
+        or subscribe_result.get("ok")
+        or subscribe_result.get("result")
+        or subscribe_result.get("mock")
+    )
+    if success:
+        return True, None
+
+    status_code = subscribe_result.get("status_code")
+    error_details = _extract_max_error_message(subscribe_result)
+    if status_code == 401:
+        return False, "Неверный токен бота Max. Проверьте токен и сохраните снова."
+    if status_code == 403:
+        return False, "Нет доступа к API Max по указанному токену."
+    if status_code in {400, 404, 422}:
+        suffix = f" ({error_details})" if error_details else ""
+        return False, f"Не удалось автоматически подключить webhook в Max{suffix}"
+    suffix = f" ({error_details})" if error_details else ""
+    return False, f"Не удалось автоматически подключить webhook в Max. Код: {status_code or 'unknown'}{suffix}"
 
 
 def _localized_alert_entry(alert: TenantAlert) -> dict[str, str]:
@@ -3911,7 +3964,6 @@ async def app_update_settings(
     start_message: str = Form(""),
     after_phone_message: str = Form(""),
     bot_token: str = Form(""),
-    bot_link: str = Form(""),
     manager_account_id: str = Form(""),
     admin_account_id: str = Form(""),
     routing_mode: str = Form("round_robin"),
@@ -3929,20 +3981,19 @@ async def app_update_settings(
     if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
+    previous_webhook_key = (settings_row.webhook_key or "").strip()
     token_clean = (bot_token or "").strip()
     existing_token = (settings_row.bot_token or "").strip()
     if token_clean:
         settings_row.bot_token = token_clean
     elif not existing_token:
         raise HTTPException(status_code=400, detail="Укажите токен вашего бота Max.")
-    normalized_link = _normalize_bot_link(bot_link or "")
-    if normalized_link and not _is_valid_bot_link(normalized_link):
-        raise HTTPException(
-            status_code=400,
-            detail="Ссылка бота должна быть формата https://max.ru/id123456789_bot",
-        )
-    settings_row.bot_link = normalized_link
     _ensure_workspace_webhook_key(settings_row)
+    should_sync_webhook = bool(token_clean) or not previous_webhook_key
+    if should_sync_webhook:
+        subscribed_ok, subscribe_error = await _auto_subscribe_workspace_webhook(settings_row)
+        if not subscribed_ok:
+            raise HTTPException(status_code=400, detail=subscribe_error or "Не удалось подключить webhook в Max.")
     settings_row.admin_account_id = admin_account_id.strip()
     mode = (routing_mode or "round_robin").strip().lower()
     if mode not in {"round_robin", "random"}:

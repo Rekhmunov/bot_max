@@ -724,7 +724,10 @@ def run() -> None:
         assert "Осталось быстрых ответов:" in settings_page.text
         assert "Осталось папок:" in settings_page.text
         assert "Подключение вашего бота Max" in settings_page.text
-        assert "Ссылка вашего бота Max" in settings_page.text
+        assert "Токен вашего бота не вижу." in settings_page.text
+        assert "Ввести токен" in settings_page.text
+        assert "Ссылка вашего бота Max" not in settings_page.text
+        assert "Webhook URL для вашего бота" not in settings_page.text
         copy_manager_link = client.post(
             "/app/settings/copy-manager-link",
             data={
@@ -823,7 +826,6 @@ def run() -> None:
                 "start_message": start_template,
                 "after_phone_message": after_phone_template,
                 "bot_token": "token_app_limit",
-                "bot_link": "https://max.ru/id444444444_bot",
                 "manager_account_ids": ["90100", "90101"],
                 "routing_mode": "round_robin",
                 "request_customer_phone": "1",
@@ -894,7 +896,6 @@ def run() -> None:
                 "start_message": start_template,
                 "after_phone_message": after_phone_template,
                 "bot_token": "token_phone_toggle",
-                "bot_link": "https://max.ru/id333333333_bot",
                 "manager_account_ids": ["91000"],
                 "routing_mode": "round_robin",
             },
@@ -922,7 +923,6 @@ def run() -> None:
                 "start_message": start_template,
                 "after_phone_message": after_phone_template,
                 "bot_token": "token_phone_toggle",
-                "bot_link": "https://max.ru/id333333333_bot",
                 "manager_account_ids": ["91000"],
                 "routing_mode": "round_robin",
                 "request_customer_phone": "1",
