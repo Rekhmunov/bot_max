@@ -845,7 +845,8 @@
           return;
         }
         if (action === "bold") {
-          wrapSelection(textarea, "**", "**");
+          // Max markdown uses single-asterisk bold.
+          wrapSelection(textarea, "*", "*");
           return;
         }
         if (action === "strike") {

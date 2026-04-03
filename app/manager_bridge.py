@@ -1598,9 +1598,33 @@ async def handle_customer_event(
             await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "prestart"}
 
-    # Start event should always (re)run onboarding flow.
-    # This keeps behavior consistent after bot re-install / repeated Start.
+    # Start event should run onboarding only once for active dialog.
+    # Re-run is allowed only when customer history contains only system/service
+    # markers (bot_started, empty text, contact share), which is typical for
+    # bot reinstall/new chat lifecycle before real customer messages.
     if is_bot_started:
+        customer_history_rows = (
+            db.query(ChatMessage.text, ChatMessage.max_message_mid, ChatMessage.link_mid)
+            .filter(
+                ChatMessage.workspace_id == workspace_id,
+                ChatMessage.conversation_id == conversation.id,
+                ChatMessage.direction == "customer",
+            )
+            .all()
+        )
+        has_substantive_customer_history = False
+        for row in customer_history_rows:
+            row_text = str((row[0] if row else "") or "").strip().lower()
+            has_service_marker = bool((row[1] if row else None) or (row[2] if row else None))
+            if row_text in {"", "/start", "start", "bot_started", "bot_start"}:
+                continue
+            # Contact share can arrive with empty text + service marker.
+            if has_service_marker and not row_text:
+                continue
+            has_substantive_customer_history = True
+            break
+        if meta.start_prompt_sent and has_substantive_customer_history:
+            return {"ok": True, "flow": "start_ignored_active_dialog"}
         meta.start_prompt_sent = True
         if require_phone:
             if not event.contact_phone:

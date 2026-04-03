@@ -141,6 +141,7 @@ sudo systemctl status bot-max
 server {
     listen 80;
     server_name your-domain.ru www.your-domain.ru;
+    client_max_body_size 25m;
 
     location / {
         proxy_pass http://127.0.0.1:8000;
@@ -156,6 +157,14 @@ server {
 
 ```bash
 sudo ln -s /etc/nginx/sites-available/bot-max /etc/nginx/sites-enabled/bot-max
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Если уже видите ошибку `413 Request Entity Too Large`, примените лимит:
+
+```bash
+sudo nano /etc/nginx/sites-available/bot-max
 sudo nginx -t
 sudo systemctl reload nginx
 ```
