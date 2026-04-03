@@ -167,6 +167,17 @@ class QuickReply(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class QuickReplyMedia(Base):
+    __tablename__ = "quick_reply_media"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True, default=1)
+    quick_reply_id: Mapped[int] = mapped_column(ForeignKey("quick_replies.id"), index=True)
+    media_path: Mapped[str] = mapped_column(String(1000))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 

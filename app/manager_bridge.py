@@ -27,6 +27,7 @@ from app.models import (
     MessageTemplate,
     OutboxMessage,
     QuickReply,
+    QuickReplyMedia,
     ServiceUser,
 )
 from app.schemas import MaxWebhookEvent
@@ -1778,6 +1779,41 @@ async def send_quick_reply_to_customer(
     if not quick_reply:
         return False
 
+    media_items = (
+        db.query(QuickReplyMedia)
+        .filter(QuickReplyMedia.quick_reply_id == quick_reply.id)
+        .order_by(QuickReplyMedia.sort_order.asc(), QuickReplyMedia.id.asc())
+        .all()
+    )
+    if media_items:
+        for media in media_items:
+            image_url = f"{app_settings.public_base_url.rstrip('/')}{media.media_path}"
+            ok = await enqueue_and_process_send_photo(
+                db,
+                conversation_id=conversation_id,
+                target_chat_id=customer_chat_id,
+                target_user_id=customer_user_id,
+                photo_url=image_url,
+                caption=image_caption,
+                source=source,
+            )
+            if not ok:
+                return False
+    elif quick_reply.image_path:
+        # Backward-compatibility for legacy quick replies with single image_path.
+        image_url = f"{app_settings.public_base_url.rstrip('/')}{quick_reply.image_path}"
+        ok = await enqueue_and_process_send_photo(
+            db,
+            conversation_id=conversation_id,
+            target_chat_id=customer_chat_id,
+            target_user_id=customer_user_id,
+            photo_url=image_url,
+            caption=image_caption,
+            source=source,
+        )
+        if not ok:
+            return False
+
     if quick_reply.text:
         rendered_text = (
             f"{sender_prefix}{quick_reply.text}" if sender_prefix is not None else quick_reply.text
@@ -1790,20 +1826,6 @@ async def send_quick_reply_to_customer(
             text=rendered_text,
             source=source,
             text_format="markdown",
-        )
-        if not ok:
-            return False
-
-    if quick_reply.image_path:
-        image_url = f"{app_settings.public_base_url.rstrip('/')}{quick_reply.image_path}"
-        ok = await enqueue_and_process_send_photo(
-            db,
-            conversation_id=conversation_id,
-            target_chat_id=customer_chat_id,
-            target_user_id=customer_user_id,
-            photo_url=image_url,
-            caption=image_caption,
-            source=source,
         )
         if not ok:
             return False

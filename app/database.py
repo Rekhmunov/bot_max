@@ -156,6 +156,39 @@ def _ensure_lightweight_migrations() -> None:
             quick_columns = {col["name"] for col in inspector.get_columns("quick_replies")}
             if "workspace_id" not in quick_columns:
                 conn.execute(text("ALTER TABLE quick_replies ADD COLUMN workspace_id INTEGER DEFAULT 1"))
+            if "image_path" not in quick_columns:
+                conn.execute(text("ALTER TABLE quick_replies ADD COLUMN image_path VARCHAR(500)"))
+
+        if "quick_reply_media" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE quick_reply_media ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "workspace_id INTEGER DEFAULT 1, "
+                    "quick_reply_id INTEGER NOT NULL, "
+                    "media_path VARCHAR(1000) NOT NULL, "
+                    "sort_order INTEGER DEFAULT 0, "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_quick_reply_media_workspace_id "
+                    "ON quick_reply_media (workspace_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_quick_reply_media_quick_reply_id "
+                    "ON quick_reply_media (quick_reply_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_quick_reply_media_sort_order "
+                    "ON quick_reply_media (sort_order)"
+                )
+            )
 
         if "message_templates" in table_names:
             template_columns = {col["name"] for col in inspector.get_columns("message_templates")}

@@ -127,6 +127,52 @@
       border: 1px solid var(--line);
       object-fit: cover;
     }
+    .quick-reply-media-input {
+      margin-top: 2px;
+    }
+    .media-sort-wrap {
+      margin-top: 10px;
+    }
+    .media-sort-grid {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+    .media-chip {
+      min-width: 86px;
+      width: 86px;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      padding: 6px;
+      cursor: grab;
+      text-align: center;
+      color: #34405c;
+      font-size: 11px;
+      user-select: none;
+    }
+    .media-chip.dragging {
+      opacity: 0.45;
+      cursor: grabbing;
+    }
+    .media-chip img {
+      width: 72px;
+      height: 72px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      display: block;
+      margin: 0 auto 4px;
+      background: #f5f7fb;
+    }
+    .media-chip .name {
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .delete {
       border: 1px solid #ebc5c5;
       background: #fff2f2;
@@ -373,6 +419,22 @@
           <label for="title">Название в админке</label>
           <input id="title" name="title" placeholder="Прайс" required />
 
+          <label for="photos">Медиафайлы (можно несколько)</label>
+          <input
+            id="photos"
+            class="quick-reply-media-input"
+            type="file"
+            name="photos"
+            multiple
+            accept=".png,.jpg,.jpeg,.gif,.webp"
+          />
+          <div class="hint">Сначала загрузите медиафайлы, затем заполните текст ответа.</div>
+          <div class="media-sort-wrap" id="media-sort-wrap" hidden>
+            <div class="hint">Порядок медиа (перетаскивайте влево/вправо):</div>
+            <div class="media-sort-grid" id="media-sort-grid"></div>
+          </div>
+          <input type="hidden" name="media_order" id="media_order" value="" />
+
           <label for="text">Текст ответа</label>
           <div class="format-toolbar" data-format-target="text">
             <button type="button" class="format-trigger">Форматирование ▾</button>
@@ -387,9 +449,6 @@
           </div>
           <textarea id="text" name="text" placeholder="Текст, который бот отправит по команде /price"></textarea>
 
-          <label for="photo">Фото (необязательно)</label>
-          <input id="photo" type="file" name="photo" accept=".png,.jpg,.jpeg,.gif,.webp" />
-
           <button class="btn" type="submit">Добавить быстрый ответ</button>
         </form>
         <div class="hint">Менеджер вызывает ответ в чате командой вида <code>/price</code>.</div>
@@ -402,7 +461,7 @@
                 <th>Команда</th>
                 <th>Название</th>
                 <th>Текст</th>
-                <th>Фото</th>
+                <th>Медиа</th>
                 <th></th>
               </tr>
             </thead>
@@ -413,7 +472,13 @@
                   <td>{{ item.title }}</td>
                   <td>{{ item.text }}</td>
                   <td>
-                    {% if item.image_path %}
+                    {% if item.media_items %}
+                      <div style="display:flex; gap:6px; flex-wrap:wrap; max-width:230px;">
+                        {% for media in item.media_items %}
+                          <img class="preview" src="{{ media.media_path }}" alt="{{ item.title }}" />
+                        {% endfor %}
+                      </div>
+                    {% elif item.image_path %}
                       <img class="preview" src="{{ item.image_path }}" alt="{{ item.title }}" />
                     {% else %}
                       —
@@ -634,6 +699,100 @@
 
   </div>
   <script>
+    (() => {
+      const filesInput = document.getElementById("photos");
+      const mediaSortWrap = document.getElementById("media-sort-wrap");
+      const mediaSortGrid = document.getElementById("media-sort-grid");
+      const mediaOrderInput = document.getElementById("media_order");
+      if (
+        filesInput instanceof HTMLInputElement &&
+        mediaSortWrap instanceof HTMLElement &&
+        mediaSortGrid instanceof HTMLElement &&
+        mediaOrderInput instanceof HTMLInputElement
+      ) {
+        let selectedEntries = [];
+        let draggedToken = "";
+
+        const isImageFile = (file) => {
+          return (
+            file &&
+            typeof file.type === "string" &&
+            file.type.toLowerCase().startsWith("image/")
+          );
+        };
+
+        const buildToken = (file, index) => `${index}|${file.name}|${file.size}|${file.lastModified}`;
+
+        const updateOrderInput = () => {
+          const tokens = selectedEntries.map((item) => item.token);
+          mediaOrderInput.value = tokens.join(",");
+        };
+
+        const rebuildFileListAndPreview = () => {
+          const dt = new DataTransfer();
+          mediaSortGrid.innerHTML = "";
+          selectedEntries.forEach((entry, idx) => {
+            dt.items.add(entry.file);
+            const chip = document.createElement("div");
+            chip.className = "media-chip";
+            chip.setAttribute("draggable", "true");
+            chip.dataset.token = entry.token;
+            chip.innerHTML = `<img alt="preview" /><span class="name"></span>`;
+            const img = chip.querySelector("img");
+            const name = chip.querySelector(".name");
+            if (img instanceof HTMLImageElement) {
+              if (entry.previewUrl) img.src = entry.previewUrl;
+            }
+            if (name instanceof HTMLElement) {
+              name.textContent = `${idx + 1}. ${entry.file.name}`;
+            }
+            chip.addEventListener("dragstart", () => {
+              draggedToken = entry.token;
+              chip.classList.add("dragging");
+            });
+            chip.addEventListener("dragend", () => {
+              draggedToken = "";
+              chip.classList.remove("dragging");
+            });
+            chip.addEventListener("dragover", (event) => {
+              event.preventDefault();
+            });
+            chip.addEventListener("drop", (event) => {
+              event.preventDefault();
+              const targetToken = chip.dataset.token || "";
+              if (!draggedToken || !targetToken || draggedToken === targetToken) return;
+              const from = selectedEntries.findIndex((item) => item.token === draggedToken);
+              const to = selectedEntries.findIndex((item) => item.token === targetToken);
+              if (from < 0 || to < 0) return;
+              const [moved] = selectedEntries.splice(from, 1);
+              selectedEntries.splice(to, 0, moved);
+              rebuildFileListAndPreview();
+            });
+            mediaSortGrid.appendChild(chip);
+          });
+          filesInput.files = dt.files;
+          updateOrderInput();
+          mediaSortWrap.hidden = selectedEntries.length <= 1;
+        };
+
+        filesInput.addEventListener("change", () => {
+          selectedEntries.forEach((entry) => {
+            if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
+          });
+          selectedEntries = [];
+          const files = Array.from(filesInput.files || []);
+          files.forEach((file, idx) => {
+            selectedEntries.push({
+              file,
+              token: buildToken(file, idx),
+              previewUrl: isImageFile(file) ? URL.createObjectURL(file) : "",
+            });
+          });
+          rebuildFileListAndPreview();
+        });
+      }
+    })();
+
     (() => {
       const wrapSelection = (textarea, leftToken, rightToken) => {
         if (!(textarea instanceof HTMLTextAreaElement)) return;

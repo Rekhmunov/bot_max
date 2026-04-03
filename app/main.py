@@ -93,6 +93,7 @@ from app.models import (
     OutboxMessage,
     PlatformSettings,
     QuickReply,
+    QuickReplyMedia,
     ServiceUser,
     Subscription,
     TenantAlert,
@@ -1205,6 +1206,112 @@ def _workspace_id_for_user(user: ServiceUser | None) -> int:
     return int(user.workspace_id or DEFAULT_WORKSPACE_ID)
 
 
+def _quick_reply_media_rows(db: Session, reply_id: int) -> list[QuickReplyMedia]:
+    return (
+        db.query(QuickReplyMedia)
+        .filter(QuickReplyMedia.quick_reply_id == reply_id)
+        .order_by(QuickReplyMedia.sort_order.asc(), QuickReplyMedia.id.asc())
+        .all()
+    )
+
+
+def _attach_media_to_quick_replies(db: Session, replies: list[QuickReply]) -> list[QuickReply]:
+    if not replies:
+        return replies
+    reply_ids = [int(item.id) for item in replies]
+    media_rows = (
+        db.query(QuickReplyMedia)
+        .filter(QuickReplyMedia.quick_reply_id.in_(reply_ids))
+        .order_by(QuickReplyMedia.quick_reply_id.asc(), QuickReplyMedia.sort_order.asc(), QuickReplyMedia.id.asc())
+        .all()
+    )
+    by_reply_id: dict[int, list[QuickReplyMedia]] = {}
+    for row in media_rows:
+        by_reply_id.setdefault(int(row.quick_reply_id), []).append(row)
+    for reply in replies:
+        setattr(reply, "media_items", by_reply_id.get(int(reply.id), []))
+    return replies
+
+
+async def _save_quick_reply_media_files(
+    *,
+    db: Session,
+    reply: QuickReply,
+    files: list[UploadFile],
+    sort_order_tokens: list[str] | None = None,
+) -> None:
+    if not files:
+        return
+    existing = _quick_reply_media_rows(db, reply.id)
+    next_order = len(existing)
+    order_by_name: dict[str, int] = {}
+    for idx, raw in enumerate(sort_order_tokens or []):
+        token = str(raw or "").strip()
+        if not token:
+            continue
+        filename = token
+        if token.startswith("new:"):
+            filename = token[4:]
+        elif "|" in token:
+            parts = token.split("|")
+            if len(parts) >= 2:
+                filename = parts[1].strip()
+        if filename and filename not in order_by_name:
+            order_by_name[filename] = idx
+    for upload in files:
+        if not upload or not upload.filename:
+            continue
+        ext, content = await _read_and_validate_upload(upload)
+        safe_name = f"{uuid4().hex}{ext}"
+        target = Path("app/static/uploads") / safe_name
+        target.write_bytes(content)
+        workspace_id = int(reply.workspace_id or DEFAULT_WORKSPACE_ID)
+        media = QuickReplyMedia(
+            workspace_id=workspace_id,
+            quick_reply_id=reply.id,
+            media_path=f"/static/uploads/{safe_name}",
+            sort_order=order_by_name.get(upload.filename, next_order),
+        )
+        next_order += 1
+        db.add(media)
+    db.commit()
+
+
+def _delete_quick_reply_media_files(db: Session, *, reply_id: int) -> None:
+    media_rows = _quick_reply_media_rows(db, reply_id)
+    for media in media_rows:
+        relative_static_path = (media.media_path or "").removeprefix("/static/")
+        if not relative_static_path:
+            continue
+        media_file = Path("app/static") / relative_static_path
+        if media_file.exists():
+            media_file.unlink()
+    db.query(QuickReplyMedia).filter(QuickReplyMedia.quick_reply_id == reply_id).delete(synchronize_session=False)
+    db.commit()
+
+
+def _normalize_quick_reply_media_order(db: Session, reply_id: int) -> None:
+    ordered = _quick_reply_media_rows(db, reply_id)
+    changed = False
+    for idx, media in enumerate(ordered):
+        if media.sort_order != idx:
+            media.sort_order = idx
+            db.add(media)
+            changed = True
+    if changed:
+        db.commit()
+
+
+def _load_quick_replies_with_media(db: Session, *, workspace_id: int) -> list[QuickReply]:
+    replies = (
+        db.query(QuickReply)
+        .filter(QuickReply.workspace_id == workspace_id)
+        .order_by(QuickReply.command.asc())
+        .all()
+    )
+    return _attach_media_to_quick_replies(db, replies)
+
+
 def _build_max_bot_profile_url(bot_account_id: str | None) -> str:
     explicit_public_url = (settings.max_bot_public_url or "").strip()
     if explicit_public_url:
@@ -1447,12 +1554,7 @@ def _render_app_settings_page(
         # Keep settings page available on partially migrated SQLite snapshots.
         db.rollback()
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
-    quick_replies = (
-        db.query(QuickReply)
-        .filter(QuickReply.workspace_id == workspace_id)
-        .order_by(QuickReply.command.asc())
-        .all()
-    )
+    quick_replies = _load_quick_replies_with_media(db, workspace_id=workspace_id)
     intro_steps = (
         db.query(IntroStep)
         .filter(IntroStep.workspace_id == workspace_id, IntroStep.is_active.is_(True))
@@ -1717,12 +1819,7 @@ def admin_page(
         tenant_metrics=tenant_metrics,
         manager_status_summary=None,
     )
-    replies = (
-        db.query(QuickReply)
-        .filter(QuickReply.workspace_id == workspace_id)
-        .order_by(QuickReply.command.asc())
-        .all()
-    )
+    replies = _load_quick_replies_with_media(db, workspace_id=workspace_id)
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
     return templates.TemplateResponse(
@@ -1794,12 +1891,7 @@ async def update_settings(
     tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
     manager_limit_value = max(1, int(sub.manager_limit or 0))
     if len(manager_ids) > manager_limit_value:
-        replies = (
-            db.query(QuickReply)
-            .filter(QuickReply.workspace_id == workspace_id)
-            .order_by(QuickReply.command.asc())
-            .all()
-        )
+        replies = _load_quick_replies_with_media(db, workspace_id=workspace_id)
         chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
         delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
         bot_settings.manager_account_id = manager_ids_csv
@@ -1854,12 +1946,7 @@ async def update_settings(
     set_template_text(db, TEMPLATE_AFTER_PHONE, after_phone_message, workspace_id=workspace_id)
     db.commit()
 
-    replies = (
-        db.query(QuickReply)
-        .filter(QuickReply.workspace_id == workspace_id)
-        .order_by(QuickReply.command.asc())
-        .all()
-    )
+    replies = _load_quick_replies_with_media(db, workspace_id=workspace_id)
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
     tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
@@ -1935,12 +2022,7 @@ async def admin_send_manager_link(
                 TEMPLATE_AFTER_PHONE,
                 workspace_id=workspace_id,
             ),
-            "quick_replies": (
-                db.query(QuickReply)
-                .filter(QuickReply.workspace_id == workspace_id)
-                .order_by(QuickReply.command.asc())
-                .all()
-            ),
+            "quick_replies": _load_quick_replies_with_media(db, workspace_id=workspace_id),
             "webhook_path": webhook_path,
             "webhook_url": f"{settings.public_base_url.rstrip('/')}{webhook_path}",
             "chat_metrics": get_chat_metrics(db, workspace_id=workspace_id),
@@ -2039,7 +2121,8 @@ async def create_quick_reply(
     command: str = Form(...),
     title: str = Form(...),
     text: str = Form(""),
-    photo: UploadFile | None = File(default=None),
+    photos: list[UploadFile] = File(default=[]),
+    media_order: str = Form(""),
     _admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -2068,12 +2151,7 @@ async def create_quick_reply(
         .first()
     ):
         bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
-        replies = (
-            db.query(QuickReply)
-            .filter(QuickReply.workspace_id == workspace_id)
-            .order_by(QuickReply.command.asc())
-            .all()
-        )
+        replies = _load_quick_replies_with_media(db, workspace_id=workspace_id)
         chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
         delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
         tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
@@ -2112,31 +2190,26 @@ async def create_quick_reply(
             status_code=400,
         )
 
-    image_path = None
-    if photo and photo.filename:
-        ext, content = await _read_and_validate_upload(photo)
-        safe_name = f"{uuid4().hex}{ext}"
-        target = Path("app/static/uploads") / safe_name
-        target.write_bytes(content)
-        image_path = f"/static/uploads/{safe_name}"
-
     reply = QuickReply(
         workspace_id=workspace_id,
         command=normalized,
         title=title.strip(),
         text=text.strip(),
-        image_path=image_path,
+        image_path=None,
     )
     db.add(reply)
     db.commit()
+    sort_tokens = [token.strip() for token in (media_order or "").split(",") if token.strip()]
+    await _save_quick_reply_media_files(
+        db=db,
+        reply=reply,
+        files=[item for item in photos if item and item.filename],
+        sort_order_tokens=sort_tokens,
+    )
+    _normalize_quick_reply_media_order(db, reply.id)
 
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
-    replies = (
-        db.query(QuickReply)
-        .filter(QuickReply.workspace_id == workspace_id)
-        .order_by(QuickReply.command.asc())
-        .all()
-    )
+    replies = _load_quick_replies_with_media(db, workspace_id=workspace_id)
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
     tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
@@ -2190,6 +2263,7 @@ def delete_quick_reply(
         .first()
     )
     if reply:
+        _delete_quick_reply_media_files(db, reply_id=reply.id)
         if reply.image_path:
             relative_static_path = reply.image_path.removeprefix("/static/")
             img_path = Path("app/static") / relative_static_path
@@ -3528,7 +3602,8 @@ async def app_create_quick_reply(
     command: str = Form(""),
     title: str = Form(""),
     text: str = Form(""),
-    photo: UploadFile | None = File(default=None),
+    photos: list[UploadFile] = File(default=[]),
+    media_order: str = Form(""),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -3551,23 +3626,23 @@ async def app_create_quick_reply(
     )
     if exists:
         return RedirectResponse(url="/app/settings", status_code=302)
-    image_path = None
-    if photo and photo.filename:
-        ext, content = await _read_and_validate_upload(photo)
-        safe_name = f"{uuid4().hex}{ext}"
-        target = Path("app/static/uploads") / safe_name
-        target.write_bytes(content)
-        image_path = f"/static/uploads/{safe_name}"
-    db.add(
-        QuickReply(
-            workspace_id=workspace_id,
-            command=normalized,
-            title=title.strip(),
-            text=text.strip(),
-            image_path=image_path,
-        )
+    reply = QuickReply(
+        workspace_id=workspace_id,
+        command=normalized,
+        title=title.strip(),
+        text=text.strip(),
+        image_path=None,
     )
+    db.add(reply)
     db.commit()
+    sort_tokens = [token.strip() for token in (media_order or "").split(",") if token.strip()]
+    await _save_quick_reply_media_files(
+        db=db,
+        reply=reply,
+        files=[item for item in photos if item and item.filename],
+        sort_order_tokens=sort_tokens,
+    )
+    _normalize_quick_reply_media_order(db, reply.id)
     return RedirectResponse(url="/app/settings", status_code=302)
 
 
@@ -3593,6 +3668,7 @@ def app_delete_quick_reply(
         .first()
     )
     if reply:
+        _delete_quick_reply_media_files(db, reply_id=reply.id)
         if reply.image_path:
             relative_static_path = reply.image_path.removeprefix("/static/")
             img_path = Path("app/static") / relative_static_path
@@ -4725,6 +4801,16 @@ def app_superadmin_delete_workspace(
     db.query(CustomerProfile).filter(CustomerProfile.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(ChatFolder).filter(ChatFolder.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(IntroStep).filter(IntroStep.workspace_id == workspace_id).delete(synchronize_session=False)
+    workspace_reply_ids = [
+        row[0]
+        for row in db.query(QuickReply.id)
+        .filter(QuickReply.workspace_id == workspace_id)
+        .all()
+    ]
+    if workspace_reply_ids:
+        db.query(QuickReplyMedia).filter(
+            QuickReplyMedia.quick_reply_id.in_(workspace_reply_ids)
+        ).delete(synchronize_session=False)
     db.query(QuickReply).filter(QuickReply.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(MessageTemplate).filter(MessageTemplate.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(BotSettings).filter(BotSettings.workspace_id == workspace_id).delete(synchronize_session=False)

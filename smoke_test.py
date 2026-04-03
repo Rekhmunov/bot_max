@@ -306,6 +306,7 @@ def run() -> None:
                 "command": command,
                 "title": "Прайс",
                 "text": "Отправляю прайс",
+                "media_order": "",
             },
             cookies=cookies,
         )
