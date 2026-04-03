@@ -831,6 +831,32 @@ def run() -> None:
             conversation_count_after = db.query(Conversation).count()
             # Manager removal must not wipe user chat history.
             assert conversation_count_after == conversation_count_before
+        readd_manager_resp = client.post(
+            "/app/settings/copy-manager-link",
+            data={
+                "copy_manager_id": "90001",
+                "routing_mode": "round_robin",
+                "admin_account_id": "",
+            },
+            cookies=invite_flow_cookies,
+            follow_redirects=False,
+        )
+        assert readd_manager_resp.status_code == 200
+        readd_payload = readd_manager_resp.json()
+        assert readd_payload.get("ok") is True
+        with SessionLocal() as db:
+            readded_manager = (
+                db.query(ServiceUser)
+                .filter(
+                    ServiceUser.workspace_id == invite_flow_workspace_id,
+                    ServiceUser.role == "manager",
+                    ServiceUser.max_account_id == "90001",
+                )
+                .first()
+            )
+            assert readded_manager is not None
+            assert bool(readded_manager.is_active) is True
+            assert bool(readded_manager.is_blocked) is False
 
         # Remaining counters in "Тариф и лимиты" must reflect quick reply consumption.
         add_quick_reply_for_invite_ws = client.post(

@@ -740,8 +740,28 @@ def _get_or_create_manager_by_max_id(
         .first()
     )
     if manager is not None:
+        # Manager removed from settings should be addable again by the same Max ID.
         if not manager.is_active or manager.is_blocked:
-            raise ValueError("manager_inactive")
+            manager.is_active = True
+            manager.is_blocked = False
+            db.add(manager)
+            db.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    actor_user_id=actor_user_id,
+                    action="manager_reactivated",
+                    object_type="service_user",
+                    object_id=str(manager.id),
+                    details_json=safe_json_dumps(
+                        {
+                            "max_account_id": manager_id,
+                            "source": "settings_invite_reuse",
+                        }
+                    ),
+                )
+            )
+            db.commit()
+            db.refresh(manager)
         return manager
 
     can_add, _ = can_add_manager(db, workspace_id=workspace_id)
