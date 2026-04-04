@@ -69,6 +69,7 @@ from app.manager_bridge import (
     is_conversation_customer_blocked,
     mark_thread_unread,
     mark_thread_read,
+    mark_conversation_messages_read_by_customer,
     handle_customer_event,
     handle_manager_message,
     process_outbox_queue,
@@ -819,7 +820,14 @@ async def _auto_subscribe_workspace_webhook(settings_row: BotSettings) -> tuple[
     webhook_secret_value = (settings.webhook_secret or "").strip() or None
     subscribe_result = await client.subscribe_webhook(
         url=webhook_workspace_url,
-        update_types=["message_created", "message_callback", "bot_started"],
+        update_types=[
+            "message_created",
+            "message_callback",
+            "bot_started",
+            "message_read",
+            "read",
+            "seen",
+        ],
         secret=webhook_secret_value,
     )
     success = bool(
@@ -6753,6 +6761,12 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
         "delivery_state": str(item.delivery_state or "sent"),
         "delivery_error": str(item.delivery_error or ""),
         "max_message_mid": str(item.max_message_mid or ""),
+        "is_read_by_customer": bool(getattr(item, "is_read_by_customer", False)),
+        "read_at": (
+            item.read_at.isoformat()
+            if isinstance(getattr(item, "read_at", None), datetime)
+            else ""
+        ),
     }
 
 
@@ -7311,6 +7325,11 @@ async def max_webhook(
         "message_created",
         "message_callback",
         "new_message",
+        "message_read",
+        "read",
+        "seen",
+        "opened",
+        "message_seen",
         "bot_started",
         "bot_start",
     }
@@ -7334,6 +7353,22 @@ async def max_webhook(
             settings=settings_db,
             event=event,
         )
+
+    update_type = (event.update_type or "").strip().lower()
+    if update_type in {"message_read", "read", "seen", "opened", "message_seen"}:
+        changed = mark_conversation_messages_read_by_customer(
+            db,
+            workspace_id=workspace_id,
+            chat_id=event.chat_id,
+            customer_id=event.sender_id,
+            read_up_to_mid=event.read_message_mid,
+        )
+        return {
+            "ok": True,
+            "flow": "message_read",
+            "marked_read_count": int(changed),
+            "read_message_mid": str(event.read_message_mid or ""),
+        }
 
     return await handle_customer_event(
         db=db,

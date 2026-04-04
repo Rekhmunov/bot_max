@@ -1039,6 +1039,39 @@ def _update_chat_message_delivery(
     db.commit()
 
 
+def mark_conversation_messages_read_by_customer(
+    db: Session,
+    *,
+    workspace_id: int,
+    chat_id: str,
+    customer_id: str,
+    read_up_to_mid: str | None = None,
+    read_at: datetime | None = None,
+) -> int:
+    """
+    Mark outbound bot messages as read by customer for one conversation.
+    Returns number of newly updated rows.
+    """
+    conversation = (
+        db.query(Conversation)
+        .filter(
+            Conversation.workspace_id == workspace_id,
+            Conversation.chat_id == chat_id,
+            Conversation.customer_account_id == customer_id,
+        )
+        .first()
+    )
+    if conversation is None:
+        return 0
+    return mark_messages_read_by_customer(
+        db,
+        workspace_id=workspace_id,
+        conversation_id=int(conversation.id),
+        read_up_to_mid=read_up_to_mid,
+        read_at=read_at,
+    )
+
+
 async def _dispatch_outbox(
     db: Session,
     *,
@@ -1419,6 +1452,7 @@ def _store_chat_message(
         )
     if resolved_workspace_id is None:
         resolved_workspace_id = DEFAULT_WORKSPACE_ID
+    is_read_by_customer = (direction != "bot")
     item = ChatMessage(
         workspace_id=resolved_workspace_id,
         conversation_id=conversation_id,
@@ -1432,11 +1466,58 @@ def _store_chat_message(
         delivery_error=delivery_error,
         delivery_retry_count=delivery_retry_count,
         delivery_next_retry_at=delivery_next_retry_at,
+        is_read_by_customer=is_read_by_customer,
+        read_at=(_as_naive_utc(_utc_now()) if is_read_by_customer else None),
     )
     db.add(item)
     db.commit()
     db.refresh(item)
     return item
+
+
+def mark_messages_read_by_customer(
+    db: Session,
+    *,
+    workspace_id: int,
+    conversation_id: int,
+    read_up_to_mid: str | None = None,
+    read_at: datetime | None = None,
+) -> int:
+    """
+    Mark outgoing bot messages as read by customer.
+    If read_up_to_mid is provided, only messages up to that MID are marked.
+    """
+    query = db.query(ChatMessage).filter(
+        ChatMessage.workspace_id == workspace_id,
+        ChatMessage.conversation_id == conversation_id,
+        ChatMessage.direction == "bot",
+        ChatMessage.delivery_state == "sent",
+    )
+    if read_up_to_mid:
+        target_mid = str(read_up_to_mid).strip()
+        if not target_mid:
+            return 0
+        target_row = (
+            query
+            .filter(ChatMessage.max_message_mid == target_mid)
+            .order_by(ChatMessage.id.desc())
+            .first()
+        )
+        if target_row is None:
+            return 0
+        query = query.filter(ChatMessage.id <= int(target_row.id))
+    rows = query.order_by(ChatMessage.id.asc()).all()
+    updated = 0
+    now_read = _as_naive_utc(read_at or _utc_now())
+    for msg in rows:
+        if not bool(getattr(msg, "is_read_by_customer", False)):
+            msg.is_read_by_customer = True
+            msg.read_at = now_read
+            db.add(msg)
+            updated += 1
+    if updated:
+        db.commit()
+    return updated
 
 
 def _mark_conversation_unread_from_customer(db: Session, *, meta: ConversationMeta) -> None:

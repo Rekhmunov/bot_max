@@ -60,6 +60,14 @@ def _normalize_update_type(value: Any) -> str | None:
         "new_message": "message_created",
         "message_created": "message_created",
         "message_callback": "message_callback",
+        "message_read": "message_read",
+        "messages_read": "message_read",
+        "read": "message_read",
+        "read_receipt": "message_read",
+        "message_seen": "message_read",
+        "seen": "message_read",
+        "message_opened": "message_read",
+        "opened": "message_read",
         "bot_start": "bot_started",
         "bot_started": "bot_started",
     }
@@ -109,13 +117,19 @@ class MaxWebhookEvent(BaseModel):
     raw_payload: dict[str, Any] = Field(default_factory=dict)
     callback_payload: str | None = Field(default=None)
     start_payload: str | None = Field(default=None)
+    read_message_mid: str | None = Field(default=None)
 
     def event_uid_value(self) -> str | None:
         if self.update_id:
             return f"update:{self.update_id}"
+        if (self.update_type or "").strip().lower() == "message_read" and self.read_message_mid:
+            return f"read:{self.chat_id}:{self.sender_id}:{self.read_message_mid}"
         if self.message_mid:
             return f"message:{self.message_mid}"
         return None
+
+    def is_read_event(self) -> bool:
+        return (self.update_type or "").strip().lower() == "message_read"
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "MaxWebhookEvent | None":
@@ -276,6 +290,47 @@ class MaxWebhookEvent(BaseModel):
                 },
             ),
         )
+        read_message_mid = _pick_first(
+            payload.get("read_message_mid"),
+            payload.get("readMessageMid"),
+            payload.get("last_read_mid"),
+            payload.get("lastReadMid"),
+            payload.get("last_read_message_mid"),
+            payload.get("lastReadMessageMid"),
+            payload.get("read_to_mid"),
+            payload.get("readToMid"),
+            payload.get("read_mid"),
+            payload.get("readMid"),
+            message.get("read_message_mid"),
+            message.get("readMessageMid"),
+            message.get("last_read_mid"),
+            message.get("lastReadMid"),
+            message.get("last_read_message_mid"),
+            message.get("lastReadMessageMid"),
+            body.get("read_message_mid"),
+            body.get("readMessageMid"),
+            body.get("last_read_mid"),
+            body.get("lastReadMid"),
+            body_root.get("read_message_mid"),
+            body_root.get("readMessageMid"),
+            body_root.get("last_read_mid"),
+            body_root.get("lastReadMid"),
+            _deep_find_first(
+                payload,
+                {
+                    "read_message_mid",
+                    "readMessageMid",
+                    "last_read_mid",
+                    "lastReadMid",
+                    "last_read_message_mid",
+                    "lastReadMessageMid",
+                    "read_to_mid",
+                    "readToMid",
+                    "read_mid",
+                    "readMid",
+                },
+            ),
+        )
         if start_payload is None:
             start_payload = _extract_start_payload_from_text(str(text or ""))
         if update_type is None:
@@ -320,4 +375,5 @@ class MaxWebhookEvent(BaseModel):
             raw_payload=payload,
             callback_payload=str(callback_payload) if callback_payload is not None else None,
             start_payload=str(start_payload) if start_payload is not None else None,
+            read_message_mid=str(read_message_mid) if read_message_mid is not None else None,
         )

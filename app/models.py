@@ -230,6 +230,8 @@ class ChatMessage(Base):
     max_message_mid: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     link_mid: Mapped[str | None] = mapped_column(String(255), nullable=True)
     delivery_state: Mapped[str] = mapped_column(String(20), default="sent", index=True)  # sent | queued | failed
+    is_read_by_customer: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     delivery_error: Mapped[str] = mapped_column(Text, default="")
     delivery_retry_count: Mapped[int] = mapped_column(Integer, default=0)
     delivery_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

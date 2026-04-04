@@ -73,6 +73,12 @@ def _ensure_lightweight_migrations() -> None:
                 )
             if "delivery_next_retry_at" not in chat_columns:
                 conn.execute(text("ALTER TABLE chat_messages ADD COLUMN delivery_next_retry_at DATETIME"))
+            if "is_read_by_customer" not in chat_columns:
+                conn.execute(
+                    text("ALTER TABLE chat_messages ADD COLUMN is_read_by_customer INTEGER DEFAULT 0")
+                )
+            if "read_at" not in chat_columns:
+                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN read_at DATETIME"))
 
         if "conversation_meta" in table_names:
             meta_columns = {col["name"] for col in inspector.get_columns("conversation_meta")}

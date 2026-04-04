@@ -567,8 +567,12 @@
       font-weight: 800;
       color: #8f98ab;
     }
-    .delivery-status.read {
+    .delivery-status.delivered {
       color: #5d6f93;
+    }
+    .delivery-status.sent,
+    .delivery-status.queued {
+      color: #8f98ab;
     }
     .delivery-status.failed {
       color: #db3c3c;
@@ -1463,9 +1467,12 @@
                     {% if state == "failed" %}
                       {% set ticks = "✓✓" %}
                       {% set status_class = "failed" %}
-                    {% elif state == "sent" %}
+                    {% elif state == "sent" and msg.is_read_by_customer %}
                       {% set ticks = "✓✓" %}
-                      {% set status_class = "read" %}
+                      {% set status_class = "delivered" %}
+                    {% elif state == "sent" %}
+                      {% set ticks = "✓" %}
+                      {% set status_class = "sent" %}
                     {% else %}
                       {% set ticks = "✓" %}
                       {% set status_class = "queued" %}
@@ -1473,8 +1480,8 @@
                     <span class="delivery-wrap">
                       <span
                         class="delivery-status {{ status_class }}"
-                        title="{% if state == 'failed' %}Ошибка отправки{% elif state == 'sent' %}Сообщение отправлено{% else %}Сообщение в очереди отправки{% endif %}"
-                        aria-label="{% if state == 'failed' %}Ошибка отправки{% elif state == 'sent' %}Сообщение отправлено{% else %}Сообщение в очереди отправки{% endif %}"
+                        title="{% if state == 'failed' %}Ошибка отправки{% elif state == 'sent' and msg.is_read_by_customer %}Сообщение прочитано{% elif state == 'sent' %}Сообщение отправлено{% else %}Сообщение в очереди отправки{% endif %}"
+                        aria-label="{% if state == 'failed' %}Ошибка отправки{% elif state == 'sent' and msg.is_read_by_customer %}Сообщение прочитано{% elif state == 'sent' %}Сообщение отправлено{% else %}Сообщение в очереди отправки{% endif %}"
                       >
                         <span class="ticks">{{ ticks }}</span>
                       </span>

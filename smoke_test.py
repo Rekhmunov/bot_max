@@ -465,6 +465,7 @@ def run() -> None:
                 .first()
             )
             assert started_conv is not None
+            started_conv_id = int(started_conv.id)
 
         chat_id_skip = f"chat_{uuid4().hex[:8]}"
         webhook_customer_start_with_phone = client.post(
@@ -508,6 +509,65 @@ def run() -> None:
         )
         assert webhook_customer_text.status_code == 200
         assert webhook_customer_text.json().get("flow") == "queued_for_mini_app"
+        with SessionLocal() as db:
+            sent_for_read = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == 1,
+                    ChatMessage.conversation_id == started_conv_id,
+                    ChatMessage.direction == "bot",
+                    ChatMessage.delivery_state == "sent",
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            if sent_for_read is None:
+                sent_for_read = ChatMessage(
+                    workspace_id=1,
+                    conversation_id=started_conv_id,
+                    direction="bot",
+                    source="bot_system",
+                    text="read probe",
+                    max_message_mid=f"read_mid_{uuid4().hex[:8]}",
+                    delivery_state="sent",
+                    delivery_error="",
+                    delivery_retry_count=0,
+                    is_read_by_customer=False,
+                )
+                db.add(sent_for_read)
+                db.commit()
+                db.refresh(sent_for_read)
+            assert bool(getattr(sent_for_read, "is_read_by_customer", False)) is False
+            sent_for_read_mid = str(sent_for_read.max_message_mid or "").strip()
+            if not sent_for_read_mid:
+                # Test environment uses mocked Max API responses without MID.
+                # Emulate real provider behavior by assigning a synthetic MID.
+                sent_for_read_mid = f"read_mid_{uuid4().hex[:8]}"
+                sent_for_read.max_message_mid = sent_for_read_mid
+                db.add(sent_for_read)
+                db.commit()
+
+        webhook_customer_read = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_read",
+                "chat_id": chat_id,
+                "sender_id": "buyer_1",
+                "read_message_mid": sent_for_read_mid,
+            },
+        )
+        assert webhook_customer_read.status_code == 200
+        assert webhook_customer_read.json().get("flow") == "message_read"
+        assert int(webhook_customer_read.json().get("marked_read_count") or 0) >= 1
+        with SessionLocal() as db:
+            sent_after_read = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.id == sent_for_read.id)
+                .first()
+            )
+            assert sent_after_read is not None
+            assert bool(getattr(sent_after_read, "is_read_by_customer", False)) is True
+            assert getattr(sent_after_read, "read_at", None) is not None
 
         webhook_customer_callback_style = client.post(
             "/webhook/max/ws1key",
@@ -1292,6 +1352,10 @@ def run() -> None:
         assert "delivery-toggle" not in admin_chats_page_after_send.text
         assert "bubble-debug" not in admin_chats_page_after_send.text
         assert "delivery-status" in admin_chats_page_after_send.text
+        assert (
+            "delivery-status sent" in admin_chats_page_after_send.text
+            or "delivery-status delivered" in admin_chats_page_after_send.text
+        )
         assert "id=\"edit-message-id\"" in admin_chats_page_after_send.text
         assert "Режим редактирования сообщения" in admin_chats_page_after_send.text
         assert "клиент | mid:" not in admin_chats_page_after_send.text
