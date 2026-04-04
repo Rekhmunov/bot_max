@@ -848,6 +848,10 @@ def _parse_schedule_at_iso(value: str) -> datetime | None:
     raw = (value or "").strip()
     if not raw:
         return None
+    # HTML datetime-local may produce trailing "Z" when explicitly normalized in JS.
+    # datetime.fromisoformat requires "+00:00" format, so normalize first.
+    if raw.endswith("Z"):
+        raw = f"{raw[:-1]}+00:00"
     try:
         scheduled = datetime.fromisoformat(raw)
     except ValueError:

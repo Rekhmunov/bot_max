@@ -1541,7 +1541,7 @@
                 </svg>
               </button>
             </div>
-            <input type="hidden" id="scheduled-at-input" name="scheduled_at" value="" />
+            <input type="hidden" id="scheduled-at-input" name="schedule_at" value="" />
             {% if allow_message_edit_actions %}
               <div id="edit-mode-hint" class="thread-meta" style="display:none; padding: 0 4px;">
                 Режим редактирования сообщения
@@ -1930,8 +1930,8 @@
           scheduleHint.textContent = "Укажите дату и время.";
           return;
         }
-        const iso = `${dateValue}T${timeValue}:00`;
-        const when = new Date(iso);
+        const localIso = `${dateValue}T${timeValue}:00`;
+        const when = new Date(localIso);
         if (Number.isNaN(when.getTime())) {
           scheduleHint.textContent = "Некорректная дата или время.";
           return;
@@ -1940,7 +1940,8 @@
           scheduleHint.textContent = "Время отправки должно быть в будущем.";
           return;
         }
-        scheduledAtInput.value = iso;
+        // Send explicit UTC timestamp to avoid server-side timezone ambiguity.
+        scheduledAtInput.value = when.toISOString();
         closeSchedulePopup();
         composeForm.requestSubmit();
       });

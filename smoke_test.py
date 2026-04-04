@@ -16,6 +16,7 @@ from app.models import (
     Conversation,
     ConversationFolderLink,
     ConversationMeta,
+    OutboxMessage,
     QuickReply,
     ServiceUser,
     Subscription,
@@ -23,6 +24,15 @@ from app.models import (
     WebhookEvent,
     Workspace,
 )
+
+
+def _iso_with_timezone(raw_iso: str) -> str:
+    value = (raw_iso or "").strip()
+    if not value:
+        return value
+    if value.endswith("Z") or "+" in value[10:] or "-" in value[10:]:
+        return value
+    return f"{value}Z"
 
 
 def run() -> None:
@@ -1285,7 +1295,7 @@ def run() -> None:
         assert 'id="send-btn"' in admin_chats_page_after_send.text
         assert 'id="schedule-btn-mobile"' in admin_chats_page_after_send.text
         assert 'id="schedule-pop"' in admin_chats_page_after_send.text
-        assert 'name="scheduled_at"' in admin_chats_page_after_send.text
+        assert 'name="schedule_at"' in admin_chats_page_after_send.text
 
         scheduled_send = client.post(
             f"/admin/chats/{conversation_id}/send",
@@ -1295,6 +1305,28 @@ def run() -> None:
         )
         assert scheduled_send.status_code in (302, 303)
         assert "scheduled=1" in scheduled_send.headers.get("location", "")
+        with SessionLocal() as db:
+            scheduled_chat_message = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.conversation_id == conversation_id,
+                    ChatMessage.text == "scheduled message",
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            assert scheduled_chat_message is not None
+            assert scheduled_chat_message.max_message_mid in (None, "")
+            assert scheduled_chat_message.delivery_state in ("queued", "failed")
+            outbox_scheduled = (
+                db.query(OutboxMessage)
+                .filter(OutboxMessage.chat_message_id == scheduled_chat_message.id)
+                .order_by(OutboxMessage.id.desc())
+                .first()
+            )
+            assert outbox_scheduled is not None
+            assert outbox_scheduled.state in ("queued", "failed")
+            assert outbox_scheduled.next_retry_at > outbox_scheduled.created_at
 
         mobile_list_page = client.get("/admin/chats", cookies=cookies)
         assert mobile_list_page.status_code == 200

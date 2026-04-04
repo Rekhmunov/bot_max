@@ -1663,6 +1663,16 @@ async def _read_and_validate_upload(photo: UploadFile | None) -> tuple[str | Non
     return ext, content
 
 
+async def _resolve_schedule_at_value(request: Request, schedule_at: str) -> str:
+    """Read schedule value with backward-compatible legacy key fallback."""
+    value = (schedule_at or "").strip()
+    if value:
+        return value
+    form_data = await request.form()
+    legacy_value = str(form_data.get("scheduled_at") or "").strip()
+    return legacy_value
+
+
 async def _read_and_validate_quick_reply_photo(photo: UploadFile | None) -> tuple[str | None, bytes | None]:
     if not photo or not photo.filename:
         return None, None
@@ -3281,15 +3291,16 @@ async def admin_chats_send_message(
             redirect_url += "&view=chat"
         return RedirectResponse(url=redirect_url, status_code=302)
 
+    schedule_at_value = await _resolve_schedule_at_value(request, schedule_at)
     sent_ok = await send_admin_chat_message(
         db=db,
         conversation_id=conversation_id,
         text=text_value,
         image_path=image_path,
         workspace_id=workspace_id,
-        schedule_at_iso=schedule_at,
+        schedule_at_iso=schedule_at_value,
     )
-    scheduled_at_clean = schedule_at.strip()
+    scheduled_at_clean = schedule_at_value
     is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"
     flag_name = "scheduled" if is_scheduled else "sent"
@@ -6321,15 +6332,16 @@ async def app_chats_send_message(
             redirect_url += "&view=chat"
         return RedirectResponse(url=f"{redirect_url}{workspace_qs}", status_code=302)
 
+    schedule_at_value = await _resolve_schedule_at_value(request, schedule_at)
     sent_ok = await send_admin_chat_message(
         db=db,
         conversation_id=conversation_id,
         text=text_value,
         image_path=image_path,
         workspace_id=workspace_id,
-        schedule_at_iso=schedule_at,
+        schedule_at_iso=schedule_at_value,
     )
-    scheduled_at_clean = schedule_at.strip()
+    scheduled_at_clean = schedule_at_value
     is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"
     flag_name = "scheduled" if is_scheduled else "sent"
@@ -7229,15 +7241,16 @@ async def manager_mini_send_message(
             status_code=302,
         )
 
+    schedule_at_value = await _resolve_schedule_at_value(request, schedule_at)
     sent_ok = await send_admin_chat_message(
         db=db,
         conversation_id=conversation_id,
         text=text_value,
         image_path=image_path,
         workspace_id=workspace_id,
-        schedule_at_iso=schedule_at,
+        schedule_at_iso=schedule_at_value,
     )
-    scheduled_at_clean = schedule_at.strip()
+    scheduled_at_clean = schedule_at_value
     is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"
     flag_name = "scheduled" if is_scheduled else "sent"
