@@ -556,17 +556,27 @@
       border-radius: 10px;
       border: 1px solid var(--line);
     }
-    .delivery {
-      display: inline-block;
-      margin-left: 8px;
-      padding: 2px 8px;
-      border-radius: 999px;
-      font-size: 11px;
+    .delivery-status {
+      display: inline-flex;
+      align-items: center;
+      margin-left: 6px;
+      line-height: 1;
+      letter-spacing: -1px;
+      user-select: none;
+      font-size: 13px;
       font-weight: 800;
+      color: #8f98ab;
     }
-    .delivery.sent { background: var(--ok-soft); color: var(--ok); }
-    .delivery.queued { background: #eef4ff; color: var(--accent); }
-    .delivery.failed { background: var(--danger-soft); color: var(--danger); }
+    .delivery-status.read {
+      color: #5d6f93;
+    }
+    .delivery-status.failed {
+      color: #db3c3c;
+    }
+    .delivery-status .ticks {
+      display: inline-block;
+      transform: translateY(-0.5px);
+    }
     .delivery-error {
       margin-top: 6px;
       color: var(--danger);
@@ -836,29 +846,6 @@
       align-items: center;
       gap: 0;
     }
-    .delivery-toggle {
-      border: 0;
-      background: transparent;
-      color: #6c768c;
-      font-size: 14px;
-      cursor: pointer;
-      width: 18px;
-      height: 18px;
-      line-height: 1;
-      padding: 0;
-    }
-    .delivery-toggle.open {
-      transform: rotate(90deg);
-    }
-    .bubble-debug {
-      display: none;
-      margin-top: 4px;
-      color: var(--muted);
-      font-size: 12px;
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    .bubble-debug.open { display: block; }
     .folder-pop {
       position: fixed;
       inset: 0;
@@ -1472,20 +1459,28 @@
               >
                 <div class="bubble-head">
                   {% if msg.direction == "bot" %}
-                    {% set state = msg.delivery_state or "sent" %}
+                    {% set state = (msg.delivery_state or "sent")|lower %}
+                    {% if state == "failed" %}
+                      {% set ticks = "✓✓" %}
+                      {% set status_class = "failed" %}
+                    {% elif state == "sent" %}
+                      {% set ticks = "✓✓" %}
+                      {% set status_class = "read" %}
+                    {% else %}
+                      {% set ticks = "✓" %}
+                      {% set status_class = "queued" %}
+                    {% endif %}
                     <span class="delivery-wrap">
-                      <span class="delivery {{ state }}">
-                        {% if state == "sent" %}доставлено{% elif state == "failed" %}ошибка{% else %}в очереди{% endif %}
+                      <span
+                        class="delivery-status {{ status_class }}"
+                        title="{% if state == 'failed' %}Ошибка отправки{% elif state == 'sent' %}Сообщение отправлено{% else %}Сообщение в очереди отправки{% endif %}"
+                        aria-label="{% if state == 'failed' %}Ошибка отправки{% elif state == 'sent' %}Сообщение отправлено{% else %}Сообщение в очереди отправки{% endif %}"
+                      >
+                        <span class="ticks">{{ ticks }}</span>
                       </span>
-                      <button class="delivery-toggle" type="button" aria-label="Показать детали" style="display:none;" tabindex="-1" aria-hidden="true">›</button>
                     </span>
                   {% endif %}
                 </div>
-                {% if msg.direction == "bot" %}
-                  <div class="bubble-debug">
-                    {{ msg.direction }} / {{ msg.source }}{% if msg.max_message_mid %} | mid: {{ msg.max_message_mid }}{% endif %}
-                  </div>
-                {% endif %}
                 {% if msg.text or msg.image_url %}
                   <div class="bubble-text">{{ msg.text }}</div>
                 {% endif %}
@@ -2653,19 +2648,6 @@
       const cancelEditBtn = document.getElementById("cancel-edit-btn");
       const bubbles = Array.from(document.querySelectorAll(".bubble[data-message-id]"));
       if (!bubbles.length || !activeConversationId) return;
-
-      // Always keep delivery debug toggles available (both admin and mini-app).
-      bubbles.forEach((bubble) => {
-        const toggle = bubble.querySelector(".delivery-toggle");
-        const debug = bubble.querySelector(".bubble-debug");
-        if (toggle && debug) {
-          toggle.addEventListener("click", (e) => {
-            e.preventDefault();
-            debug.classList.toggle("open");
-            toggle.classList.toggle("open");
-          });
-        }
-      });
 
       if (!allowMessageEditActions || !messageInput || !editIdInput || !editHint) return;
 

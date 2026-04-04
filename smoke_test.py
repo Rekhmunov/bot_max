@@ -1289,8 +1289,9 @@ def run() -> None:
         assert 'id="slash-menu"' in admin_chats_page_after_send.text
         assert "context-menu" in admin_chats_page_after_send.text
         assert "msg-context-menu" in admin_chats_page_after_send.text
-        assert "delivery-toggle" in admin_chats_page_after_send.text
-        assert "bubble-debug" in admin_chats_page_after_send.text
+        assert "delivery-toggle" not in admin_chats_page_after_send.text
+        assert "bubble-debug" not in admin_chats_page_after_send.text
+        assert "delivery-status" in admin_chats_page_after_send.text
         assert "id=\"edit-message-id\"" in admin_chats_page_after_send.text
         assert "Режим редактирования сообщения" in admin_chats_page_after_send.text
         assert "клиент | mid:" not in admin_chats_page_after_send.text
