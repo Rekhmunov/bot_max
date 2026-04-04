@@ -2161,7 +2161,7 @@ def _render_app_settings_page(
             "business_hours": business_hours_vm,
             "business_hours_preview_action": "/app/settings/business-hours/preview",
             "show_settings_card": not is_manager_view,
-            "show_app_token_card": not is_manager_view,
+            "show_app_token_card": False,
             "show_webhook_card": not is_manager_view,
             "show_delivery_card": not is_manager_view,
             "show_managers_card": not is_manager_view,

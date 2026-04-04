@@ -695,30 +695,6 @@
     {% if error %}
       <div class="notice error">{{ error }}</div>
     {% endif %}
-    {% if (show_app_token_card | default(ui_mode == "app")) %}
-      <section class="card section-gap-bottom">
-        <div class="card-head">
-          <h2 class="card-title"><span class="section-icon">🤖</span>Подключение вашего бота Max</h2>
-          <div class="card-head-actions">
-            <span class="card-head-kicker">Max</span>
-          </div>
-        </div>
-        <div class="hint token-line">
-          Токен вашего бота:
-          {% if workspace_bot_token_masked %}
-            <code class="token-mask token-inline-offset">{{ workspace_bot_token_masked }}</code>
-            <a href="#" id="token-toggle-link" class="token-inline-offset">Обновить</a>
-            <form method="post" action="{{ token_delete_action or '/app/settings/delete-bot-token' }}" class="token-delete-form">
-              <button type="submit" class="delete token-delete-btn">Удалить</button>
-            </form>
-          {% else %}
-            <span class="token-inline-offset">не задан.</span>
-            <a href="#" id="token-toggle-link" class="token-inline-offset">Ввести токен</a>
-          {% endif %}
-        </div>
-      </section>
-    {% endif %}
-
     <div class="grid">
       {% if (show_settings_card | default(true)) %}
       <section class="card" data-business-hours-form>
@@ -730,6 +706,20 @@
         </div>
         <form method="post" action="{{ settings_action or '/admin/settings' }}">
           {% if ui_mode == "app" %}
+          <div class="hint" style="margin-bottom:8px;"><strong>Подключение вашего бота Max</strong></div>
+          <div class="hint token-line" style="margin-bottom:8px;">
+            Токен вашего бота:
+            {% if workspace_bot_token_masked %}
+              <code class="token-mask token-inline-offset">{{ workspace_bot_token_masked }}</code>
+              <a href="#" id="token-toggle-link" class="token-inline-offset">Обновить</a>
+              <form method="post" action="{{ token_delete_action or '/app/settings/delete-bot-token' }}" class="token-delete-form">
+                <button type="submit" class="delete token-delete-btn">Удалить</button>
+              </form>
+            {% else %}
+              <span class="token-inline-offset">не задан.</span>
+              <a href="#" id="token-toggle-link" class="token-inline-offset">Ввести токен</a>
+            {% endif %}
+          </div>
           <div id="token-input-wrap" {% if workspace_bot_token_masked %}hidden{% endif %}>
             <label for="bot_token">Токен вашего бота Max</label>
             <input

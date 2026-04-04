@@ -788,6 +788,8 @@ def run() -> None:
         assert "Осталось папок:" not in settings_page.text
         assert "Подключение вашего бота Max" in settings_page.text
         assert "Токен вашего бота:" in settings_page.text
+        assert "Настройки бота" in settings_page.text
+        assert settings_page.text.find("Настройки бота") < settings_page.text.find("Подключение вашего бота Max")
         assert "не задан." in settings_page.text
         assert "Ввести токен" in settings_page.text
         assert "Ссылка вашего бота Max" not in settings_page.text
