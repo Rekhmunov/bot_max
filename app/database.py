@@ -136,6 +136,109 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE conversation_meta ADD COLUMN blocked_notice_last_sent_at DATETIME")
                 )
+            if "offhours_notice_sent_at" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN offhours_notice_sent_at DATETIME")
+                )
+
+        if "workspace_business_hours" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE workspace_business_hours ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "workspace_id INTEGER DEFAULT 1, "
+                    "enabled INTEGER DEFAULT 0, "
+                    "timezone VARCHAR(64) DEFAULT 'UTC', "
+                    "offhours_message TEXT DEFAULT 'Сейчас мы вне рабочего времени. Мы ответим в рабочие часы.', "
+                    "cooldown_seconds INTEGER DEFAULT 21600, "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+                    "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_workspace_business_hours_workspace_id "
+                "ON workspace_business_hours (workspace_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE workspace_business_hours "
+                "SET timezone = 'UTC' "
+                "WHERE timezone IS NULL OR TRIM(timezone) = ''"
+            )
+        )
+
+        if "workspace_business_slots" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE workspace_business_slots ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "workspace_id INTEGER DEFAULT 1, "
+                    "weekday INTEGER DEFAULT 0, "
+                    "start_minute INTEGER DEFAULT 540, "
+                    "end_minute INTEGER DEFAULT 1080, "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_workspace_business_slots_workspace_id "
+                "ON workspace_business_slots (workspace_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_workspace_business_slots_weekday "
+                "ON workspace_business_slots (weekday)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_workspace_business_slots_workspace_weekday_start "
+                "ON workspace_business_slots (workspace_id, weekday, start_minute)"
+            )
+        )
+
+        if "workspace_business_exceptions" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE workspace_business_exceptions ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "workspace_id INTEGER DEFAULT 1, "
+                    "date_from DATE NOT NULL, "
+                    "date_to DATE NOT NULL, "
+                    "mode VARCHAR(24) DEFAULT 'closed_all_day', "
+                    "start_minute INTEGER, "
+                    "end_minute INTEGER, "
+                    "note VARCHAR(255) DEFAULT '', "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_workspace_business_exceptions_workspace_id "
+                "ON workspace_business_exceptions (workspace_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_workspace_business_exceptions_date_from "
+                "ON workspace_business_exceptions (date_from)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_workspace_business_exceptions_date_to "
+                "ON workspace_business_exceptions (date_to)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_workspace_business_exceptions_workspace_date "
+                "ON workspace_business_exceptions (workspace_id, date_from, date_to)"
+            )
+        )
 
         if "conversations" in table_names:
             conversation_columns = {col["name"] for col in inspector.get_columns("conversations")}

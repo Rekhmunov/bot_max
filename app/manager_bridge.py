@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import quote_plus
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -15,6 +16,7 @@ from app.auth import create_manager_mini_token
 from app.config import settings as app_settings
 from app.max_client import MaxClient
 from app.models import (
+    AuditLog,
     BotSettings,
     ChatMessage,
     ChatFolder,
@@ -30,6 +32,9 @@ from app.models import (
     QuickReply,
     QuickReplyMedia,
     ServiceUser,
+    WorkspaceBusinessException,
+    WorkspaceBusinessHours,
+    WorkspaceBusinessSlot,
 )
 from app.schemas import MaxWebhookEvent
 from app.services import get_or_create_settings
@@ -71,12 +76,481 @@ DEFAULT_TEMPLATES: dict[str, str] = {
 OUTBOX_RETRY_BACKOFF_SECONDS = (5, 20, 60, 300)
 BLOCKED_FOLDER_NAME = "Заблокированные пользователи"
 BLOCKED_NOTICE_COOLDOWN_SECONDS = 30
+DEFAULT_OFFHOURS_MESSAGE = "Сейчас мы вне рабочего времени. Мы ответим в рабочие часы."
+DEFAULT_OFFHOURS_COOLDOWN_SECONDS = 6 * 60 * 60
+DEFAULT_BUSINESS_TIMEZONE = "UTC"
 
 
 def _workspace_client(db: Session, *, workspace_id: int) -> MaxClient:
     settings_row = db.query(BotSettings).filter(BotSettings.workspace_id == workspace_id).first()
     token = (settings_row.bot_token if settings_row is not None else "") or ""
     return MaxClient(token=token.strip())
+
+
+def _normalize_timezone_name(value: str) -> str:
+    tz_name = (value or "").strip() or DEFAULT_BUSINESS_TIMEZONE
+    try:
+        ZoneInfo(tz_name)
+        return tz_name
+    except ZoneInfoNotFoundError:
+        return DEFAULT_BUSINESS_TIMEZONE
+
+
+def _minute_of_day(value: datetime) -> int:
+    return int(value.hour) * 60 + int(value.minute)
+
+
+def _minutes_to_hhmm(minutes: int) -> str:
+    clamped = max(0, min(24 * 60, int(minutes)))
+    if clamped == 24 * 60:
+        return "24:00"
+    return f"{clamped // 60:02d}:{clamped % 60:02d}"
+
+
+def _weekday_label(weekday: int) -> str:
+    labels = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    idx = int(weekday) if isinstance(weekday, int) else -1
+    return labels[idx] if 0 <= idx < len(labels) else "—"
+
+
+def _merge_slots(slots: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    if not slots:
+        return []
+    ordered = sorted(slots, key=lambda item: (int(item[0]), int(item[1])))
+    merged: list[list[int]] = []
+    for start, end in ordered:
+        start_i = max(0, min(24 * 60 - 1, int(start)))
+        end_i = max(start_i + 1, min(24 * 60, int(end)))
+        if not merged or start_i > merged[-1][1]:
+            merged.append([start_i, end_i])
+            continue
+        merged[-1][1] = max(merged[-1][1], end_i)
+    return [(item[0], item[1]) for item in merged]
+
+
+def _default_business_slots() -> list[dict[str, int]]:
+    # Mon-Fri 09:00-18:00
+    return [
+        {"weekday": weekday, "start_minute": 9 * 60, "end_minute": 18 * 60}
+        for weekday in range(5)
+    ]
+
+
+def _normalize_business_slots(raw_slots: list[dict[str, int]] | None) -> list[dict[str, int]]:
+    grouped: dict[int, list[tuple[int, int]]] = {}
+    for item in raw_slots or []:
+        try:
+            weekday = int(item.get("weekday", 0))
+            start_minute = int(item.get("start_minute", 0))
+            end_minute = int(item.get("end_minute", 0))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if weekday < 0 or weekday > 6:
+            continue
+        if start_minute < 0 or start_minute > 1439:
+            continue
+        if end_minute <= start_minute or end_minute > 1440:
+            continue
+        grouped.setdefault(weekday, []).append((start_minute, end_minute))
+    normalized: list[dict[str, int]] = []
+    for weekday in sorted(grouped.keys()):
+        for start_minute, end_minute in _merge_slots(grouped[weekday]):
+            normalized.append(
+                {
+                    "weekday": int(weekday),
+                    "start_minute": int(start_minute),
+                    "end_minute": int(end_minute),
+                }
+            )
+    return normalized
+
+
+def _normalize_business_exceptions(raw_exceptions: list[dict] | None) -> list[dict]:
+    normalized: list[dict] = []
+    for item in raw_exceptions or []:
+        if not isinstance(item, dict):
+            continue
+        raw_from = item.get("date_from")
+        raw_to = item.get("date_to")
+        if not isinstance(raw_from, date) or not isinstance(raw_to, date):
+            continue
+        if raw_to < raw_from:
+            continue
+        mode = str(item.get("mode") or "closed_all_day").strip().lower()
+        if mode not in {"closed_all_day", "open_custom"}:
+            mode = "closed_all_day"
+        start_minute: int | None = None
+        end_minute: int | None = None
+        if mode == "open_custom":
+            try:
+                start_minute = int(item.get("start_minute"))
+                end_minute = int(item.get("end_minute"))
+            except (TypeError, ValueError):
+                continue
+            if start_minute < 0 or start_minute > 1439:
+                continue
+            if end_minute <= start_minute or end_minute > 1440:
+                continue
+        normalized.append(
+            {
+                "date_from": raw_from,
+                "date_to": raw_to,
+                "mode": mode,
+                "start_minute": start_minute,
+                "end_minute": end_minute,
+                "note": str(item.get("note") or "").strip()[:255],
+            }
+        )
+    normalized.sort(key=lambda row: (row["date_from"], row["date_to"], row["mode"]))
+    return normalized
+
+
+def get_or_create_workspace_business_hours(
+    db: Session,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+) -> WorkspaceBusinessHours:
+    row = (
+        db.query(WorkspaceBusinessHours)
+        .filter(WorkspaceBusinessHours.workspace_id == workspace_id)
+        .first()
+    )
+    created = False
+    if row is None:
+        row = WorkspaceBusinessHours(
+            workspace_id=workspace_id,
+            enabled=False,
+            timezone=DEFAULT_BUSINESS_TIMEZONE,
+            offhours_message=DEFAULT_OFFHOURS_MESSAGE,
+            cooldown_seconds=DEFAULT_OFFHOURS_COOLDOWN_SECONDS,
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        created = True
+    changed = False
+    normalized_timezone = _normalize_timezone_name(str(row.timezone or ""))
+    if normalized_timezone != str(row.timezone or ""):
+        row.timezone = normalized_timezone
+        changed = True
+    if int(row.cooldown_seconds or 0) <= 0:
+        row.cooldown_seconds = DEFAULT_OFFHOURS_COOLDOWN_SECONDS
+        changed = True
+    if not (row.offhours_message or "").strip():
+        row.offhours_message = DEFAULT_OFFHOURS_MESSAGE
+        changed = True
+    slots_exist = (
+        db.query(WorkspaceBusinessSlot.id)
+        .filter(WorkspaceBusinessSlot.workspace_id == workspace_id)
+        .first()
+    )
+    if slots_exist is None:
+        for slot in _default_business_slots():
+            db.add(
+                WorkspaceBusinessSlot(
+                    workspace_id=workspace_id,
+                    weekday=int(slot["weekday"]),
+                    start_minute=int(slot["start_minute"]),
+                    end_minute=int(slot["end_minute"]),
+                )
+            )
+        changed = True
+    if changed or created:
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def get_workspace_business_hours_payload(
+    db: Session,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+) -> dict[str, object]:
+    row = get_or_create_workspace_business_hours(db, workspace_id=workspace_id)
+    slots_rows = (
+        db.query(WorkspaceBusinessSlot)
+        .filter(WorkspaceBusinessSlot.workspace_id == workspace_id)
+        .order_by(
+            WorkspaceBusinessSlot.weekday.asc(),
+            WorkspaceBusinessSlot.start_minute.asc(),
+            WorkspaceBusinessSlot.id.asc(),
+        )
+        .all()
+    )
+    exceptions_rows = (
+        db.query(WorkspaceBusinessException)
+        .filter(WorkspaceBusinessException.workspace_id == workspace_id)
+        .order_by(
+            WorkspaceBusinessException.date_from.asc(),
+            WorkspaceBusinessException.date_to.asc(),
+            WorkspaceBusinessException.id.asc(),
+        )
+        .all()
+    )
+    return {
+        "enabled": bool(row.enabled),
+        "timezone": _normalize_timezone_name(str(row.timezone or DEFAULT_BUSINESS_TIMEZONE)),
+        "offhours_message": str(row.offhours_message or DEFAULT_OFFHOURS_MESSAGE),
+        "cooldown_seconds": max(60, int(row.cooldown_seconds or DEFAULT_OFFHOURS_COOLDOWN_SECONDS)),
+        "slots": [
+            {
+                "weekday": int(item.weekday or 0),
+                "start_minute": int(item.start_minute or 0),
+                "end_minute": int(item.end_minute or 0),
+            }
+            for item in slots_rows
+        ],
+        "exceptions": [
+            {
+                "id": int(item.id),
+                "date_from": item.date_from,
+                "date_to": item.date_to,
+                "mode": str(item.mode or "closed_all_day"),
+                "start_minute": (int(item.start_minute) if item.start_minute is not None else None),
+                "end_minute": (int(item.end_minute) if item.end_minute is not None else None),
+                "note": str(item.note or ""),
+            }
+            for item in exceptions_rows
+        ],
+    }
+
+
+def replace_workspace_business_hours(
+    db: Session,
+    *,
+    workspace_id: int,
+    enabled: bool,
+    timezone_name: str,
+    offhours_message: str,
+    cooldown_seconds: int,
+    slots: list[dict[str, int]] | None = None,
+    exceptions: list[dict] | None = None,
+    commit: bool = True,
+) -> WorkspaceBusinessHours:
+    row = get_or_create_workspace_business_hours(db, workspace_id=workspace_id)
+    normalized_slots = _normalize_business_slots(slots)
+    normalized_exceptions = _normalize_business_exceptions(exceptions)
+    row.enabled = bool(enabled)
+    row.timezone = _normalize_timezone_name(timezone_name)
+    row.offhours_message = (offhours_message or "").strip() or DEFAULT_OFFHOURS_MESSAGE
+    row.cooldown_seconds = max(60, min(7 * 24 * 60 * 60, int(cooldown_seconds or DEFAULT_OFFHOURS_COOLDOWN_SECONDS)))
+    db.add(row)
+    db.query(WorkspaceBusinessSlot).filter(WorkspaceBusinessSlot.workspace_id == workspace_id).delete()
+    for slot in normalized_slots:
+        db.add(
+            WorkspaceBusinessSlot(
+                workspace_id=workspace_id,
+                weekday=int(slot["weekday"]),
+                start_minute=int(slot["start_minute"]),
+                end_minute=int(slot["end_minute"]),
+            )
+        )
+    db.query(WorkspaceBusinessException).filter(WorkspaceBusinessException.workspace_id == workspace_id).delete()
+    for item in normalized_exceptions:
+        db.add(
+            WorkspaceBusinessException(
+                workspace_id=workspace_id,
+                date_from=item["date_from"],
+                date_to=item["date_to"],
+                mode=item["mode"],
+                start_minute=item["start_minute"],
+                end_minute=item["end_minute"],
+                note=item["note"],
+            )
+        )
+    if commit:
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def _effective_day_slots(
+    *,
+    target_date: date,
+    weekday: int,
+    slots_by_weekday: dict[int, list[tuple[int, int]]],
+    exceptions: list[dict[str, object]],
+) -> list[tuple[int, int]]:
+    matched_exception: dict[str, object] | None = None
+    for item in exceptions:
+        date_from = item.get("date_from")
+        date_to = item.get("date_to")
+        if not isinstance(date_from, date) or not isinstance(date_to, date):
+            continue
+        if date_from <= target_date <= date_to:
+            matched_exception = item
+            break
+    if matched_exception is not None:
+        mode = str(matched_exception.get("mode") or "closed_all_day").strip().lower()
+        if mode == "open_custom":
+            start_raw = matched_exception.get("start_minute")
+            end_raw = matched_exception.get("end_minute")
+            if isinstance(start_raw, int) and isinstance(end_raw, int) and 0 <= start_raw < end_raw <= 1440:
+                return [(int(start_raw), int(end_raw))]
+        return []
+    return list(slots_by_weekday.get(int(weekday), []))
+
+
+def _find_next_open_local(
+    *,
+    local_now: datetime,
+    slots_by_weekday: dict[int, list[tuple[int, int]]],
+    exceptions: list[dict[str, object]],
+) -> datetime | None:
+    for offset in range(0, 15):
+        current_date = local_now.date() + timedelta(days=offset)
+        weekday = int(current_date.weekday())
+        intervals = _effective_day_slots(
+            target_date=current_date,
+            weekday=weekday,
+            slots_by_weekday=slots_by_weekday,
+            exceptions=exceptions,
+        )
+        if not intervals:
+            continue
+        minute_now = _minute_of_day(local_now) if offset == 0 else -1
+        for start_minute, _end_minute in intervals:
+            if offset == 0 and start_minute <= minute_now:
+                continue
+            return datetime(
+                year=current_date.year,
+                month=current_date.month,
+                day=current_date.day,
+                hour=start_minute // 60,
+                minute=start_minute % 60,
+                tzinfo=local_now.tzinfo,
+            )
+    return None
+
+
+def evaluate_workspace_business_hours(
+    db: Session,
+    *,
+    workspace_id: int,
+    now_utc: datetime | None = None,
+) -> dict[str, object]:
+    payload = get_workspace_business_hours_payload(db, workspace_id=workspace_id)
+    tz_name = _normalize_timezone_name(str(payload.get("timezone") or DEFAULT_BUSINESS_TIMEZONE))
+    tz = ZoneInfo(tz_name)
+    now_base = now_utc or _utc_now()
+    if now_base.tzinfo is None:
+        now_base = now_base.replace(tzinfo=UTC)
+    local_now = now_base.astimezone(tz)
+    slots_by_weekday: dict[int, list[tuple[int, int]]] = {}
+    for slot in payload.get("slots", []) or []:
+        if not isinstance(slot, dict):
+            continue
+        try:
+            weekday = int(slot.get("weekday", 0))
+            start_minute = int(slot.get("start_minute", 0))
+            end_minute = int(slot.get("end_minute", 0))
+        except (TypeError, ValueError):
+            continue
+        if weekday < 0 or weekday > 6:
+            continue
+        if start_minute < 0 or end_minute > 1440 or end_minute <= start_minute:
+            continue
+        slots_by_weekday.setdefault(weekday, []).append((start_minute, end_minute))
+    for weekday in list(slots_by_weekday.keys()):
+        slots_by_weekday[weekday] = _merge_slots(slots_by_weekday[weekday])
+    exceptions: list[dict[str, object]] = []
+    for item in payload.get("exceptions", []) or []:
+        if not isinstance(item, dict):
+            continue
+        exceptions.append(item)
+    current_intervals = _effective_day_slots(
+        target_date=local_now.date(),
+        weekday=local_now.weekday(),
+        slots_by_weekday=slots_by_weekday,
+        exceptions=exceptions,
+    )
+    minute = _minute_of_day(local_now)
+    is_open = any(start <= minute < end for start, end in current_intervals)
+    next_open_local = None if is_open else _find_next_open_local(
+        local_now=local_now,
+        slots_by_weekday=slots_by_weekday,
+        exceptions=exceptions,
+    )
+    next_open_label = None
+    if next_open_local is not None:
+        next_open_label = f"{_weekday_label(next_open_local.weekday())}, {next_open_local.strftime('%H:%M')}"
+    return {
+        "enabled": bool(payload.get("enabled", False)),
+        "timezone": tz_name,
+        "offhours_message": str(payload.get("offhours_message") or DEFAULT_OFFHOURS_MESSAGE),
+        "cooldown_seconds": int(payload.get("cooldown_seconds") or DEFAULT_OFFHOURS_COOLDOWN_SECONDS),
+        "is_open": bool(is_open),
+        "local_now": local_now,
+        "next_open_local": next_open_local,
+        "next_open_label": next_open_label,
+    }
+
+
+def _render_offhours_message(template_text: str, evaluation: dict[str, object]) -> str:
+    text = (template_text or "").strip() or DEFAULT_OFFHOURS_MESSAGE
+    next_label = str(evaluation.get("next_open_label") or "в рабочее время")
+    timezone_name = str(evaluation.get("timezone") or DEFAULT_BUSINESS_TIMEZONE)
+    text = text.replace("{next_work_time}", next_label)
+    text = text.replace("{timezone}", timezone_name)
+    return text
+
+
+async def maybe_send_offhours_autoreply(
+    db: Session,
+    *,
+    conversation: Conversation,
+    meta: ConversationMeta,
+    event: MaxWebhookEvent,
+    workspace_id: int,
+) -> bool:
+    evaluation = evaluate_workspace_business_hours(db, workspace_id=workspace_id)
+    if not bool(evaluation.get("enabled")):
+        return False
+    if bool(evaluation.get("is_open")):
+        return False
+    cooldown_seconds = max(
+        60,
+        int(evaluation.get("cooldown_seconds") or DEFAULT_OFFHOURS_COOLDOWN_SECONDS),
+    )
+    last_notice = meta.offhours_notice_sent_at
+    if isinstance(last_notice, datetime):
+        delta = _as_naive_utc(_utc_now()) - _as_naive_utc(last_notice)
+        if delta.total_seconds() < cooldown_seconds:
+            return False
+    rendered = _render_offhours_message(
+        str(evaluation.get("offhours_message") or DEFAULT_OFFHOURS_MESSAGE),
+        evaluation,
+    )
+    await queue_only_send_text(
+        db,
+        conversation_id=conversation.id,
+        target_chat_id=event.chat_id,
+        target_user_id=event.sender_id,
+        text=rendered,
+        source="bot_system",
+        text_format="markdown",
+    )
+    await process_outbox_queue(db, limit=20)
+    meta.offhours_notice_sent_at = _as_naive_utc(_utc_now())
+    db.add(meta)
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=None,
+            action="offhours_autoreply_sent",
+            object_type="conversation",
+            object_id=str(conversation.id),
+            details_json=safe_json_dumps(
+                {
+                    "timezone": str(evaluation.get("timezone") or DEFAULT_BUSINESS_TIMEZONE),
+                    "next_open_label": str(evaluation.get("next_open_label") or ""),
+                },
+            ),
+        )
+    )
+    db.commit()
+    return True
 
 
 def _parse_manager_ids(raw_value: str) -> list[str]:
@@ -1869,6 +2343,15 @@ async def handle_customer_event(
             db.add(meta)
             db.commit()
         return {"ok": True, "flow": "blocked_customer"}
+
+    if is_message_event:
+        await maybe_send_offhours_autoreply(
+            db,
+            conversation=conversation,
+            meta=meta,
+            event=event,
+            workspace_id=workspace_id,
+        )
 
     # Message before Start (custom behavior for message_created before start)
     if not meta.start_prompt_sent and is_message_event and not is_bot_started and not event.contact_phone:

@@ -535,6 +535,50 @@
       padding: 10px;
       max-width: 420px;
     }
+    .business-hours-row {
+      display: grid;
+      grid-template-columns: 130px 1fr;
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: #fbfcff;
+    }
+    .business-hours-day {
+      font-weight: 700;
+      color: #2d3954;
+    }
+    .business-hours-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .business-hours-controls input[type="time"] {
+      width: 120px;
+      min-width: 0;
+      padding: 7px 8px;
+    }
+    .business-hours-preview {
+      margin-top: 10px;
+      padding: 9px 10px;
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      color: #4f5b73;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .business-hours-preview .btn {
+      margin-top: 0;
+    }
+    .business-hours-preview-result {
+      color: #4f5b73;
+      font-size: 13px;
+    }
     @media (max-width: 760px) {
       body {
         overflow-x: hidden;
@@ -579,6 +623,15 @@
       }
       .manager-status-kpis {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .business-hours-grid {
+        grid-template-columns: 1fr;
+      }
+      .business-hours-row {
+        grid-template-columns: 1fr;
+      }
+      .business-hours-controls {
+        align-items: flex-start;
       }
       .table-mobile-cards,
       .table-mobile-cards thead,
@@ -668,7 +721,7 @@
 
     <div class="grid">
       {% if (show_settings_card | default(true)) %}
-      <section class="card">
+      <section class="card" data-business-hours-form>
         <div class="card-head">
           <h2 class="card-title"><span class="section-icon">⚙️</span>Настройки бота</h2>
           <div class="card-head-actions">
@@ -736,6 +789,102 @@
           <input type="hidden" name="routing_mode" value="{{ settings.routing_mode or 'round_robin' }}" />
 
           <button class="btn" type="submit">Сохранить настройки</button>
+        </form>
+      </section>
+      {% endif %}
+
+      {% if (show_business_hours_card | default(false)) and business_hours %}
+      <section class="card" data-business-hours-form>
+        <div class="card-head">
+          <h2 class="card-title"><span class="section-icon">🕒</span>Рабочее время</h2>
+          <div class="card-head-actions">
+            <span class="card-head-kicker">Автоответ</span>
+          </div>
+        </div>
+        <form method="post" action="{{ settings_action or '/app/settings' }}">
+          <label class="settings-row-checkbox">
+            <input
+              type="checkbox"
+              name="business_hours_enabled"
+              value="1"
+              {% if business_hours.enabled %}checked{% endif %}
+            />
+            Включить автоответ в нерабочее время
+          </label>
+
+          <label for="business_timezone">Часовой пояс</label>
+          <select id="business_timezone" name="business_timezone">
+            {% for tz in business_hours.timezone_options %}
+              <option value="{{ tz }}" {% if business_hours.timezone == tz %}selected{% endif %}>{{ tz }}</option>
+            {% endfor %}
+          </select>
+
+          <div class="business-hours-grid">
+            {% for day in business_hours.weekdays %}
+              <div class="business-hours-row">
+                <div class="business-hours-day">{{ day.label }}</div>
+                <div class="business-hours-controls">
+                  <label class="settings-row-checkbox" style="margin:0;">
+                    <input
+                      type="checkbox"
+                      name="business_day_{{ day.weekday }}_enabled"
+                      value="1"
+                      {% if day.enabled %}checked{% endif %}
+                    />
+                    рабочий
+                  </label>
+                  <input
+                    type="time"
+                    name="business_day_{{ day.weekday }}_start"
+                    value="{{ day.start_hhmm }}"
+                    step="60"
+                  />
+                  <span>—</span>
+                  <input
+                    type="time"
+                    name="business_day_{{ day.weekday }}_end"
+                    value="{{ day.end_hhmm }}"
+                    step="60"
+                  />
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+
+          <label for="offhours_message">Сообщение в нерабочее время</label>
+          <textarea
+            id="offhours_message"
+            name="offhours_message"
+            placeholder="Например: Сейчас мы вне рабочего времени. Ответим в {next_work_time} ({timezone})."
+          >{{ business_hours.offhours_message }}</textarea>
+          <div class="hint">Доступные переменные: <code>{next_work_time}</code>, <code>{timezone}</code></div>
+
+          <label for="offhours_cooldown_minutes">Cooldown автоответа (минут)</label>
+          <input
+            id="offhours_cooldown_minutes"
+            name="offhours_cooldown_minutes"
+            type="number"
+            min="1"
+            max="10080"
+            value="{{ business_hours.cooldown_minutes }}"
+          />
+
+          <div class="business-hours-preview">
+            <button type="button" class="btn secondary" id="business-hours-preview-btn">Проверить сейчас</button>
+            <span class="business-hours-preview-result" id="business-hours-preview-result">—</span>
+          </div>
+
+          <input type="hidden" name="prestart_message" value="{{ template_prestart }}" />
+          <input type="hidden" name="start_message" value="{{ template_start }}" />
+          <input type="hidden" name="after_phone_message" value="{{ template_after_phone }}" />
+          <input type="hidden" name="admin_account_id" value="{{ settings.admin_account_id }}" />
+          <input type="hidden" name="routing_mode" value="{{ settings.routing_mode or 'round_robin' }}" />
+          <input type="hidden" name="settings_section" value="business_hours" />
+          {% if settings.request_customer_phone %}
+            <input type="hidden" name="request_customer_phone" value="1" />
+          {% endif %}
+
+          <button class="btn" type="submit">Сохранить рабочее время</button>
         </form>
       </section>
       {% endif %}
@@ -1082,6 +1231,51 @@
 
   </div>
   <script>
+    (() => {
+      const previewSection = document.querySelector('[data-business-hours-form]');
+      const form = previewSection ? previewSection.querySelector("form") : null;
+      const previewBtn = document.getElementById("business-hours-preview-btn");
+      const previewNode = document.getElementById("business-hours-preview-result");
+      if (
+        form instanceof HTMLFormElement &&
+        previewBtn instanceof HTMLButtonElement &&
+        previewNode instanceof HTMLElement
+      ) {
+        previewBtn.addEventListener("click", async (event) => {
+          event.preventDefault();
+          previewNode.textContent = "Проверяю...";
+          const formData = new FormData(form);
+          try {
+            const response = await fetch(
+              "{{ business_hours_preview_action or '/app/settings/business-hours/preview' }}",
+              {
+                method: "POST",
+                body: formData,
+              },
+            );
+            const payload = await response.json();
+            if (!response.ok || !payload || payload.ok !== true) {
+              const text = (payload && payload.error) ? String(payload.error) : "Не удалось проверить статус.";
+              previewNode.textContent = text;
+              return;
+            }
+            if (!payload.enabled) {
+              previewNode.textContent = "График выключен: автоответы нерабочего времени не отправляются.";
+              return;
+            }
+            if (payload.is_open) {
+              previewNode.textContent = `Сейчас рабочее время (${payload.timezone || "UTC"}).`;
+              return;
+            }
+            const nextLabel = payload.next_open_label ? ` Следующее открытие: ${payload.next_open_label}.` : "";
+            previewNode.textContent = `Сейчас нерабочее время (${payload.timezone || "UTC"}).${nextLabel}`;
+          } catch (_) {
+            previewNode.textContent = "Не удалось проверить статус.";
+          }
+        });
+      }
+    })();
+
     (() => {
       const tokenLink = document.getElementById("token-toggle-link");
       const tokenWrap = document.getElementById("token-input-wrap");

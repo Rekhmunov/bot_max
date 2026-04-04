@@ -13,6 +13,7 @@ from urllib.parse import quote_plus
 from urllib.parse import urlencode
 from urllib.parse import urlsplit
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -78,6 +79,12 @@ from app.manager_bridge import (
     send_admin_chat_message,
     send_admin_quick_reply,
     update_chat_message_text,
+    DEFAULT_BUSINESS_TIMEZONE,
+    DEFAULT_OFFHOURS_COOLDOWN_SECONDS,
+    DEFAULT_OFFHOURS_MESSAGE,
+    evaluate_workspace_business_hours,
+    get_workspace_business_hours_payload,
+    replace_workspace_business_hours,
 )
 from app.max_client import MaxClient
 from app.email_utils import send_email_verification
@@ -188,6 +195,194 @@ def _resolve_folder_ids_from_form(*, folder_ids_csv: str, folder_id: int) -> lis
         return parsed
     fallback = int(folder_id or 0)
     return [fallback] if fallback > 0 else []
+
+
+_BUSINESS_WEEKDAY_LABELS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+_COMMON_TIMEZONES = [
+    "UTC",
+    "Europe/Moscow",
+    "Europe/Kaliningrad",
+    "Asia/Yekaterinburg",
+    "Asia/Omsk",
+    "Asia/Novosibirsk",
+    "Asia/Krasnoyarsk",
+    "Asia/Irkutsk",
+    "Asia/Yakutsk",
+    "Asia/Vladivostok",
+    "Asia/Magadan",
+    "Asia/Kamchatka",
+    "Europe/Minsk",
+    "Europe/Berlin",
+    "Asia/Almaty",
+    "Asia/Tashkent",
+    "America/New_York",
+]
+
+
+def _truthy_form_value(value: object) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized in {"1", "true", "yes", "on"}
+
+
+def _parse_time_to_minute(value: object, *, default_minute: int) -> int:
+    raw = str(value or "").strip()
+    if not raw:
+        return int(default_minute)
+    parts = raw.split(":", 1)
+    if len(parts) != 2:
+        return int(default_minute)
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except (TypeError, ValueError):
+        return int(default_minute)
+    if hour < 0 or hour > 23:
+        return int(default_minute)
+    if minute < 0 or minute > 59:
+        return int(default_minute)
+    return hour * 60 + minute
+
+
+def _minute_to_hhmm(value: int) -> str:
+    minute = max(0, min(24 * 60, int(value)))
+    if minute >= 24 * 60:
+        return "24:00"
+    return f"{minute // 60:02d}:{minute % 60:02d}"
+
+
+def _normalize_timezone_for_form(value: str) -> str:
+    tz_name = (value or "").strip() or DEFAULT_BUSINESS_TIMEZONE
+    try:
+        ZoneInfo(tz_name)
+        return tz_name
+    except ZoneInfoNotFoundError:
+        return DEFAULT_BUSINESS_TIMEZONE
+
+
+def _business_hours_view_model(
+    db: Session,
+    *,
+    workspace_id: int,
+) -> dict[str, object]:
+    payload = get_workspace_business_hours_payload(db, workspace_id=workspace_id)
+    timezone_name = _normalize_timezone_for_form(str(payload.get("timezone") or ""))
+    slot_rows = payload.get("slots", []) or []
+    day_slots: dict[int, list[tuple[int, int]]] = {}
+    for item in slot_rows:
+        if not isinstance(item, dict):
+            continue
+        try:
+            weekday = int(item.get("weekday", 0))
+            start_minute = int(item.get("start_minute", 0))
+            end_minute = int(item.get("end_minute", 0))
+        except (TypeError, ValueError):
+            continue
+        if weekday < 0 or weekday > 6:
+            continue
+        if start_minute < 0 or end_minute > 1440 or end_minute <= start_minute:
+            continue
+        day_slots.setdefault(weekday, []).append((start_minute, end_minute))
+    weekday_rows: list[dict[str, object]] = []
+    for weekday in range(7):
+        intervals = sorted(day_slots.get(weekday, []), key=lambda item: (item[0], item[1]))
+        if intervals:
+            start_minute = int(intervals[0][0])
+            end_minute = int(intervals[-1][1])
+            enabled = True
+        else:
+            start_minute = 9 * 60
+            end_minute = 18 * 60
+            enabled = False
+        weekday_rows.append(
+            {
+                "weekday": weekday,
+                "label": _BUSINESS_WEEKDAY_LABELS[weekday],
+                "enabled": enabled,
+                "start_hhmm": _minute_to_hhmm(start_minute),
+                "end_hhmm": _minute_to_hhmm(end_minute),
+            }
+        )
+    timezone_options = list(dict.fromkeys([timezone_name, *_COMMON_TIMEZONES]))
+    return {
+        "enabled": bool(payload.get("enabled", False)),
+        "timezone": timezone_name,
+        "offhours_message": str(payload.get("offhours_message") or DEFAULT_OFFHOURS_MESSAGE),
+        "cooldown_minutes": max(1, int(int(payload.get("cooldown_seconds") or DEFAULT_OFFHOURS_COOLDOWN_SECONDS) / 60)),
+        "weekdays": weekday_rows,
+        "timezone_options": timezone_options,
+    }
+
+
+def _extract_business_hours_form(form_data: dict | object) -> dict[str, object]:
+    enabled = _truthy_form_value(
+        form_data.get("business_hours_enabled", "")
+        if hasattr(form_data, "get")
+        else ""
+    )
+    timezone_name = _normalize_timezone_for_form(
+        str(form_data.get("business_timezone", "") if hasattr(form_data, "get") else "")
+    )
+    offhours_message = str(
+        form_data.get("offhours_message", "") if hasattr(form_data, "get") else ""
+    ).strip()[:2000]
+    cooldown_minutes_raw = str(
+        form_data.get("offhours_cooldown_minutes", "") if hasattr(form_data, "get") else ""
+    ).strip()
+    try:
+        cooldown_minutes = int(cooldown_minutes_raw or "360")
+    except (TypeError, ValueError):
+        cooldown_minutes = 360
+    cooldown_minutes = max(1, min(10080, cooldown_minutes))
+    slots: list[dict[str, int]] = []
+    for weekday in range(7):
+        prefix = f"business_day_{weekday}"
+        day_enabled = _truthy_form_value(
+            form_data.get(f"{prefix}_enabled", "") if hasattr(form_data, "get") else ""
+        )
+        if not day_enabled:
+            continue
+        start_minute = _parse_time_to_minute(
+            form_data.get(f"{prefix}_start", "09:00") if hasattr(form_data, "get") else "09:00",
+            default_minute=9 * 60,
+        )
+        end_minute = _parse_time_to_minute(
+            form_data.get(f"{prefix}_end", "18:00") if hasattr(form_data, "get") else "18:00",
+            default_minute=18 * 60,
+        )
+        if end_minute <= start_minute:
+            end_minute = min(24 * 60, start_minute + 60)
+        slots.append(
+            {
+                "weekday": weekday,
+                "start_minute": int(start_minute),
+                "end_minute": int(end_minute),
+            }
+        )
+    return {
+        "enabled": enabled,
+        "timezone": timezone_name,
+        "offhours_message": offhours_message,
+        "cooldown_seconds": int(cooldown_minutes * 60),
+        "slots": slots,
+    }
+
+
+def _is_business_hours_form(form_data: dict | object) -> bool:
+    if not hasattr(form_data, "get"):
+        return False
+    marker = str(form_data.get("settings_section", "") or "").strip().lower()
+    return marker == "business_hours"
+
+
+def _has_business_hours_fields(form_data: dict | object) -> bool:
+    if not hasattr(form_data, "keys"):
+        return False
+    keys = {str(item) for item in form_data.keys()}  # type: ignore[attr-defined]
+    if "business_hours_enabled" in keys:
+        return True
+    if "business_timezone" in keys or "offhours_message" in keys or "offhours_cooldown_minutes" in keys:
+        return True
+    return any(key.startswith("business_day_") for key in keys)
 
 
 def _filter_threads_by_folder(threads: list[object], folder_id: int | None) -> list[object]:
@@ -1894,6 +2089,7 @@ def _render_app_settings_page(
         else:
             masked_token = f"{bot_token_value[:2]}{'*' * max(len(bot_token_value) - 4, 4)}{bot_token_value[-2:]}"
     webhook_workspace_url = _workspace_webhook_url(bot_settings)
+    business_hours_vm = _business_hours_view_model(db, workspace_id=workspace_id)
 
     return templates.TemplateResponse(
         request,
@@ -1952,6 +2148,8 @@ def _render_app_settings_page(
             "workspace_bot_token_masked": masked_token,
             "workspace_webhook_url": webhook_workspace_url,
             "routing_mode_label": _manager_routing_mode_label(bot_settings.routing_mode or "round_robin"),
+            "business_hours": business_hours_vm,
+            "business_hours_preview_action": "/app/settings/business-hours/preview",
             "show_settings_card": not is_manager_view,
             "show_app_token_card": not is_manager_view,
             "show_webhook_card": not is_manager_view,
@@ -1960,6 +2158,7 @@ def _render_app_settings_page(
             "show_tariff_card": not is_manager_view,
             "show_intro_steps_card": not is_manager_view,
             "show_intro_form": False,
+            "show_business_hours_card": not is_manager_view,
         },
     )
 
@@ -2093,6 +2292,7 @@ def admin_page(
 ) -> HTMLResponse:
     workspace_id = DEFAULT_WORKSPACE_ID
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
+    business_hours_vm = _business_hours_view_model(db, workspace_id=workspace_id)
     webhook_workspace_url = _workspace_webhook_url(bot_settings)
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
     tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
@@ -2152,6 +2352,9 @@ def admin_page(
             "message": None,
             "error": None,
             "quick_reply_edit_target": quick_reply_edit_target,
+            "business_hours": business_hours_vm,
+            "business_hours_preview_action": "/app/settings/business-hours/preview",
+            "show_business_hours_card": True,
         },
     )
 
@@ -2174,12 +2377,52 @@ async def update_settings(
     if _admin is None:
         return RedirectResponse(url="/admin/login", status_code=302)
     form_data = await request.form()
+    settings_section = str(form_data.get("settings_section", "general") or "general").strip().lower()
+    if settings_section == "business_hours":
+        workspace_id = DEFAULT_WORKSPACE_ID
+        business_payload = _extract_business_hours_form(form_data)
+        replace_workspace_business_hours(
+            db,
+            workspace_id=workspace_id,
+            enabled=bool(business_payload.get("enabled", False)),
+            timezone_name=str(business_payload.get("timezone") or DEFAULT_BUSINESS_TIMEZONE),
+            offhours_message=str(business_payload.get("offhours_message") or DEFAULT_OFFHOURS_MESSAGE),
+            cooldown_seconds=int(
+                business_payload.get("cooldown_seconds") or DEFAULT_OFFHOURS_COOLDOWN_SECONDS
+            ),
+            slots=list(business_payload.get("slots") or []),
+            exceptions=[],
+            commit=False,
+        )
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=None,
+                action="business_hours_updated",
+                object_type="workspace_business_hours",
+                object_id=str(workspace_id),
+                details_json=safe_json_dumps(
+                    {
+                        "enabled": bool(business_payload.get("enabled", False)),
+                        "timezone": str(business_payload.get("timezone") or ""),
+                        "slots_count": len(list(business_payload.get("slots") or [])),
+                        "cooldown_seconds": int(
+                            business_payload.get("cooldown_seconds")
+                            or DEFAULT_OFFHOURS_COOLDOWN_SECONDS
+                        ),
+                    }
+                ),
+            )
+        )
+        db.commit()
+        return RedirectResponse(url="/admin", status_code=302)
     manager_ids = _extract_manager_ids_from_form(form_data)
     if not manager_ids:
         manager_ids = _parse_manager_ids(_normalize_manager_ids(f"{manager_account_id},{manager_account_id_2}"))
     manager_ids_csv = _normalize_manager_ids(",".join(manager_ids))
     workspace_id = DEFAULT_WORKSPACE_ID
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
+    business_hours_vm = _business_hours_view_model(db, workspace_id=workspace_id)
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
     tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
     manager_limit_value = max(1, int(sub.manager_limit or 0))
@@ -2219,6 +2462,9 @@ async def update_settings(
                 },
                 "message": None,
                 "error": "Ваш тарифный план не позволяет добавлять больше менеджеров.",
+                "business_hours": business_hours_vm,
+                "business_hours_preview_action": "/app/settings/business-hours/preview",
+                "show_business_hours_card": True,
             },
             status_code=400,
         )
@@ -2278,6 +2524,9 @@ async def update_settings(
             },
             "message": "Настройки сохранены",
             "error": None,
+            "business_hours": business_hours_vm,
+            "business_hours_preview_action": "/app/settings/business-hours/preview",
+            "show_business_hours_card": True,
         },
     )
 
@@ -4589,6 +4838,46 @@ async def app_update_settings(
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     if current_user.role not in {"owner", "admin"}:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
+    form_data = await request.form()
+    settings_section = str(form_data.get("settings_section", "general") or "general").strip().lower()
+    if settings_section == "business_hours":
+        business_payload = _extract_business_hours_form(form_data)
+        replace_workspace_business_hours(
+            db,
+            workspace_id=workspace_id,
+            enabled=bool(business_payload.get("enabled", False)),
+            timezone_name=str(business_payload.get("timezone") or DEFAULT_BUSINESS_TIMEZONE),
+            offhours_message=str(business_payload.get("offhours_message") or DEFAULT_OFFHOURS_MESSAGE),
+            cooldown_seconds=int(
+                business_payload.get("cooldown_seconds") or DEFAULT_OFFHOURS_COOLDOWN_SECONDS
+            ),
+            slots=list(business_payload.get("slots") or []),
+            exceptions=[],
+            commit=False,
+        )
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=current_user.id,
+                action="business_hours_updated",
+                object_type="workspace_business_hours",
+                object_id=str(workspace_id),
+                details_json=safe_json_dumps(
+                    {
+                        "enabled": bool(business_payload.get("enabled", False)),
+                        "timezone": str(business_payload.get("timezone") or ""),
+                        "slots_count": len(list(business_payload.get("slots") or [])),
+                        "cooldown_seconds": int(
+                            business_payload.get("cooldown_seconds")
+                            or DEFAULT_OFFHOURS_COOLDOWN_SECONDS
+                        ),
+                    }
+                ),
+            )
+        )
+        db.commit()
+        return RedirectResponse(url="/app/settings", status_code=302)
+
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
     previous_webhook_key = (settings_row.webhook_key or "").strip()
     token_clean = (bot_token or "").strip()
@@ -4676,6 +4965,40 @@ async def app_delete_bot_token(
         )
         db.commit()
     return RedirectResponse(url="/app/settings", status_code=302)
+
+
+@app.post("/app/settings/business-hours/preview", response_class=JSONResponse)
+def app_settings_business_hours_preview(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_settings",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    if current_user.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    evaluation = evaluate_workspace_business_hours(db, workspace_id=workspace_id)
+    next_open_local = evaluation.get("next_open_local")
+    if isinstance(next_open_local, datetime):
+        next_iso = next_open_local.isoformat()
+    else:
+        next_iso = None
+    return JSONResponse(
+        {
+            "ok": True,
+            "enabled": bool(evaluation.get("enabled", False)),
+            "is_open": bool(evaluation.get("is_open", False)),
+            "timezone": str(evaluation.get("timezone") or ""),
+            "next_open_label": str(evaluation.get("next_open_label") or ""),
+            "next_open_at_local": next_iso,
+        },
+        status_code=200,
+    )
 
 
 @app.post("/app/settings/copy-manager-link", response_class=JSONResponse)

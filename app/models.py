@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -291,6 +291,48 @@ class ConversationMeta(Base):
     blocked_prev_folder_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     blocked_reason: Mapped[str] = mapped_column(Text, default="")
     blocked_notice_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    offhours_notice_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class WorkspaceBusinessHours(Base):
+    __tablename__ = "workspace_business_hours"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    offhours_message: Mapped[str] = mapped_column(
+        Text,
+        default="Сейчас мы вне рабочего времени. Мы ответим в рабочие часы.",
+    )
+    cooldown_seconds: Mapped[int] = mapped_column(Integer, default=21600)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class WorkspaceBusinessSlot(Base):
+    __tablename__ = "workspace_business_slots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True, default=1)
+    weekday: Mapped[int] = mapped_column(Integer, default=0, index=True)  # 0=Mon .. 6=Sun
+    start_minute: Mapped[int] = mapped_column(Integer, default=540)  # 09:00
+    end_minute: Mapped[int] = mapped_column(Integer, default=1080)  # 18:00
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class WorkspaceBusinessException(Base):
+    __tablename__ = "workspace_business_exceptions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True, default=1)
+    date_from: Mapped[date] = mapped_column(Date, index=True)
+    date_to: Mapped[date] = mapped_column(Date, index=True)
+    mode: Mapped[str] = mapped_column(String(24), default="closed_all_day")
+    start_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    end_minute: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    note: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
 class TenantAlert(Base):
@@ -366,6 +408,18 @@ Index(
 )
 Index("ix_message_templates_workspace_key", MessageTemplate.workspace_id, MessageTemplate.template_key, unique=True)
 Index("ix_chat_folders_workspace_name", ChatFolder.workspace_id, ChatFolder.name, unique=True)
+Index(
+    "ix_workspace_business_slots_workspace_weekday_start",
+    WorkspaceBusinessSlot.workspace_id,
+    WorkspaceBusinessSlot.weekday,
+    WorkspaceBusinessSlot.start_minute,
+)
+Index(
+    "ix_workspace_business_exceptions_workspace_date",
+    WorkspaceBusinessException.workspace_id,
+    WorkspaceBusinessException.date_from,
+    WorkspaceBusinessException.date_to,
+)
 Index(
     "ix_conversation_folder_links_workspace_conversation_folder",
     ConversationFolderLink.workspace_id,
