@@ -1376,157 +1376,104 @@ def _build_superadmin_context(
 ) -> dict:
     active_tab = tab if tab in _SUPERADMIN_TABS else "dashboard"
     dashboard = _superadmin_dashboard_snapshot(db)
-    workspaces = db.query(Workspace).order_by(Workspace.id.asc()).all()
-    users = db.query(ServiceUser).order_by(ServiceUser.id.asc()).all()
-    subs = {
-        row.workspace_id: row
-        for row in db.query(Subscription).order_by(Subscription.id.asc()).all()
-    }
-    latest_alerts = (
-        db.query(TenantAlert)
-        .order_by(TenantAlert.id.desc())
-        .limit(200)
-        .all()
-    )
-    open_alerts_by_workspace: dict[int, int] = {}
-    for row in latest_alerts:
-        if row.is_resolved:
-            continue
-        open_alerts_by_workspace[row.workspace_id] = open_alerts_by_workspace.get(row.workspace_id, 0) + 1
-    latest_audits = (
-        db.query(AuditLog)
-        .order_by(AuditLog.id.desc())
-        .limit(200)
-        .all()
-    )
-    latest_sessions = (
-        db.query(UserSession)
-        .order_by(UserSession.id.desc())
-        .limit(200)
-        .all()
-    )
-    backups = list_backups(limit=100)
-    workspace_metrics: dict[int, dict[str, int]] = {}
-    for ws in workspaces:
-        workspace_metrics[ws.id] = collect_tenant_metrics(db, workspace_id=ws.id)
-
-    settings_rows = db.query(BotSettings).filter(BotSettings.workspace_id.in_([ws.id for ws in workspaces])).all()
-    settings_by_workspace: dict[int, BotSettings] = {
-        int(row.workspace_id): row for row in settings_rows
-    }
-
     workspace_rows: list[dict] = []
-    for ws in workspaces:
-        owner = next((u for u in users if u.workspace_id == ws.id and u.role == "admin"), None)
-        sub = subs.get(ws.id) or get_or_create_subscription(db, workspace_id=ws.id)
-        m = workspace_metrics.get(ws.id, {})
-        ws_settings = settings_by_workspace.get(int(ws.id))
-        ws_webhook_key = (ws_settings.webhook_key or "").strip() if ws_settings else ""
-        ws_token_set = bool((ws_settings.bot_token or "").strip()) if ws_settings else False
-        status = "suspended" if ws.is_suspended else ("inactive" if not ws.is_active else "active")
-        workspace_rows.append(
-            {
-                "workspace": ws,
-                "subscription": sub,
-                "metrics": m,
-                "open_alerts_count": int(open_alerts_by_workspace.get(ws.id, 0)),
-                "bot_token_set": ws_token_set,
-                "webhook_key": ws_webhook_key,
-                "webhook_url": _workspace_webhook_url_by_key(ws_webhook_key),
-                "bot_link": ((ws_settings.bot_link or "").strip() if ws_settings else ""),
-                "id": ws.id,
-                "name": ws.name,
-                "tenant_code": ws.tenant_code,
-                "status": status,
-                "plan_code": sub.plan_code,
-                "sub_status": sub.status,
-                "owner_username": (owner.username if owner else "—"),
-                "managers_active": int(m.get("managers_active", 0)),
-                "dialogs_total": int(m.get("dialogs_total", 0)),
-                "messages_month": int(m.get("messages_month", 0)),
-            }
+    if active_tab in {"workspaces", "plans", "monitoring"}:
+        workspaces = db.query(Workspace).order_by(Workspace.id.asc()).all()
+        subs = {
+            row.workspace_id: row
+            for row in db.query(Subscription).order_by(Subscription.id.asc()).all()
+        }
+        latest_alerts = (
+            db.query(TenantAlert)
+            .order_by(TenantAlert.id.desc())
+            .limit(200)
+            .all()
         )
+        open_alerts_by_workspace: dict[int, int] = {}
+        for row in latest_alerts:
+            if row.is_resolved:
+                continue
+            open_alerts_by_workspace[row.workspace_id] = open_alerts_by_workspace.get(row.workspace_id, 0) + 1
+
+        workspace_metrics: dict[int, dict[str, int]] = {}
+        for ws in workspaces:
+            workspace_metrics[ws.id] = collect_tenant_metrics(db, workspace_id=ws.id)
+
+        settings_rows = db.query(BotSettings).filter(
+            BotSettings.workspace_id.in_([ws.id for ws in workspaces])
+        ).all()
+        settings_by_workspace: dict[int, BotSettings] = {
+            int(row.workspace_id): row for row in settings_rows
+        }
+
+        for ws in workspaces:
+            sub = subs.get(ws.id) or get_or_create_subscription(db, workspace_id=ws.id)
+            m = workspace_metrics.get(ws.id, {})
+            ws_settings = settings_by_workspace.get(int(ws.id))
+            ws_webhook_key = (ws_settings.webhook_key or "").strip() if ws_settings else ""
+            ws_token_set = bool((ws_settings.bot_token or "").strip()) if ws_settings else False
+            status = "suspended" if ws.is_suspended else ("inactive" if not ws.is_active else "active")
+            workspace_rows.append(
+                {
+                    "workspace": ws,
+                    "subscription": sub,
+                    "metrics": m,
+                    "open_alerts_count": int(open_alerts_by_workspace.get(ws.id, 0)),
+                    "bot_token_set": ws_token_set,
+                    "webhook_key": ws_webhook_key,
+                    "webhook_url": _workspace_webhook_url_by_key(ws_webhook_key),
+                    "bot_link": ((ws_settings.bot_link or "").strip() if ws_settings else ""),
+                    "id": ws.id,
+                    "name": ws.name,
+                    "tenant_code": ws.tenant_code,
+                    "status": status,
+                    "plan_code": sub.plan_code,
+                    "sub_status": sub.status,
+                    "owner_username": "—",
+                    "managers_active": int(m.get("managers_active", 0)),
+                    "dialogs_total": int(m.get("dialogs_total", 0)),
+                    "messages_month": int(m.get("messages_month", 0)),
+                }
+            )
 
     user_rows: list[dict] = []
-    user_by_id: dict[int, ServiceUser] = {u.id: u for u in users}
-    for u in users:
-        user_rows.append(
-            {
-                "id": u.id,
-                "workspace_id": u.workspace_id,
-                "username": u.username,
-                "role": u.role,
-                "is_active": bool(u.is_active),
-                "is_blocked": bool(u.is_blocked),
-                "email_verified": bool(getattr(u, "email_verified", False)),
-                "last_login_at": _to_iso(u.last_login_at),
-            }
+    if active_tab == "users":
+        users = db.query(ServiceUser).order_by(ServiceUser.id.asc()).all()
+        for u in users:
+            user_rows.append(
+                {
+                    "id": u.id,
+                    "workspace_id": u.workspace_id,
+                    "username": u.username,
+                    "role": u.role,
+                    "is_active": bool(u.is_active),
+                    "is_blocked": bool(u.is_blocked),
+                    "email_verified": bool(getattr(u, "email_verified", False)),
+                    "last_login_at": _to_iso(u.last_login_at),
+                }
+            )
+
+    audits_rows: list[dict] = []
+    if active_tab in {"dashboard", "audit"}:
+        latest_audits = (
+            db.query(AuditLog)
+            .order_by(AuditLog.id.desc())
+            .limit(200)
+            .all()
         )
-
-    audits_rows = [
-        {
-            "id": row.id,
-            "workspace_id": row.workspace_id,
-            "actor_user_id": row.actor_user_id,
-            "actor_username": user_by_id[row.actor_user_id].username
-            if row.actor_user_id in user_by_id
-            else "—",
-            "action": row.action,
-            "object_type": row.object_type,
-            "object_id": row.object_id,
-            "created_at": _to_iso(row.created_at),
-            "details_json": row.details_json,
-        }
-        for row in latest_audits
-    ]
-
-    alert_rows = [
-        {
-            "id": row.id,
-            "workspace_id": row.workspace_id,
-            "severity": row.severity,
-            "alert_key": row.alert_key,
-            "message": row.message,
-            "metric_value": row.metric_value,
-            "is_resolved": bool(row.is_resolved),
-            "created_at": _to_iso(row.created_at),
-        }
-        for row in latest_alerts
-    ]
-
-    session_rows = [
-        {
-            "id": row.id,
-            "user_id": row.user_id,
-            "username": user_by_id[row.user_id].username if row.user_id in user_by_id else "—",
-            "is_revoked": bool(row.is_revoked),
-            "ip_address": row.ip_address,
-            "user_agent": row.user_agent,
-            "created_at": _to_iso(row.created_at),
-            "last_seen_at": _to_iso(row.last_seen_at),
-            "expires_at": _to_iso(row.expires_at),
-        }
-        for row in latest_sessions
-    ]
-
-    plan_rows: list[dict] = []
-    for ws in workspaces:
-        sub = subs.get(ws.id) or get_or_create_subscription(db, workspace_id=ws.id)
-        plan_rows.append(
+        audits_rows = [
             {
-                "workspace_id": ws.id,
-                "workspace_name": ws.name,
-                "plan_code": sub.plan_code,
-                "status": sub.status,
-                "manager_limit": sub.manager_limit,
-                "dialogs_limit": sub.dialogs_limit,
-                "messages_per_month_limit": sub.messages_per_month_limit,
-                "folders_limit": getattr(sub, "folders_limit", 30),
-                "quick_replies_limit": getattr(sub, "quick_replies_limit", 100),
-                "pinned_chats_limit": getattr(sub, "pinned_chats_limit", 5),
-                "grace_until": _to_iso(sub.grace_until),
+                "id": row.id,
+                "workspace_id": row.workspace_id,
+                "actor_user_id": row.actor_user_id,
+                "action": row.action,
+                "object_type": row.object_type,
+                "object_id": row.object_id,
+                "created_at": _to_iso(row.created_at),
+                "details_json": row.details_json,
             }
-        )
+            for row in latest_audits
+        ]
 
     page_title_map = {
         "dashboard": "Панель суперадмина",
@@ -1554,7 +1501,12 @@ def _build_superadmin_context(
         "rate_billing": settings.rate_limit_billing_per_minute,
         "force_https": "включен" if settings.force_https else "выключен",
     }
-    support_row = db.query(PlatformSettings).order_by(PlatformSettings.id.asc()).first()
+    backups = list_backups(limit=100) if active_tab == "backups" else []
+    support_row = (
+        db.query(PlatformSettings).order_by(PlatformSettings.id.asc()).first()
+        if active_tab == "system"
+        else None
+    )
     support_contacts = {
         "tech_email": (
             (support_row.technical_support_email if support_row else "")
@@ -1570,42 +1522,18 @@ def _build_superadmin_context(
         "request": request,
         "current_user": current_user,
         "section": active_tab,
-        "active_tab": active_tab,
         "page_title": page_title_map.get(active_tab, "Панель суперадмина"),
         "message": message,
         "error": error,
         "stats": dashboard,
-        "dashboard": dashboard,
         "workspace_rows": workspace_rows,
         "users": user_rows,
-        "user_rows": user_rows,
-        "plan_rows": plan_rows,
-        "alerts": alert_rows,
-        "alert_rows": alert_rows,
         "audit_items": audits_rows,
-        "audit_rows": audits_rows,
         "backups": backups,
-        "session_rows": session_rows,
-        "monitor_rows": [
-            {
-                "workspace_id": ws.id,
-                "tenant_code": ws.tenant_code,
-                "is_suspended": ws.is_suspended,
-                "metrics": workspace_metrics.get(ws.id, {}),
-            }
-            for ws in workspaces
-        ],
-        "backup_rows": backups,
         "smtp": smtp_info,
         "security": security_info,
         "support_contacts": support_contacts,
         "superadmin_static_2fa_code_enabled": bool((settings.superadmin_static_2fa_code or "").strip()),
-        "system_flags": {
-            "smtp_enabled": bool((settings.smtp_host or "").strip()),
-            "webhook_secret_set": bool((settings.webhook_secret or "").strip()),
-            "billing_secret_set": bool((settings.billing_hook_secret or "").strip()),
-            "admin_totp_set": bool((settings.admin_totp_secret or "").strip()),
-        },
     }
 
 
@@ -2097,7 +2025,7 @@ def _render_app_settings_page(
     try:
         sub = get_or_create_subscription(db, workspace_id=workspace_id)
         tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
-        refresh_tenant_alerts(db, workspace_id=workspace_id)
+        refresh_tenant_alerts(db, workspace_id=workspace_id, metrics=tenant_metrics)
         active_alerts = (
             db.query(TenantAlert)
             .filter(

@@ -246,16 +246,27 @@ def collect_tenant_metrics(db: Session, *, workspace_id: int) -> dict[str, int]:
     }
 
 
-def refresh_tenant_alerts(db: Session, *, workspace_id: int) -> list[TenantAlert]:
+def refresh_tenant_alerts(
+    db: Session,
+    *,
+    workspace_id: int,
+    metrics: dict[str, int] | None = None,
+) -> list[TenantAlert]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
+    metrics_map = metrics if isinstance(metrics, dict) else collect_tenant_metrics(db, workspace_id=workspace_id)
     thresholds = {
-        "managers_limit": (metrics["managers_active"], int(sub.manager_limit or 0)),
-        "dialogs_limit": (metrics["dialogs_total"], int(sub.dialogs_limit or 0)),
-        "messages_month_limit": (metrics["messages_month"], int(sub.messages_per_month_limit or 0)),
-        "quick_replies_limit": (metrics["quick_replies_total"], int(sub.quick_replies_limit or 0)),
-        "folders_limit": (metrics["folders_total"], int(sub.folders_limit or 0)),
-        "pinned_chats_limit": (metrics["pins_total"], int(getattr(sub, "pinned_chats_limit", 0) or 0)),
+        "managers_limit": (int(metrics_map.get("managers_active", 0)), int(sub.manager_limit or 0)),
+        "dialogs_limit": (int(metrics_map.get("dialogs_total", 0)), int(sub.dialogs_limit or 0)),
+        "messages_month_limit": (int(metrics_map.get("messages_month", 0)), int(sub.messages_per_month_limit or 0)),
+        "quick_replies_limit": (
+            int(metrics_map.get("quick_replies_total", 0)),
+            int(sub.quick_replies_limit or 0),
+        ),
+        "folders_limit": (int(metrics_map.get("folders_total", 0)), int(sub.folders_limit or 0)),
+        "pinned_chats_limit": (
+            int(metrics_map.get("pins_total", 0)),
+            int(getattr(sub, "pinned_chats_limit", 0) or 0),
+        ),
     }
     created: list[TenantAlert] = []
     for key, (value, limit) in thresholds.items():
