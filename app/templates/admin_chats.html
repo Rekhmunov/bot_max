@@ -584,7 +584,6 @@
     .delivery-status {
       display: inline-flex;
       align-items: center;
-      margin-left: 6px;
       line-height: 1;
       letter-spacing: -1px;
       user-select: none;
@@ -595,8 +594,7 @@
     .delivery-status.delivered {
       color: #5d6f93;
     }
-    .delivery-status.sent,
-    .delivery-status.queued {
+    .delivery-status.sent {
       color: #8f98ab;
     }
     .delivery-status.failed {
@@ -855,25 +853,18 @@
     .msg-context-menu button:hover {
       background: #f2f6ff;
     }
-    .bubble-head {
+    .bubble-head { display: none; }
+    .bubble-tail {
+      margin-top: 6px;
       display: flex;
+      justify-content: flex-end;
       align-items: center;
-      justify-content: flex-start;
-      gap: 8px;
-      margin-bottom: 6px;
-      font-size: 12px;
+      min-height: 14px;
+    }
+    .scheduled-label {
+      font-size: 11px;
       color: var(--muted);
-    }
-    .bubble-identity {
       white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      min-width: 0;
-    }
-    .delivery-wrap {
-      display: inline-flex;
-      align-items: center;
-      gap: 0;
     }
     .folder-pop {
       position: fixed;
@@ -1546,38 +1537,52 @@
                 data-message-text="{{ (msg.text or '')|e }}"
                 data-message-direction="{{ msg.direction }}"
               >
-                <div class="bubble-head">
-                  {% if msg.direction == "bot" %}
-                    {% set state = (msg.delivery_state or "sent")|lower %}
-                    {% if state == "failed" %}
-                      {% set ticks = "✓✓" %}
-                      {% set status_class = "failed" %}
-                    {% elif state == "sent" and msg.is_read_by_customer %}
-                      {% set ticks = "✓✓" %}
-                      {% set status_class = "delivered" %}
-                    {% elif state == "sent" %}
-                      {% set ticks = "✓" %}
-                      {% set status_class = "sent" %}
-                    {% else %}
-                      {% set ticks = "✓" %}
-                      {% set status_class = "queued" %}
-                    {% endif %}
-                    <span class="delivery-wrap">
-                      <span
-                        class="delivery-status {{ status_class }}"
-                        title="{% if state == 'failed' %}Ошибка отправки{% elif state == 'sent' and msg.is_read_by_customer %}Сообщение прочитано{% elif state == 'sent' %}Сообщение отправлено{% else %}Сообщение в очереди отправки{% endif %}"
-                        aria-label="{% if state == 'failed' %}Ошибка отправки{% elif state == 'sent' and msg.is_read_by_customer %}Сообщение прочитано{% elif state == 'sent' %}Сообщение отправлено{% else %}Сообщение в очереди отправки{% endif %}"
-                      >
-                        <span class="ticks">{{ ticks }}</span>
-                      </span>
-                    </span>
-                  {% endif %}
-                </div>
                 {% if msg.text or msg.image_url %}
                   <div class="bubble-text">{{ msg.text }}</div>
                 {% endif %}
                 {% if msg.image_url %}
                   <img src="{{ msg.image_url }}" alt="image" />
+                {% endif %}
+                {% if msg.direction == "bot" %}
+                  {% set state = (msg.delivery_state or "sent")|lower %}
+                  {% set is_scheduled_pending = (msg.is_scheduled_pending if msg.is_scheduled_pending is defined else false) %}
+                  <div class="bubble-tail">
+                    {% if is_scheduled_pending and msg.delivery_next_retry_at %}
+                      <span
+                        class="scheduled-label"
+                        title="Отложенная отправка"
+                        aria-label="Отложенная отправка"
+                        data-scheduled-at="{{ msg.delivery_next_retry_at }}"
+                      >
+                        Отправится {{ msg.delivery_next_retry_at|to_local("%d.%m.%Y %H:%M") }}
+                      </span>
+                    {% else %}
+                      {% if state == "failed" %}
+                        {% set ticks = "✓✓" %}
+                        {% set status_class = "failed" %}
+                        {% set status_title = "Ошибка отправки" %}
+                      {% elif state == "sent" and msg.is_read_by_customer %}
+                        {% set ticks = "✓✓" %}
+                        {% set status_class = "delivered" %}
+                        {% set status_title = "Сообщение прочитано" %}
+                      {% elif state == "sent" %}
+                        {% set ticks = "✓" %}
+                        {% set status_class = "sent" %}
+                        {% set status_title = "Сообщение отправлено" %}
+                      {% else %}
+                        {% set ticks = "✓" %}
+                        {% set status_class = "sent" %}
+                        {% set status_title = "Сообщение отправляется" %}
+                      {% endif %}
+                      <span
+                        class="delivery-status {{ status_class }}"
+                        title="{{ status_title }}"
+                        aria-label="{{ status_title }}"
+                      >
+                        <span class="ticks">{{ ticks }}</span>
+                      </span>
+                    {% endif %}
+                  </div>
                 {% endif %}
                 {% if msg.direction == "bot" and msg.delivery_state == "failed" %}
                   <div class="delivery-error">{{ msg.delivery_error }}</div>
@@ -2096,6 +2101,25 @@
       scrollMessagesToBottom();
       setTimeout(scrollMessagesToBottom, 90);
       syncSendVisibility();
+    })();
+
+    (() => {
+      const localizeScheduledLabels = () => {
+        const nodes = Array.from(document.querySelectorAll(".scheduled-label[data-scheduled-at]"));
+        if (!nodes.length) return;
+        const pad = (value) => String(value).padStart(2, "0");
+        nodes.forEach((node) => {
+          const raw = String(node.getAttribute("data-scheduled-at") || "").trim();
+          if (!raw) return;
+          const when = new Date(raw);
+          if (Number.isNaN(when.getTime())) return;
+          const label = `Отправится ${pad(when.getDate())}.${pad(when.getMonth() + 1)}.${when.getFullYear()} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
+          node.textContent = label;
+          node.setAttribute("title", label);
+          node.setAttribute("aria-label", label);
+        });
+      };
+      localizeScheduledLabels();
     })();
 
     (() => {
@@ -2983,6 +3007,7 @@
       const initialState = {{ chat_state | tojson if chat_state is defined else "{}" }};
       let currentLastMessageId = Number(initialState.active_last_message_id || 0);
       let currentThreadsSignature = String(initialState.threads_signature || "");
+      let currentMessagesSignature = String(initialState.active_messages_signature || "");
       let inFlight = false;
       const basePollMs = 2800;
       const maxPollMs = 30000;
@@ -3018,6 +3043,7 @@
         if (folderFilter !== null && folderFilter !== undefined) qs.set("folder_id", String(folderFilter));
         if (currentLastMessageId > 0) qs.set("last_message_id", String(currentLastMessageId));
         if (currentThreadsSignature) qs.set("threads_sig", currentThreadsSignature);
+        if (currentMessagesSignature) qs.set("messages_sig", currentMessagesSignature);
         const scopeSuffix = String(endpointQuerySuffix || "").replace("?", "");
         if (scopeSuffix) {
           const scoped = new URLSearchParams(scopeSuffix);
@@ -3061,6 +3087,7 @@
 
           const nextLast = Number(payload.active_last_message_id || 0);
           const nextSig = String(payload.threads_signature || "");
+          const nextMessagesSig = String(payload.active_messages_signature || "");
           const hasMessageChanges = Boolean(payload.messages_changed);
           const hasThreadsChanges = Boolean(payload.threads_changed);
 
@@ -3069,6 +3096,9 @@
           }
           if (nextSig) {
             currentThreadsSignature = nextSig;
+          }
+          if (nextMessagesSig) {
+            currentMessagesSignature = nextMessagesSig;
           }
 
           if (hasMessageChanges || hasThreadsChanges) {

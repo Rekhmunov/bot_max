@@ -168,6 +168,21 @@ def _to_iso(dt: datetime | None) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _to_local(dt: datetime | None, fmt: str = "%d.%m.%Y %H:%M") -> str:
+    if dt is None:
+        return ""
+    value = dt
+    if value.tzinfo is not None:
+        value = value.astimezone(UTC).replace(tzinfo=None)
+    if not isinstance(value, datetime):
+        return ""
+    local_value = value.replace(tzinfo=UTC).astimezone()
+    try:
+        return local_value.strftime(fmt)
+    except Exception:
+        return local_value.strftime("%d.%m.%Y %H:%M")
+
+
 def _safe_int(value: int | str | None, default: int, min_value: int = 0) -> int:
     try:
         parsed = int(value if value is not None else default)
@@ -1559,6 +1574,7 @@ def _render_superadmin_page(
 
 app = FastAPI(title=settings.app_name)
 templates = Jinja2Templates(directory="app/templates")
+templates.env.filters["to_local"] = _to_local
 app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 webhook_path = settings.webhook_path if settings.webhook_path.startswith("/") else f"/{settings.webhook_path}"
 
@@ -7098,13 +7114,20 @@ def _thread_summary_dict(item: object) -> dict[str, object]:
 
 def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
     text_value = str(item.text or "")
+    delivery_state_value = str(item.delivery_state or "sent")
+    delivery_next_retry_at_raw = getattr(item, "delivery_next_retry_at", None)
+    is_scheduled_pending = bool(
+        delivery_state_value == "queued"
+        and isinstance(delivery_next_retry_at_raw, datetime)
+        and delivery_next_retry_at_raw > datetime.utcnow()
+    )
     return {
         "id": int(item.id),
         "direction": str(item.direction or ""),
         "source": str(item.source or ""),
         "text": text_value,
         "image_url": str(item.image_url or ""),
-        "delivery_state": str(item.delivery_state or "sent"),
+        "delivery_state": delivery_state_value,
         "delivery_error": str(item.delivery_error or ""),
         "max_message_mid": str(item.max_message_mid or ""),
         "is_read_by_customer": bool(getattr(item, "is_read_by_customer", False)),
@@ -7113,6 +7136,12 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
             if isinstance(getattr(item, "read_at", None), datetime)
             else ""
         ),
+        "delivery_next_retry_at": (
+            delivery_next_retry_at_raw.isoformat()
+            if isinstance(delivery_next_retry_at_raw, datetime)
+            else ""
+        ),
+        "is_scheduled_pending": is_scheduled_pending,
     }
 
 
@@ -7147,6 +7176,20 @@ def _threads_signature(threads: list[object]) -> str:
     return hashlib.sha256(signature_source.encode("utf-8")).hexdigest()[:16]
 
 
+def _messages_signature(messages: list[ChatMessage]) -> str:
+    signature_source = "|".join(
+        (
+            f"{int(getattr(item, 'id', 0) or 0)}:"
+            f"{str(getattr(item, 'delivery_state', '') or '')}:"
+            f"{1 if bool(getattr(item, 'is_read_by_customer', False)) else 0}:"
+            f"{(getattr(item, 'read_at').isoformat() if isinstance(getattr(item, 'read_at', None), datetime) else '')}:"
+            f"{(getattr(item, 'delivery_next_retry_at').isoformat() if isinstance(getattr(item, 'delivery_next_retry_at', None), datetime) else '')}"
+        )
+        for item in messages
+    )
+    return hashlib.sha256(signature_source.encode("utf-8")).hexdigest()[:16]
+
+
 def _build_chat_updates_payload(
     *,
     db: Session,
@@ -7158,6 +7201,7 @@ def _build_chat_updates_payload(
     mark_read: bool,
     last_message_id: int | None = None,
     threads_signature: str = "",
+    messages_signature: str = "",
 ) -> dict[str, object]:
     threads = load_chat_threads(
         db,
@@ -7183,25 +7227,33 @@ def _build_chat_updates_payload(
         )
 
     current_threads_signature = _threads_signature(threads)
+    current_messages_signature = _messages_signature(messages)
 
     active_last_message_id = int(messages[-1].id) if messages else 0
     previous_last_message_id = int(last_message_id or 0)
     previous_threads_signature = str(threads_signature or "").strip()
+    previous_messages_signature = str(messages_signature or "").strip()
     messages_changed = False
     threads_changed = False
-    if previous_last_message_id > 0:
+    if previous_last_message_id > 0 or previous_messages_signature:
         # If requested conversation no longer exists (e.g. was deleted/recreated),
         # avoid sending perpetual "changed" flags that trigger soft-refresh loops.
         if active_thread is None and conversation_id is not None:
             messages_changed = False
         else:
-            messages_changed = active_last_message_id != previous_last_message_id
+            if previous_last_message_id > 0:
+                messages_changed = active_last_message_id != previous_last_message_id
+            if previous_messages_signature:
+                messages_changed = messages_changed or (
+                    current_messages_signature != previous_messages_signature
+                )
     if previous_threads_signature:
         threads_changed = current_threads_signature != previous_threads_signature
 
     return {
         "active_conversation_id": int(active_thread.conversation_id) if active_thread is not None else 0,
         "active_last_message_id": active_last_message_id,
+        "active_messages_signature": current_messages_signature,
         "threads_signature": current_threads_signature,
         "threads_count": len(threads),
         "messages_changed": messages_changed,
@@ -7218,6 +7270,7 @@ def admin_chats_updates(
     folder_id: int | None = None,
     last_message_id: int = 0,
     threads_sig: str = "",
+    messages_sig: str = "",
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
@@ -7231,6 +7284,7 @@ def admin_chats_updates(
         mark_read=False,
         last_message_id=last_message_id,
         threads_signature=threads_sig,
+        messages_signature=messages_sig,
     )
     return JSONResponse({"ok": True, **payload}, status_code=200)
 
@@ -7244,6 +7298,7 @@ def app_chats_updates(
     workspace_id: int | None = None,
     last_message_id: int = 0,
     threads_sig: str = "",
+    messages_sig: str = "",
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
@@ -7270,6 +7325,7 @@ def app_chats_updates(
         mark_read=False,
         last_message_id=last_message_id,
         threads_signature=threads_sig,
+        messages_signature=messages_sig,
     )
     return JSONResponse({"ok": True, **payload}, status_code=200)
 
@@ -7283,6 +7339,7 @@ def manager_mini_updates(
     folder_id: int | None = None,
     last_message_id: int = 0,
     threads_sig: str = "",
+    messages_sig: str = "",
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     _check_rate_limit_or_raise(
@@ -7303,6 +7360,7 @@ def manager_mini_updates(
         mark_read=False,
         last_message_id=last_message_id,
         threads_signature=threads_sig,
+        messages_signature=messages_sig,
     )
     return JSONResponse({"ok": True, **payload}, status_code=200)
 
@@ -7352,6 +7410,7 @@ async def _render_chat_workspace(
     chat_state = {
         "active_conversation_id": (active_thread.conversation_id if active_thread else 0),
         "active_last_message_id": (messages[-1].id if messages else 0),
+        "active_messages_signature": _messages_signature(messages),
         "threads_signature": threads_signature,
         "threads_count": len(threads),
     }
@@ -7900,7 +7959,7 @@ async def max_webhook(
         )
 
     update_type = (event.update_type or "").strip().lower()
-    if update_type in {"message_read", "read", "seen", "opened", "message_seen"}:
+    if update_type == "message_read":
         changed = mark_conversation_messages_read_by_customer(
             db,
             workspace_id=workspace_id,

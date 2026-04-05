@@ -1055,24 +1055,95 @@ def mark_conversation_messages_read_by_customer(
     Mark outbound bot messages as read by customer for one conversation.
     Returns number of newly updated rows.
     """
-    conversation = (
-        db.query(Conversation)
-        .filter(
-            Conversation.workspace_id == workspace_id,
-            Conversation.chat_id == chat_id,
-            Conversation.customer_account_id == customer_id,
+    chat_value = str(chat_id or "").strip()
+    customer_value = str(customer_id or "").strip()
+    read_mid_value = str(read_up_to_mid or "").strip()
+
+    conversation_id: int | None = None
+
+    # Primary strategy: if provider returns MID in read event, map by MID first.
+    # This is robust even when sender/chat fields vary by event flavor.
+    if read_mid_value:
+        row = (
+            db.query(ChatMessage.conversation_id)
+            .join(
+                Conversation,
+                Conversation.id == ChatMessage.conversation_id,
+            )
+            .filter(
+                ChatMessage.workspace_id == workspace_id,
+                Conversation.workspace_id == workspace_id,
+                ChatMessage.direction == "bot",
+                ChatMessage.max_message_mid == read_mid_value,
+            )
+            .order_by(ChatMessage.id.desc())
+            .first()
         )
-        .first()
-    )
-    if conversation is None:
+        if row and row[0]:
+            conversation_id = int(row[0])
+
+    # Fallback: strict chat + customer match.
+    if conversation_id is None and chat_value and customer_value:
+        conversation = (
+            db.query(Conversation)
+            .filter(
+                Conversation.workspace_id == workspace_id,
+                Conversation.chat_id == chat_value,
+                Conversation.customer_account_id == customer_value,
+            )
+            .first()
+        )
+        if conversation is not None:
+            conversation_id = int(conversation.id)
+
+    # Fallback for providers/events where sender_id can be omitted or not customer.
+    if conversation_id is None and chat_value:
+        conversation = (
+            db.query(Conversation)
+            .filter(
+                Conversation.workspace_id == workspace_id,
+                Conversation.chat_id == chat_value,
+            )
+            .order_by(Conversation.id.desc())
+            .first()
+        )
+        if conversation is not None:
+            conversation_id = int(conversation.id)
+
+    if conversation_id is None and customer_value:
+        conversation = (
+            db.query(Conversation)
+            .filter(
+                Conversation.workspace_id == workspace_id,
+                Conversation.customer_account_id == customer_value,
+            )
+            .order_by(Conversation.id.desc())
+            .first()
+        )
+        if conversation is not None:
+            conversation_id = int(conversation.id)
+
+    if conversation_id is None:
         return 0
-    return mark_messages_read_by_customer(
+
+    updated = mark_messages_read_by_customer(
         db,
         workspace_id=workspace_id,
-        conversation_id=int(conversation.id),
-        read_up_to_mid=read_up_to_mid,
+        conversation_id=conversation_id,
+        read_up_to_mid=(read_mid_value or None),
         read_at=read_at,
     )
+    # If MID lookup failed silently for this provider payload, fallback to
+    # marking all sent messages in the resolved conversation as read.
+    if updated == 0 and read_mid_value:
+        updated = mark_messages_read_by_customer(
+            db,
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            read_up_to_mid=None,
+            read_at=read_at,
+        )
+    return updated
 
 
 async def _dispatch_outbox(
@@ -1295,6 +1366,7 @@ async def enqueue_and_process_send_text(
     link_mid: str | None = None,
     text_format: str | None = None,
 ) -> bool:
+    now_utc_naive = _as_naive_utc(_utc_now())
     msg = _store_chat_message(
         db,
         conversation_id=conversation_id,
@@ -1305,7 +1377,7 @@ async def enqueue_and_process_send_text(
         delivery_state="queued",
         delivery_error="",
         delivery_retry_count=0,
-        delivery_next_retry_at=_as_naive_utc(_utc_now()),
+        delivery_next_retry_at=now_utc_naive,
     )
     item = _enqueue_outbox_message(
         db,
@@ -1331,6 +1403,7 @@ async def enqueue_and_process_send_photo(
     caption: str,
     source: str,
 ) -> bool:
+    now_utc_naive = _as_naive_utc(_utc_now())
     msg = _store_chat_message(
         db,
         conversation_id=conversation_id,
@@ -1341,7 +1414,7 @@ async def enqueue_and_process_send_photo(
         delivery_state="queued",
         delivery_error="",
         delivery_retry_count=0,
-        delivery_next_retry_at=_as_naive_utc(_utc_now()),
+        delivery_next_retry_at=now_utc_naive,
     )
     item = _enqueue_outbox_message(
         db,
