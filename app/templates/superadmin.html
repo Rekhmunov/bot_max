@@ -224,11 +224,16 @@
   {% set role_labels = {"superadmin": "Суперадмин", "owner": "Владелец", "admin": "Администратор", "manager": "Менеджер"} %}
   {% set subscription_status_labels = {
     "active": "Активна",
-    "basic": "Базовый",
-    "trial": "Базовый",
+    "basic": "Начальный",
+    "trial": "Начальный",
     "past_due": "Просрочена оплата",
     "paused": "На паузе",
     "cancelled": "Отменена"
+  } %}
+  {% set plan_code_labels = {
+    "basic": "Начальный",
+    "trial": "Начальный",
+    "unlimited": "Безлимит"
   } %}
   {% set action_labels = {
     "workspace_registered": "Клиент зарегистрирован",
@@ -344,7 +349,7 @@
                       <span class="badge warn">Неактивен</span>
                     {% endif %}
                   </td>
-                  <td>{{ row.subscription.plan_code }} / {{ subscription_status_labels.get(row.subscription.status, row.subscription.status) }}</td>
+                  <td>{{ plan_code_labels.get((row.subscription.plan_code or "")|lower, row.subscription.plan_code) }} / {{ subscription_status_labels.get(row.subscription.status, row.subscription.status) }}</td>
                   <td>{{ row.metrics.managers_active }} / {{ row.metrics.dialogs_total }} / {{ row.metrics.messages_month }}</td>
                   <td>
                     <div class="row-actions">
@@ -434,7 +439,7 @@
                 {% if row.workspace.id != 1 %}
                 <tr>
                   <td>{{ row.workspace.id }} · {{ row.workspace.name }}</td>
-                  <td>{{ row.subscription.plan_code }}</td>
+                  <td>{{ plan_code_labels.get((row.subscription.plan_code or "")|lower, row.subscription.plan_code) }}</td>
                   <td>{{ subscription_status_labels.get(row.subscription.status, row.subscription.status) }}</td>
                   <td>{{ row.subscription.manager_limit }}</td>
                   <td>{{ row.subscription.dialogs_limit }}</td>
@@ -453,7 +458,7 @@
                       <div>
                         <label>Статус</label>
                         <select name="status">
-                          {% for option, option_label in [("active","Активна"), ("basic","Базовый"), ("unlimited","Безлимит"), ("past_due","Просрочена оплата"), ("paused","На паузе"), ("cancelled","Отменена")] %}
+                          {% for option, option_label in [("active","Активна"), ("basic","Начальный"), ("unlimited","Безлимит"), ("past_due","Просрочена оплата"), ("paused","На паузе"), ("cancelled","Отменена")] %}
                             <option value="{{ option }}" {% if row.subscription.status == option %}selected{% endif %}>{{ option_label }}</option>
                           {% endfor %}
                         </select>

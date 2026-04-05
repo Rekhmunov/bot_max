@@ -1172,15 +1172,31 @@
     {% endif %}
 
     {% if (show_tariff_card | default(true)) and subscription %}
+    {% set plan_code_key = (subscription.plan_code or "")|lower %}
+    {% set plan_code_labels = {
+      "basic": "Начальный",
+      "trial": "Начальный",
+      "unlimited": "Безлимит"
+    } %}
+    {% set status_key = (subscription.status or "")|lower %}
+    {% set status_labels = {
+      "active": "Активна",
+      "basic": "Начальный",
+      "trial": "Начальный",
+      "unlimited": "Безлимит",
+      "past_due": "Просрочена оплата",
+      "paused": "На паузе",
+      "cancelled": "Отменена"
+    } %}
     <section class="card section-gap-top" data-settings-block="tariff-limits">
       <div class="card-head">
         <h2 class="card-title"><span class="section-icon">💳</span>Тариф и лимиты</h2>
         <div class="card-head-actions">
-          <span class="card-head-kicker">{{ subscription.plan_code }}</span>
+          <span class="card-head-kicker">{{ plan_code_labels.get(plan_code_key, subscription.plan_code) }}</span>
         </div>
       </div>
-      <div class="hint">План: <b>{{ subscription.plan_code }}</b></div>
-      <div class="hint">Статус: <b>{{ subscription.status }}</b></div>
+      <div class="hint">План: <b>{{ plan_code_labels.get(plan_code_key, subscription.plan_code) }}</b></div>
+      <div class="hint">Статус: <b>{{ status_labels.get(status_key, subscription.status) }}</b></div>
       {% if tenant_metrics %}
         {% set connected_managers_total = (manager_status_summary.connected or 0) if (ui_mode == "app" and manager_status_summary is defined) else tenant_metrics.managers_active %}
         {% set pending_managers_total = (manager_status_summary.pending or 0) if (ui_mode == "app" and manager_status_summary is defined) else 0 %}
