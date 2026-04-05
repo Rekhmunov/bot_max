@@ -2965,6 +2965,15 @@
     (() => {
       const updatesEndpoint = "{{ updates_endpoint }}";
       if (!updatesEndpoint) return;
+      const pollerStateKey = "__chatPollingState";
+      const previousPoller = window[pollerStateKey];
+      if (
+        previousPoller &&
+        typeof previousPoller.stop === "function"
+      ) {
+        previousPoller.stop();
+      }
+      const pollerOwner = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
       const activeConversationId = {{ active_thread.conversation_id if active_thread else "null" }};
       const queryValue = "{{ query }}";
@@ -2980,6 +2989,21 @@
       let currentPollMs = basePollMs;
       let timer = null;
       let stopped = false;
+      const isCurrentPoller = () => {
+        const state = window[pollerStateKey];
+        return !!state && state.owner === pollerOwner;
+      };
+      const stopPolling = () => {
+        stopped = true;
+        if (timer !== null) {
+          window.clearTimeout(timer);
+          timer = null;
+        }
+      };
+      window[pollerStateKey] = {
+        owner: pollerOwner,
+        stop: stopPolling,
+      };
       const seenMessageIds = new Set(
         Array.from(document.querySelectorAll(".bubble[data-message-id]"))
           .map((node) => Number(node.getAttribute("data-message-id") || 0))
@@ -3003,7 +3027,7 @@
       };
 
       const scheduleNext = (delayMs) => {
-        if (stopped) return;
+        if (stopped || !isCurrentPoller()) return;
         if (timer !== null) {
           window.clearTimeout(timer);
         }
@@ -3011,6 +3035,7 @@
       };
 
       const triggerRefresh = async () => {
+        if (stopped || !isCurrentPoller()) return;
         if (inFlight) {
           scheduleNext(currentPollMs);
           return;
@@ -3048,6 +3073,7 @@
 
           if (hasMessageChanges || hasThreadsChanges) {
             if (window.__chatSoftVisit) {
+              stopPolling();
               await window.__chatSoftVisit(window.location.href, { replaceHistory: true });
               const bubbleNodes = Array.from(document.querySelectorAll(".bubble[data-message-id]"));
               let hasAnimated = false;
@@ -3084,10 +3110,7 @@
       };
       scheduleNext(900);
       window.addEventListener("beforeunload", () => {
-        stopped = true;
-        if (timer !== null) {
-          window.clearTimeout(timer);
-        }
+        stopPolling();
       });
     })();
   </script>

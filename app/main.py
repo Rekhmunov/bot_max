@@ -7182,7 +7182,7 @@ def _build_chat_updates_payload(
             workspace_id=workspace_id,
         )
 
-    threads_signature = _threads_signature(threads)
+    current_threads_signature = _threads_signature(threads)
 
     active_last_message_id = int(messages[-1].id) if messages else 0
     previous_last_message_id = int(last_message_id or 0)
@@ -7190,14 +7190,19 @@ def _build_chat_updates_payload(
     messages_changed = False
     threads_changed = False
     if previous_last_message_id > 0:
-        messages_changed = active_last_message_id != previous_last_message_id
+        # If requested conversation no longer exists (e.g. was deleted/recreated),
+        # avoid sending perpetual "changed" flags that trigger soft-refresh loops.
+        if active_thread is None and conversation_id is not None:
+            messages_changed = False
+        else:
+            messages_changed = active_last_message_id != previous_last_message_id
     if previous_threads_signature:
-        threads_changed = threads_signature != previous_threads_signature
+        threads_changed = current_threads_signature != previous_threads_signature
 
     return {
         "active_conversation_id": int(active_thread.conversation_id) if active_thread is not None else 0,
         "active_last_message_id": active_last_message_id,
-        "threads_signature": threads_signature,
+        "threads_signature": current_threads_signature,
         "threads_count": len(threads),
         "messages_changed": messages_changed,
         "threads_changed": threads_changed,
