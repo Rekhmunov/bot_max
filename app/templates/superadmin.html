@@ -495,7 +495,7 @@
         <section class="card">
           <h2>Мониторинг по клиентам</h2>
           <table>
-            <thead><tr><th>Клиент</th><th>Код клиента</th><th>Приостановлен</th><th>Менеджеры</th><th>Диалоги</th><th>Сообщения/мес</th><th>Открытые алерты</th></tr></thead>
+            <thead><tr><th>Клиент</th><th>Код клиента</th><th>Приостановлен</th><th>Менеджеры</th><th>Диалоги</th><th>Сообщения/мес</th><th>Открытые алерты</th><th>Webhook URL</th><th>Webhook key</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
                 <tr>
@@ -506,6 +506,28 @@
                   <td>{{ row.metrics.dialogs_total }}</td>
                   <td>{{ row.metrics.messages_month }}</td>
                   <td>{{ row.open_alerts_count }}</td>
+                  <td><code>{{ row.webhook_url or "—" }}</code></td>
+                  <td><code>{{ row.webhook_key or "—" }}</code></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+        <section class="card" style="margin-top:12px;">
+          <h2>Webhook / Ops по клиентам</h2>
+          <div class="muted" style="margin-bottom:8px;">
+            Технические данные интеграции. Пользовательский UI их не показывает.
+          </div>
+          <table>
+            <thead><tr><th>Клиент</th><th>Токен бота</th><th>Webhook URL</th><th>Webhook key</th><th>Ссылка бота</th></tr></thead>
+            <tbody>
+              {% for row in workspace_rows %}
+                <tr>
+                  <td>{{ row.workspace.id }}</td>
+                  <td>{% if row.bot_token_set %}задан{% else %}не задан{% endif %}</td>
+                  <td><code>{{ row.webhook_url or "—" }}</code></td>
+                  <td><code>{{ row.webhook_key or "—" }}</code></td>
+                  <td><code>{{ row.bot_link or "—" }}</code></td>
                 </tr>
               {% endfor %}
             </tbody>

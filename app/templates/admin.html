@@ -720,6 +720,19 @@
               <a href="#" id="token-toggle-link" class="token-inline-offset">Ввести токен</a>
             {% endif %}
           </div>
+          <div class="hint" style="margin-top:-2px; margin-bottom:10px;">
+            Статус подключения:
+            {% if workspace_bot_connection_ok %}
+              <b>Подключено</b>
+            {% elif workspace_bot_token_masked %}
+              <b>Требуется проверка</b>
+            {% else %}
+              <b>Не подключено</b>
+            {% endif %}
+          </div>
+          {% if workspace_bot_connection_note %}
+            <div class="hint" style="margin-top:-2px; margin-bottom:10px;">{{ workspace_bot_connection_note }}</div>
+          {% endif %}
           <div id="token-input-wrap" {% if workspace_bot_token_masked %}hidden{% endif %}>
             <label for="bot_token">Токен вашего бота Max</label>
             <input

@@ -772,6 +772,18 @@ def _workspace_webhook_url(settings_row: BotSettings) -> str:
     return f"{base}{webhook_path}/{key}"
 
 
+def _workspace_webhook_url_by_key(webhook_key: str) -> str:
+    key = (webhook_key or "").strip()
+    if not key:
+        return "—"
+    base = settings.public_base_url.rstrip("/")
+    return f"{base}{webhook_path}/{key}"
+
+
+def _user_friendly_bot_connection_error() -> str:
+    return "Подключение бота требует проверки, обратитесь в поддержку"
+
+
 def _workspace_settings_context_for_template(
     *,
     bot_settings: BotSettings,
@@ -1435,11 +1447,19 @@ def _build_superadmin_context(
     for ws in workspaces:
         workspace_metrics[ws.id] = collect_tenant_metrics(db, workspace_id=ws.id)
 
+    settings_rows = db.query(BotSettings).filter(BotSettings.workspace_id.in_([ws.id for ws in workspaces])).all()
+    settings_by_workspace: dict[int, BotSettings] = {
+        int(row.workspace_id): row for row in settings_rows
+    }
+
     workspace_rows: list[dict] = []
     for ws in workspaces:
         owner = next((u for u in users if u.workspace_id == ws.id and u.role == "admin"), None)
         sub = subs.get(ws.id) or get_or_create_subscription(db, workspace_id=ws.id)
         m = workspace_metrics.get(ws.id, {})
+        ws_settings = settings_by_workspace.get(int(ws.id))
+        ws_webhook_key = (ws_settings.webhook_key or "").strip() if ws_settings else ""
+        ws_token_set = bool((ws_settings.bot_token or "").strip()) if ws_settings else False
         status = "suspended" if ws.is_suspended else ("inactive" if not ws.is_active else "active")
         workspace_rows.append(
             {
@@ -1447,6 +1467,10 @@ def _build_superadmin_context(
                 "subscription": sub,
                 "metrics": m,
                 "open_alerts_count": int(open_alerts_by_workspace.get(ws.id, 0)),
+                "bot_token_set": ws_token_set,
+                "webhook_key": ws_webhook_key,
+                "webhook_url": _workspace_webhook_url_by_key(ws_webhook_key),
+                "bot_link": ((ws_settings.bot_link or "").strip() if ws_settings else ""),
                 "id": ws.id,
                 "name": ws.name,
                 "tenant_code": ws.tenant_code,
@@ -2159,6 +2183,8 @@ def _render_app_settings_page(
             masked_token = "*" * len(bot_token_value)
         else:
             masked_token = f"{bot_token_value[:2]}{'*' * max(len(bot_token_value) - 4, 4)}{bot_token_value[-2:]}"
+    bot_connection_ok = bool(bot_token_value)
+    bot_connection_note = ""
     webhook_workspace_url = _workspace_webhook_url(bot_settings)
     business_hours_vm = _business_hours_view_model(db, workspace_id=workspace_id)
 
@@ -2217,13 +2243,16 @@ def _render_app_settings_page(
             "usage_remaining": usage_remaining,
             "workspace_bot_link": bot_link_value,
             "workspace_bot_token_masked": masked_token,
+            "workspace_bot_connection_ok": bot_connection_ok,
+            "workspace_bot_connection_note": bot_connection_note,
             "workspace_webhook_url": webhook_workspace_url,
             "routing_mode_label": _manager_routing_mode_label(bot_settings.routing_mode or "round_robin"),
             "business_hours": business_hours_vm,
             "business_hours_preview_action": "/app/settings/business-hours/preview",
             "show_settings_card": not is_manager_view,
             "show_app_token_card": False,
-            "show_webhook_card": not is_manager_view,
+            # Hide technical webhook block in user settings.
+            "show_webhook_card": False,
             "show_delivery_card": not is_manager_view,
             "show_managers_card": not is_manager_view,
             "show_tariff_card": not is_manager_view,
@@ -5150,7 +5179,15 @@ async def app_update_settings(
     if should_sync_webhook:
         subscribed_ok, subscribe_error = await _auto_subscribe_workspace_webhook(settings_row)
         if not subscribed_ok:
-            raise HTTPException(status_code=400, detail=subscribe_error or "Не удалось подключить webhook в Max.")
+            db.rollback()
+            page = _render_app_settings_page(
+                request,
+                db=db,
+                current_user=current_user,
+                error=_user_friendly_bot_connection_error(),
+            )
+            page.status_code = 400
+            return page
     settings_row.admin_account_id = admin_account_id.strip()
     mode = (routing_mode or "round_robin").strip().lower()
     if mode not in {"round_robin", "random"}:
@@ -5196,7 +5233,15 @@ async def app_delete_bot_token(
     if had_token:
         unsubscribed_ok, unsubscribe_error = await _auto_unsubscribe_workspace_webhook(settings_row)
         if not unsubscribed_ok:
-            raise HTTPException(status_code=400, detail=unsubscribe_error or "Не удалось отключить webhook в Max.")
+            db.rollback()
+            page = _render_app_settings_page(
+                request,
+                db=db,
+                current_user=current_user,
+                error=_user_friendly_bot_connection_error(),
+            )
+            page.status_code = 400
+            return page
         settings_row.bot_token = ""
         db.add(settings_row)
         db.add(

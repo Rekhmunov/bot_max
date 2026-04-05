@@ -850,6 +850,7 @@ def run() -> None:
         assert "Осталось папок:" not in settings_page.text
         assert "Подключение вашего бота Max" in settings_page.text
         assert "Токен вашего бота:" in settings_page.text
+        assert "Статус подключения:" in settings_page.text
         assert "Настройки бота" in settings_page.text
         assert settings_page.text.find("Настройки бота") < settings_page.text.find("Подключение вашего бота Max")
         assert "не задан." in settings_page.text
@@ -872,6 +873,7 @@ def run() -> None:
         assert token_connect_save.status_code in (302, 303)
         settings_page_with_token = client.get("/app/settings", cookies=invite_flow_cookies, follow_redirects=False)
         assert settings_page_with_token.status_code == 200
+        assert "Статус подключения:" in settings_page_with_token.text
         assert "Обновить" in settings_page_with_token.text
         assert "Удалить" in settings_page_with_token.text
         token_update_save = client.post(
@@ -1367,6 +1369,17 @@ def run() -> None:
         assert 'name="schedule_at"' in admin_chats_page_after_send.text
         assert "Закрепленные чаты:" in admin_chats_page_after_send.text
 
+        with SessionLocal() as db:
+            (
+                db.query(ConversationPin)
+                .filter(
+                    ConversationPin.workspace_id == 1,
+                    ConversationPin.service_user_id == 0,
+                )
+                .delete(synchronize_session=False)
+            )
+            db.commit()
+
         admin_pin_chat = client.post(
             f"/admin/chats/{conversation_id}/pin",
             data={"q": "", "view": "chat"},
@@ -1615,6 +1628,12 @@ def run() -> None:
             )
             assert sixth_conversation is not None
             sixth_conversation_id = int(sixth_conversation.id)
+            # Keep pin-limit assertions stable across repeated smoke runs.
+            db.query(ConversationPin).filter(
+                ConversationPin.workspace_id == 1,
+                ConversationPin.service_user_id == 0,
+            ).delete(synchronize_session=False)
+            db.commit()
 
         for conv_id in [
             conversation_id,
