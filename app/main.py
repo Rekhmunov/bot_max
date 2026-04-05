@@ -371,24 +371,6 @@ def _extract_business_hours_form(form_data: dict | object) -> dict[str, object]:
     }
 
 
-def _is_business_hours_form(form_data: dict | object) -> bool:
-    if not hasattr(form_data, "get"):
-        return False
-    marker = str(form_data.get("settings_section", "") or "").strip().lower()
-    return marker == "business_hours"
-
-
-def _has_business_hours_fields(form_data: dict | object) -> bool:
-    if not hasattr(form_data, "keys"):
-        return False
-    keys = {str(item) for item in form_data.keys()}  # type: ignore[attr-defined]
-    if "business_hours_enabled" in keys:
-        return True
-    if "business_timezone" in keys or "offhours_message" in keys or "offhours_cooldown_minutes" in keys:
-        return True
-    return any(key.startswith("business_day_") for key in keys)
-
-
 def _filter_threads_by_folder(threads: list[object], folder_id: int | None) -> list[object]:
     if folder_id is None:
         return threads
@@ -782,26 +764,6 @@ def _workspace_webhook_url_by_key(webhook_key: str) -> str:
 
 def _user_friendly_bot_connection_error() -> str:
     return "Подключение бота требует проверки, обратитесь в поддержку"
-
-
-def _workspace_settings_context_for_template(
-    *,
-    bot_settings: BotSettings,
-    webhook_url: str,
-) -> dict[str, str]:
-    bot_link_value = (bot_settings.bot_link or "").strip()
-    bot_token_value = (bot_settings.bot_token or "").strip()
-    masked_token = ""
-    if bot_token_value:
-        if len(bot_token_value) <= 4:
-            masked_token = "*" * len(bot_token_value)
-        else:
-            masked_token = f"{bot_token_value[:2]}{'*' * max(len(bot_token_value) - 4, 4)}{bot_token_value[-2:]}"
-    return {
-        "workspace_bot_link": bot_link_value,
-        "workspace_bot_token_masked": masked_token,
-        "workspace_webhook_url": webhook_url,
-    }
 
 
 def _workspace_client_or_error(settings_row: BotSettings) -> tuple[MaxClient | None, str | None]:
@@ -1997,10 +1959,6 @@ def _resolve_workspace_id_from_event(db: Session, event: MaxWebhookEvent) -> int
 
 def _sha256(value: str) -> str:
     return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
-
-
-def _json_escape(value: str) -> str:
-    return json.dumps(value, ensure_ascii=False)[1:-1]
 
 
 def _email_verify_serializer() -> URLSafeTimedSerializer:
