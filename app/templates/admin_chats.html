@@ -159,6 +159,31 @@
       align-content: start;
       min-width: 0;
     }
+    .threads-hint {
+      margin: 0 0 8px;
+      padding: 6px 10px;
+      border-radius: 10px;
+      border: 1px solid #dce7ff;
+      background: #f4f8ff;
+      color: #365694;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .pinned-threads {
+      display: grid;
+      gap: 6px;
+      margin-bottom: 8px;
+      padding-bottom: 8px;
+      border-bottom: 1px dashed #d8e3f8;
+    }
+    .thread.pinned {
+      border-color: #d3e2ff;
+      background: #f7fbff;
+    }
+    .thread.pin-dragging {
+      opacity: 0.68;
+      box-shadow: 0 8px 18px rgba(29, 73, 160, 0.12);
+    }
     .chat-list-body {
       min-height: 0;
       display: grid;
@@ -1279,10 +1304,16 @@
   {% set profile_href_prefix = ui.profile_href_prefix if ui is defined and ui.profile_href_prefix else "/admin/chats/" %}
   {% set mark_unread_prefix = ui.mark_unread_prefix if ui is defined and ui.mark_unread_prefix else "/admin/chats/" %}
   {% set move_folder_prefix = ui.move_folder_prefix if ui is defined and ui.move_folder_prefix else "/admin/chats/" %}
+  {% set pin_prefix = ui.pin_prefix if ui is defined and ui.pin_prefix else "/admin/chats/" %}
+  {% set unpin_prefix = ui.unpin_prefix if ui is defined and ui.unpin_prefix else "/admin/chats/" %}
+  {% set pins_reorder_endpoint = ui.pins_reorder_endpoint if ui is defined and ui.pins_reorder_endpoint else "/admin/chats/pins/reorder" %}
+  {% set show_pins_info = ui.show_pins_info if ui is defined and ui.show_pins_info is not none else true %}
   {% set create_folder_endpoint = ui.create_folder_endpoint if ui is defined and ui.create_folder_endpoint else "/admin/chats/folders" %}
   {% set delete_message_prefix = ui.delete_message_prefix if ui is defined and ui.delete_message_prefix else "/admin/chats/" %}
   {% set updates_endpoint = ui.updates_endpoint if ui is defined and ui.updates_endpoint else "" %}
   {% set endpoint_query_suffix = ui.endpoint_query_suffix if ui is defined and ui.endpoint_query_suffix else "" %}
+  {% set pinned_threads = threads | selectattr("is_pinned") | list %}
+  {% set unpinned_threads = threads | rejectattr("is_pinned") | list %}
   <div class="app">
     <aside class="chat-list {% if active_thread and mobile_chat_view %}hidden-mobile{% endif %}" id="chat-list-screen">
       <div class="list-head">
@@ -1360,14 +1391,68 @@
         </nav>
 
         <div class="threads">
-          {% if threads %}
-            {% for thread in threads %}
+          {% if show_pins_info %}
+            <div class="threads-hint">
+              Закрепленные чаты: <b>{{ pinned_used }}</b> / <b>{{ pinned_limit }}</b>
+            </div>
+          {% endif %}
+          {% if pinned_threads %}
+            <div class="pinned-threads" id="pinned-threads" data-pinned-list="1">
+              {% for thread in pinned_threads %}
+                <a
+                  class="thread pinned {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %} {% if thread.is_unread %}unread{% endif %}"
+                  href="{{ page_query_prefix }}conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat&mark_read=1{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}"
+                  data-thread-id="{{ thread.conversation_id }}"
+                  data-thread-folder-ids="{{ (thread.folder_ids | join(',')) if thread.folder_ids else '' }}"
+                  data-thread-unread="{{ '1' if thread.is_unread else '0' }}"
+                  data-thread-pinned="1"
+                  data-pin-order="{{ thread.pin_order if thread.pin_order is not none else 0 }}"
+                  draggable="true"
+                  data-soft-nav
+                >
+                  <div class="thread-head">
+                    <div class="thread-name">📌 {% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}</div>
+                    <span class="thread-head-right">
+                      {% if thread.has_delivery_errors %}
+                        <span class="dot-error" title="Есть ошибки доставки"></span>
+                      {% elif thread.is_new %}
+                        <span class="dot-new" title="Новый чат"></span>
+                      {% endif %}
+                      <button
+                        type="button"
+                        class="thread-menu-btn"
+                        data-thread-menu-btn
+                        aria-label="Действия с чатом"
+                      >
+                        &#8942;
+                      </button>
+                    </span>
+                  </div>
+                  <div class="thread-folder-row">
+                    {% if thread.folder_names %}
+                      <span class="folder-chip-wrap">
+                        {% for folder_name in thread.folder_names %}
+                          <span class="folder-chip">{{ folder_name }}</span>
+                        {% endfor %}
+                      </span>
+                    {% endif %}
+                  </div>
+                  <div class="thread-meta">customer_account_id: {{ thread.customer_account_id or "—" }}</div>
+                  <div class="thread-preview">{{ thread.last_message_preview or "—" }}</div>
+                </a>
+              {% endfor %}
+            </div>
+          {% endif %}
+          {% if unpinned_threads %}
+            {% for thread in unpinned_threads %}
               <a
                 class="thread {% if active_thread and active_thread.conversation_id == thread.conversation_id %}active{% endif %} {% if thread.is_unread %}unread{% endif %}"
                 href="{{ page_query_prefix }}conversation_id={{ thread.conversation_id }}&q={{ query }}&view=chat&mark_read=1{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}"
                 data-thread-id="{{ thread.conversation_id }}"
                 data-thread-folder-ids="{{ (thread.folder_ids | join(',')) if thread.folder_ids else '' }}"
                 data-thread-unread="{{ '1' if thread.is_unread else '0' }}"
+                data-thread-pinned="0"
+                data-pin-order="{{ thread.pin_order if thread.pin_order is not none else 0 }}"
                 data-soft-nav
               >
                 <div class="thread-head">
@@ -1401,7 +1486,7 @@
                 <div class="thread-preview">{{ thread.last_message_preview or "—" }}</div>
               </a>
             {% endfor %}
-          {% else %}
+          {% elif not pinned_threads %}
             <div class="empty">Чаты не найдены</div>
           {% endif %}
         </div>
@@ -2055,6 +2140,9 @@
         "unread",
         "foldered",
         "foldered_multi",
+        "pinned",
+        "unpinned",
+        "pin_limit",
         "blocked",
         "unblocked",
       ]);
@@ -2237,6 +2325,9 @@
       const folders = {{ chat_folders | tojson }};
       const markUnreadPrefix = "{{ mark_unread_prefix }}";
       const moveFolderPrefix = "{{ move_folder_prefix }}";
+      const pinPrefix = "{{ pin_prefix }}";
+      const unpinPrefix = "{{ unpin_prefix }}";
+      const pinsReorderEndpoint = "{{ pins_reorder_endpoint }}";
       const createFolderEndpoint = "{{ create_folder_endpoint }}";
       const endpointQuerySuffix = "{{ endpoint_query_suffix }}";
       const currentQ = encodeURIComponent("{{ query }}");
@@ -2310,7 +2401,7 @@
       const isTouchLikeViewport = () => (
         window.matchMedia("(max-width: 900px), (hover: none) and (pointer: coarse)").matches
       );
-      const openCtx = (x, y, threadId, unread) => {
+      const openCtx = (x, y, threadId, unread, isPinned) => {
         selectedThreadId = threadId;
         ctx.innerHTML = "";
 
@@ -2354,8 +2445,92 @@
         });
         ctx.appendChild(folderBtn);
 
+        const pinBtn = document.createElement("button");
+        pinBtn.type = "button";
+        pinBtn.textContent = isPinned ? "Открепить чат" : "Закрепить чат";
+        pinBtn.addEventListener("click", async () => {
+          hideCtx();
+          const targetPrefix = isPinned ? unpinPrefix : pinPrefix;
+          const response = await fetch(`${targetPrefix}${threadId}/${isPinned ? "unpin" : "pin"}${endpointQuerySuffix}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: `q=${currentQ}&view=${currentView}${currentFolderParam()}`,
+          });
+          if (window.__chatSoftRenderFromResponse) {
+            await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });
+          } else {
+            window.location.reload();
+          }
+        });
+        ctx.appendChild(pinBtn);
+
         placeFixedMenu(ctx, x, y);
       };
+
+      const pinnedContainer = document.getElementById("pinned-threads");
+      let draggingPinnedId = null;
+      const collectPinnedIds = () =>
+        Array.from(document.querySelectorAll(".thread[data-thread-pinned='1'][data-thread-id]"))
+          .map((el) => Number(el.getAttribute("data-thread-id") || 0))
+          .filter((id) => id > 0);
+      const submitPinnedOrder = async () => {
+        const ids = collectPinnedIds();
+        if (!ids.length) return;
+        const response = await fetch(`${pinsReorderEndpoint}${endpointQuerySuffix}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ conversation_ids: ids }),
+        });
+        if (!response.ok) return;
+        if (window.__chatSoftVisit) {
+          await window.__chatSoftVisit(window.location.href, { replaceHistory: true });
+        }
+      };
+      if (pinnedContainer instanceof HTMLElement) {
+        pinnedContainer.addEventListener("dragstart", (event) => {
+          const target = event.target instanceof HTMLElement ? event.target.closest(".thread[data-thread-id][data-thread-pinned='1']") : null;
+          if (!(target instanceof HTMLElement)) return;
+          draggingPinnedId = Number(target.getAttribute("data-thread-id") || 0);
+          target.classList.add("pin-dragging");
+          if (event.dataTransfer) {
+            event.dataTransfer.effectAllowed = "move";
+            event.dataTransfer.setData("text/plain", String(draggingPinnedId || ""));
+          }
+        });
+        pinnedContainer.addEventListener("dragover", (event) => {
+          event.preventDefault();
+          const over = event.target instanceof HTMLElement ? event.target.closest(".thread[data-thread-id][data-thread-pinned='1']") : null;
+          const dragging = draggingPinnedId
+            ? pinnedContainer.querySelector(`.thread[data-thread-id='${draggingPinnedId}']`)
+            : null;
+          if (!(over instanceof HTMLElement) || !(dragging instanceof HTMLElement) || over === dragging) return;
+          const overRect = over.getBoundingClientRect();
+          const before = event.clientY < (overRect.top + overRect.height / 2);
+          if (before) {
+            pinnedContainer.insertBefore(dragging, over);
+          } else {
+            pinnedContainer.insertBefore(dragging, over.nextSibling);
+          }
+        });
+        pinnedContainer.addEventListener("drop", async (event) => {
+          event.preventDefault();
+          const dragging = draggingPinnedId
+            ? pinnedContainer.querySelector(`.thread[data-thread-id='${draggingPinnedId}']`)
+            : null;
+          if (dragging instanceof HTMLElement) {
+            dragging.classList.remove("pin-dragging");
+          }
+          draggingPinnedId = null;
+          await submitPinnedOrder();
+        });
+        pinnedContainer.addEventListener("dragend", (event) => {
+          const target = event.target instanceof HTMLElement ? event.target.closest(".thread[data-thread-id][data-thread-pinned='1']") : null;
+          if (target instanceof HTMLElement) {
+            target.classList.remove("pin-dragging");
+          }
+          draggingPinnedId = null;
+        });
+      }
 
       const renderFolderButtons = () => {
         const actions = pop.querySelector("#folder-actions");
@@ -2456,6 +2631,7 @@
       threads.forEach((threadEl) => {
         const threadId = threadEl.dataset.threadId;
         const unread = threadEl.dataset.threadUnread === "1";
+        const isPinned = threadEl.dataset.threadPinned === "1";
         const menuBtn = threadEl.querySelector("[data-thread-menu-btn]");
 
         threadEl.addEventListener("contextmenu", (e) => {
@@ -2464,14 +2640,14 @@
             return;
           }
           e.preventDefault();
-          openCtx(e.clientX, e.clientY, threadId, unread);
+          openCtx(e.clientX, e.clientY, threadId, unread, isPinned);
         });
 
         menuBtn?.addEventListener("click", (e) => {
           e.preventDefault();
           e.stopPropagation();
           const rect = menuBtn.getBoundingClientRect();
-          openCtx(rect.right - 4, rect.bottom + 4, threadId, unread);
+          openCtx(rect.right - 4, rect.bottom + 4, threadId, unread, isPinned);
         });
       });
     })();

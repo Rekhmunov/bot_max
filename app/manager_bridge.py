@@ -22,6 +22,7 @@ from app.models import (
     ChatFolder,
     Conversation,
     ConversationFolderLink,
+    ConversationPin,
     ConversationMeta,
     CustomerProfile,
     IntroStep,
@@ -594,6 +595,8 @@ class ChatThreadItem:
     folder_name: str
     folder_ids: list[int]
     folder_names: list[str]
+    is_pinned: bool
+    pin_order: int | None
 
 
 @dataclass
@@ -2825,6 +2828,7 @@ def load_chat_threads(
     query: str = "",
     *,
     workspace_id: int = DEFAULT_WORKSPACE_ID,
+    service_user_id: int = 0,
 ) -> list[ChatThreadItem]:
     conversations = (
         db.query(Conversation)
@@ -2876,6 +2880,23 @@ def load_chat_threads(
 
     for conv_id, folder_ids in folder_links_map.items():
         folder_ids.sort(key=lambda fid: folder_meta.get(int(fid), (10**9, "")))
+
+    pin_map: dict[int, int] = {}
+    user_key = int(service_user_id or 0)
+    if user_key >= 0 and conversation_ids:
+        for conv_id, sort_order in (
+            db.query(ConversationPin.conversation_id, ConversationPin.sort_order)
+            .filter(
+                ConversationPin.workspace_id == workspace_id,
+                ConversationPin.service_user_id == user_key,
+                ConversationPin.conversation_id.in_(conversation_ids),
+            )
+            .all()
+        ):
+            conv_key = int(conv_id or 0)
+            if conv_key <= 0:
+                continue
+            pin_map[conv_key] = int(sort_order or 0)
 
     needle = query.strip().lower()
     items: list[ChatThreadItem] = []
@@ -2972,11 +2993,205 @@ def load_chat_threads(
                 folder_name=primary_folder_name,
                 folder_ids=conv_folder_ids,
                 folder_names=conv_folder_names,
+                is_pinned=(int(conv.id) in pin_map),
+                pin_order=(pin_map.get(int(conv.id)) if int(conv.id) in pin_map else None),
             )
         )
-    # New/unread chats first, then by latest activity.
-    items.sort(key=lambda item: (0 if item.is_unread else 1, -item.last_activity_id))
+    # Pinned chats first (manual order), then unread/activity order.
+    items.sort(
+        key=lambda item: (
+            0 if item.is_pinned else 1,
+            int(item.pin_order or 10**9) if item.is_pinned else 10**9,
+            0 if item.is_unread else 1,
+            -item.last_activity_id,
+        )
+    )
     return items
+
+
+def get_pinned_conversation_ids_for_user(
+    db: Session,
+    *,
+    workspace_id: int,
+    service_user_id: int,
+) -> list[int]:
+    user_key = int(service_user_id or 0)
+    if user_key < 0:
+        return []
+    rows = (
+        db.query(ConversationPin.conversation_id)
+        .filter(
+            ConversationPin.workspace_id == workspace_id,
+            ConversationPin.service_user_id == user_key,
+        )
+        .order_by(ConversationPin.sort_order.asc(), ConversationPin.id.asc())
+        .all()
+    )
+    return [int(row[0]) for row in rows if row and int(row[0] or 0) > 0]
+
+
+def pin_conversation_for_user(
+    db: Session,
+    *,
+    workspace_id: int,
+    service_user_id: int,
+    conversation_id: int,
+) -> tuple[bool, str]:
+    user_key = int(service_user_id or 0)
+    conv_key = int(conversation_id or 0)
+    if user_key < 0 or conv_key <= 0:
+        return False, "invalid_arguments"
+
+    conversation_exists = (
+        db.query(Conversation.id)
+        .filter(
+            Conversation.workspace_id == workspace_id,
+            Conversation.id == conv_key,
+        )
+        .first()
+    )
+    if conversation_exists is None:
+        return False, "conversation_not_found"
+
+    from app.ops import can_pin_chat
+
+    existing = (
+        db.query(ConversationPin)
+        .filter(
+            ConversationPin.workspace_id == workspace_id,
+            ConversationPin.service_user_id == user_key,
+            ConversationPin.conversation_id == conv_key,
+        )
+        .first()
+    )
+    if existing is not None:
+        return True, ""
+
+    can_pin, reason = can_pin_chat(db, workspace_id=workspace_id, service_user_id=user_key)
+    if not can_pin:
+        return False, reason
+
+    max_sort_row = (
+        db.query(func.max(ConversationPin.sort_order))
+        .filter(
+            ConversationPin.workspace_id == workspace_id,
+            ConversationPin.service_user_id == user_key,
+        )
+        .first()
+    )
+    next_sort = int(max_sort_row[0] or 0) + 1
+    db.add(
+        ConversationPin(
+            workspace_id=workspace_id,
+            service_user_id=user_key,
+            conversation_id=conv_key,
+            sort_order=next_sort,
+        )
+    )
+    db.commit()
+    return True, ""
+
+
+def unpin_conversation_for_user(
+    db: Session,
+    *,
+    workspace_id: int,
+    service_user_id: int,
+    conversation_id: int,
+) -> bool:
+    user_key = int(service_user_id or 0)
+    conv_key = int(conversation_id or 0)
+    if user_key < 0 or conv_key <= 0:
+        return False
+
+    pin_row = (
+        db.query(ConversationPin)
+        .filter(
+            ConversationPin.workspace_id == workspace_id,
+            ConversationPin.service_user_id == user_key,
+            ConversationPin.conversation_id == conv_key,
+        )
+        .first()
+    )
+    if pin_row is None:
+        return False
+
+    db.delete(pin_row)
+    db.commit()
+    _normalize_pins_sort_order(db, workspace_id=workspace_id, service_user_id=user_key)
+    return True
+
+
+def _normalize_pins_sort_order(
+    db: Session,
+    *,
+    workspace_id: int,
+    service_user_id: int,
+) -> None:
+    rows = (
+        db.query(ConversationPin)
+        .filter(
+            ConversationPin.workspace_id == workspace_id,
+            ConversationPin.service_user_id == int(service_user_id),
+        )
+        .order_by(ConversationPin.sort_order.asc(), ConversationPin.id.asc())
+        .all()
+    )
+    changed = False
+    for idx, row in enumerate(rows, start=1):
+        if int(row.sort_order or 0) != idx:
+            row.sort_order = idx
+            db.add(row)
+            changed = True
+    if changed:
+        db.commit()
+
+
+def reorder_pins_for_user(
+    db: Session,
+    *,
+    workspace_id: int,
+    service_user_id: int,
+    ordered_conversation_ids: list[int],
+) -> bool:
+    user_key = int(service_user_id or 0)
+    if user_key < 0:
+        return False
+    normalized_ids: list[int] = []
+    seen: set[int] = set()
+    for raw in ordered_conversation_ids:
+        conv_id = int(raw or 0)
+        if conv_id <= 0 or conv_id in seen:
+            continue
+        seen.add(conv_id)
+        normalized_ids.append(conv_id)
+    if not normalized_ids:
+        return False
+
+    pins = (
+        db.query(ConversationPin)
+        .filter(
+            ConversationPin.workspace_id == workspace_id,
+            ConversationPin.service_user_id == user_key,
+        )
+        .all()
+    )
+    pins_by_conv = {int(row.conversation_id): row for row in pins}
+    if set(normalized_ids) != set(pins_by_conv.keys()):
+        return False
+
+    changed = False
+    for idx, conv_id in enumerate(normalized_ids, start=1):
+        row = pins_by_conv.get(conv_id)
+        if row is None:
+            return False
+        if int(row.sort_order or 0) != idx:
+            row.sort_order = idx
+            db.add(row)
+            changed = True
+    if changed:
+        db.commit()
+    return True
 
 
 def delete_conversation(
@@ -3003,6 +3218,10 @@ def delete_conversation(
     db.query(ConversationFolderLink).filter(
         ConversationFolderLink.workspace_id == ws_id,
         ConversationFolderLink.conversation_id == conversation_id,
+    ).delete()
+    db.query(ConversationPin).filter(
+        ConversationPin.workspace_id == ws_id,
+        ConversationPin.conversation_id == conversation_id,
     ).delete()
     db.query(ConversationMeta).filter(
         ConversationMeta.workspace_id == ws_id,

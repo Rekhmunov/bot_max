@@ -460,6 +460,18 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE subscriptions ADD COLUMN folders_limit INTEGER DEFAULT 10")
                 )
+            if "pinned_chats_limit" not in sub_cols:
+                conn.execute(
+                    text("ALTER TABLE subscriptions ADD COLUMN pinned_chats_limit INTEGER DEFAULT 5")
+                )
+            # Trial must include 5 pinned chats.
+            conn.execute(
+                text(
+                    "UPDATE subscriptions "
+                    "SET pinned_chats_limit = 5 "
+                    "WHERE LOWER(COALESCE(status, '')) = 'trial'"
+                )
+            )
         if "quick_replies" in table_names:
             qr_cols = {col["name"] for col in inspector.get_columns("quick_replies")}
             if "owner_user_id" not in qr_cols:
@@ -519,6 +531,38 @@ def _ensure_lightweight_migrations() -> None:
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tenant_alerts_alert_key ON tenant_alerts (alert_key)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tenant_alerts_severity ON tenant_alerts (severity)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_tenant_alerts_is_resolved ON tenant_alerts (is_resolved)"))
+
+        if "conversation_pins" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE conversation_pins ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "workspace_id INTEGER NOT NULL, "
+                    "service_user_id INTEGER NOT NULL, "
+                    "conversation_id INTEGER NOT NULL, "
+                    "sort_order INTEGER DEFAULT 0, "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+                    "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+        else:
+            pin_cols = {col["name"] for col in inspector.get_columns("conversation_pins")}
+            if "updated_at" not in pin_cols:
+                conn.execute(
+                    text("ALTER TABLE conversation_pins ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+                )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_conversation_pins_workspace_user_conversation "
+                "ON conversation_pins (workspace_id, service_user_id, conversation_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_conversation_pins_workspace_user_sort "
+                "ON conversation_pins (workspace_id, service_user_id, sort_order)"
+            )
+        )
 
         # Drop legacy global unique indexes left from single-tenant schema.
         # They conflict with new workspace-scoped unique constraints.

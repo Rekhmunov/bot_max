@@ -15,6 +15,7 @@ from app.models import (
     ChatFolder,
     Conversation,
     ConversationFolderLink,
+    ConversationPin,
     ConversationMeta,
     OutboxMessage,
     QuickReply,
@@ -446,6 +447,7 @@ def run() -> None:
             assert (basic_sub.plan_code or "").strip().lower() in {"basic", "trial"}
             assert int(basic_sub.quick_replies_limit or 0) == 10
             assert int(basic_sub.folders_limit or 0) == 10
+            assert int(getattr(basic_sub, "pinned_chats_limit", 0) or 0) == 5
 
         webhook_customer_start = client.post(
             "/webhook/max/ws1key",
@@ -1363,6 +1365,64 @@ def run() -> None:
         assert 'id="schedule-btn-mobile"' in admin_chats_page_after_send.text
         assert 'id="schedule-pop"' in admin_chats_page_after_send.text
         assert 'name="schedule_at"' in admin_chats_page_after_send.text
+        assert "Закрепленные чаты:" in admin_chats_page_after_send.text
+
+        admin_pin_chat = client.post(
+            f"/admin/chats/{conversation_id}/pin",
+            data={"q": "", "view": "chat"},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert admin_pin_chat.status_code in (302, 303)
+        assert "pinned=1" in admin_pin_chat.headers.get("location", "")
+        with SessionLocal() as db:
+            admin_pin_row = (
+                db.query(ConversationPin)
+                .filter(
+                    ConversationPin.workspace_id == 1,
+                    ConversationPin.service_user_id == 0,
+                    ConversationPin.conversation_id == conversation_id,
+                )
+                .first()
+            )
+            assert admin_pin_row is not None
+            assert int(admin_pin_row.sort_order or 0) >= 1
+
+            from app.manager_bridge import load_chat_threads
+
+            pinned_threads_view = load_chat_threads(
+                db,
+                query="",
+                workspace_id=1,
+                service_user_id=0,
+            )
+            pinned_thread_item = next(
+                (row for row in pinned_threads_view if int(row.conversation_id) == int(conversation_id)),
+                None,
+            )
+            assert pinned_thread_item is not None
+            assert bool(getattr(pinned_thread_item, "is_pinned", False)) is True
+            assert getattr(pinned_thread_item, "pin_order", None) is not None
+
+        admin_unpin_chat = client.post(
+            f"/admin/chats/{conversation_id}/unpin",
+            data={"q": "", "view": "chat"},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert admin_unpin_chat.status_code in (302, 303)
+        assert "unpinned=1" in admin_unpin_chat.headers.get("location", "")
+        with SessionLocal() as db:
+            admin_pin_row_after_unpin = (
+                db.query(ConversationPin)
+                .filter(
+                    ConversationPin.workspace_id == 1,
+                    ConversationPin.service_user_id == 0,
+                    ConversationPin.conversation_id == conversation_id,
+                )
+                .first()
+            )
+            assert admin_pin_row_after_unpin is None
 
         scheduled_send = client.post(
             f"/admin/chats/{conversation_id}/send",
@@ -1471,6 +1531,173 @@ def run() -> None:
             )
             assert second_conversation is not None
             second_conversation_id = int(second_conversation.id)
+
+        third_chat_id = f"chat_{uuid4().hex[:8]}"
+        third_buyer_id = f"buyer_{uuid4().hex[:8]}"
+        third_start = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "bot_started",
+                "chat_id": third_chat_id,
+                "sender_id": third_buyer_id,
+                "text": "",
+            },
+        )
+        assert third_start.status_code == 200
+        with SessionLocal() as db:
+            third_conversation = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == 1, Conversation.chat_id == third_chat_id)
+                .first()
+            )
+            assert third_conversation is not None
+            third_conversation_id = int(third_conversation.id)
+
+        fourth_chat_id = f"chat_{uuid4().hex[:8]}"
+        fourth_buyer_id = f"buyer_{uuid4().hex[:8]}"
+        fourth_start = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "bot_started",
+                "chat_id": fourth_chat_id,
+                "sender_id": fourth_buyer_id,
+                "text": "",
+            },
+        )
+        assert fourth_start.status_code == 200
+        with SessionLocal() as db:
+            fourth_conversation = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == 1, Conversation.chat_id == fourth_chat_id)
+                .first()
+            )
+            assert fourth_conversation is not None
+            fourth_conversation_id = int(fourth_conversation.id)
+
+        fifth_chat_id = f"chat_{uuid4().hex[:8]}"
+        fifth_buyer_id = f"buyer_{uuid4().hex[:8]}"
+        fifth_start = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "bot_started",
+                "chat_id": fifth_chat_id,
+                "sender_id": fifth_buyer_id,
+                "text": "",
+            },
+        )
+        assert fifth_start.status_code == 200
+        with SessionLocal() as db:
+            fifth_conversation = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == 1, Conversation.chat_id == fifth_chat_id)
+                .first()
+            )
+            assert fifth_conversation is not None
+            fifth_conversation_id = int(fifth_conversation.id)
+
+        sixth_chat_id = f"chat_{uuid4().hex[:8]}"
+        sixth_buyer_id = f"buyer_{uuid4().hex[:8]}"
+        sixth_start = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "bot_started",
+                "chat_id": sixth_chat_id,
+                "sender_id": sixth_buyer_id,
+                "text": "",
+            },
+        )
+        assert sixth_start.status_code == 200
+        with SessionLocal() as db:
+            sixth_conversation = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == 1, Conversation.chat_id == sixth_chat_id)
+                .first()
+            )
+            assert sixth_conversation is not None
+            sixth_conversation_id = int(sixth_conversation.id)
+
+        for conv_id in [
+            conversation_id,
+            second_conversation_id,
+            third_conversation_id,
+            fourth_conversation_id,
+            fifth_conversation_id,
+        ]:
+            pin_resp = client.post(
+                f"/admin/chats/{conv_id}/pin",
+                data={"q": "", "view": "chat"},
+                cookies=cookies,
+                follow_redirects=False,
+            )
+            assert pin_resp.status_code in (302, 303)
+            assert "pinned=1" in pin_resp.headers.get("location", "")
+
+        pin_limit_resp = client.post(
+            f"/admin/chats/{sixth_conversation_id}/pin",
+            data={"q": "", "view": "chat"},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert pin_limit_resp.status_code in (302, 303)
+        assert "pin_limit=1" in pin_limit_resp.headers.get("location", "")
+        with SessionLocal() as db:
+            pinned_count_trial = (
+                db.query(ConversationPin)
+                .filter(
+                    ConversationPin.workspace_id == 1,
+                    ConversationPin.service_user_id == 0,
+                )
+                .count()
+            )
+            assert int(pinned_count_trial) == 5
+
+            before_reorder_rows = (
+                db.query(ConversationPin)
+                .filter(
+                    ConversationPin.workspace_id == 1,
+                    ConversationPin.service_user_id == 0,
+                )
+                .order_by(ConversationPin.sort_order.asc(), ConversationPin.id.asc())
+                .all()
+            )
+            before_reorder_ids = [int(row.conversation_id) for row in before_reorder_rows]
+            assert set(before_reorder_ids) == {
+                int(conversation_id),
+                int(second_conversation_id),
+                int(third_conversation_id),
+                int(fourth_conversation_id),
+                int(fifth_conversation_id),
+            }
+
+        reorder_target_ids = [
+            int(fifth_conversation_id),
+            int(fourth_conversation_id),
+            int(third_conversation_id),
+            int(second_conversation_id),
+            int(conversation_id),
+        ]
+        admin_reorder = client.post(
+            "/admin/chats/pins/reorder",
+            json={"conversation_ids": reorder_target_ids},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert admin_reorder.status_code == 200
+        reorder_payload = admin_reorder.json()
+        assert reorder_payload.get("ok") is True
+        assert int(reorder_payload.get("ordered_count") or 0) == len(reorder_target_ids)
+        with SessionLocal() as db:
+            after_reorder_rows = (
+                db.query(ConversationPin)
+                .filter(
+                    ConversationPin.workspace_id == 1,
+                    ConversationPin.service_user_id == 0,
+                )
+                .order_by(ConversationPin.sort_order.asc(), ConversationPin.id.asc())
+                .all()
+            )
+            after_reorder_ids = [int(row.conversation_id) for row in after_reorder_rows]
+            assert after_reorder_ids == reorder_target_ids
 
         mark_unread_other = client.post(
             f"/admin/chats/{second_conversation_id}/mark-unread",

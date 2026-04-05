@@ -67,6 +67,8 @@ from app.manager_bridge import (
     load_chat_messages,
     load_chat_threads,
     is_conversation_customer_blocked,
+    pin_conversation_for_user,
+    reorder_pins_for_user,
     mark_thread_unread,
     mark_thread_read,
     mark_conversation_messages_read_by_customer,
@@ -80,6 +82,7 @@ from app.manager_bridge import (
     send_admin_chat_message,
     send_admin_quick_reply,
     update_chat_message_text,
+    unpin_conversation_for_user,
     DEFAULT_BUSINESS_TIMEZONE,
     DEFAULT_OFFHOURS_COOLDOWN_SECONDS,
     DEFAULT_OFFHOURS_MESSAGE,
@@ -705,12 +708,14 @@ def _build_usage_context(
     limit_messages = max(0, int(sub.messages_per_month_limit or 0)) if sub is not None else 0
     limit_quick = max(0, int(getattr(sub, "quick_replies_limit", 0) or 0)) if sub is not None else 0
     limit_folders = max(0, int(getattr(sub, "folders_limit", 0) or 0)) if sub is not None else 0
+    limit_pins = max(0, int(getattr(sub, "pinned_chats_limit", 0) or 0)) if sub is not None else 0
     usage_limits = {
         "managers": limit_managers,
         "dialogs": limit_dialogs,
         "messages_month": limit_messages,
         "quick_replies": limit_quick,
         "folders": limit_folders,
+        "pinned_chats": limit_pins,
     }
     usage_used = {
         "managers": max(0, int(manager_summary.get("connected", metrics.get("managers_active", 0)) or 0)),
@@ -718,6 +723,7 @@ def _build_usage_context(
         "messages_month": max(0, int(metrics.get("messages_month", 0) or 0)),
         "quick_replies": max(0, int(metrics.get("quick_replies_total", 0) or 0)),
         "folders": max(0, int(metrics.get("folders_total", 0) or 0)),
+        "pinned_chats": max(0, int(metrics.get("pins_total", 0) or 0)),
     }
     usage_remaining: dict[str, str] = {}
     for key, limit_value in usage_limits.items():
@@ -895,6 +901,7 @@ def _localized_alert_entry(alert: TenantAlert) -> dict[str, str]:
         "messages_month_limit": "Лимит сообщений в месяц",
         "quick_replies_limit": "Лимит быстрых ответов",
         "folders_limit": "Лимит папок",
+        "pinned_chats_limit": "Лимит закрепленных чатов",
     }
     alert_key = (alert.alert_key or "").strip()
     key_label = key_labels.get(alert_key, alert_key or "Алерт")
@@ -983,9 +990,54 @@ def _folder_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     return max(1, int(getattr(sub, "folders_limit", 0) or 0))
 
 
+def _pinned_chats_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    if (sub.plan_code or "").strip().lower() == "unlimited":
+        return 1_000_000_000
+    return max(1, int(getattr(sub, "pinned_chats_limit", 5) or 0))
+
+
 def _is_unlimited_plan(db: Session, *, workspace_id: int) -> bool:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
     return (sub.plan_code or "").strip().lower() == "unlimited"
+
+
+def _chat_scope_service_user_id(
+    *,
+    current_user: ServiceUser | None = None,
+    manager_claims: dict | None = None,
+) -> int:
+    if current_user is not None and int(current_user.id or 0) > 0:
+        return int(current_user.id)
+    if manager_claims:
+        manager_user_id = manager_claims.get("service_user_id")
+        if isinstance(manager_user_id, int) and manager_user_id > 0:
+            return int(manager_user_id)
+    return 0
+
+
+def _chat_redirect_with_scope(
+    *,
+    base_path: str,
+    conversation_id: int,
+    q: str,
+    view: str,
+    folder_id: int | None = None,
+    params: dict[str, str] | None = None,
+    workspace_suffix: str = "",
+) -> str:
+    query_parts = [
+        f"conversation_id={conversation_id}",
+        f"q={q}",
+        f"view={view}",
+    ]
+    if params:
+        for key, value in params.items():
+            query_parts.append(f"{key}={value}")
+    if folder_id is not None:
+        query_parts.append(f"folder_id={folder_id}")
+    query = "&".join(query_parts)
+    return f"{base_path}?{query}{workspace_suffix}"
 
 
 def _limit_input_value(limit_value: int, *, is_unlimited: bool) -> str:
@@ -1484,6 +1536,7 @@ def _build_superadmin_context(
                 "messages_per_month_limit": sub.messages_per_month_limit,
                 "folders_limit": getattr(sub, "folders_limit", 30),
                 "quick_replies_limit": getattr(sub, "quick_replies_limit", 100),
+                "pinned_chats_limit": getattr(sub, "pinned_chats_limit", 5),
                 "grace_until": _to_iso(sub.grace_until),
             }
         )
@@ -3087,6 +3140,142 @@ def admin_chat_move_folder(
     )
 
 
+@app.post("/admin/chats/{conversation_id}/pin", response_class=RedirectResponse)
+def admin_chat_pin(
+    request: Request,
+    conversation_id: int,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="admin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    pinned, reason = pin_conversation_for_user(
+        db,
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        service_user_id=0,
+        conversation_id=conversation_id,
+    )
+    if pinned:
+        db.add(
+            AuditLog(
+                workspace_id=DEFAULT_WORKSPACE_ID,
+                actor_user_id=None,
+                action="chat_pinned",
+                object_type="conversation_pin",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"scope": "admin_chats"}),
+            )
+        )
+        db.commit()
+    suffix = "1" if pinned else "0"
+    limit_suffix = "&pin_limit=1" if reason == "pinned_chats_limit_exceeded" else ""
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    return RedirectResponse(
+        url=f"/admin/chats?conversation_id={conversation_id}&q={q}&view={view}&pinned={suffix}{limit_suffix}{folder_qs}",
+        status_code=302,
+    )
+
+
+@app.post("/admin/chats/{conversation_id}/unpin", response_class=RedirectResponse)
+def admin_chat_unpin(
+    request: Request,
+    conversation_id: int,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="admin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    unpinned = unpin_conversation_for_user(
+        db,
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        service_user_id=0,
+        conversation_id=conversation_id,
+    )
+    if unpinned:
+        db.add(
+            AuditLog(
+                workspace_id=DEFAULT_WORKSPACE_ID,
+                actor_user_id=None,
+                action="chat_unpinned",
+                object_type="conversation_pin",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"scope": "admin_chats"}),
+            )
+        )
+        db.commit()
+    suffix = "1" if unpinned else "0"
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    return RedirectResponse(
+        url=f"/admin/chats?conversation_id={conversation_id}&q={q}&view={view}&unpinned={suffix}{folder_qs}",
+        status_code=302,
+    )
+
+
+@app.post("/admin/chats/pins/reorder", response_class=JSONResponse)
+async def admin_chat_pins_reorder(
+    request: Request,
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="admin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    payload = await request.json()
+    ids_raw = payload.get("conversation_ids") if isinstance(payload, dict) else None
+    if not isinstance(ids_raw, list):
+        raise HTTPException(status_code=400, detail="conversation_ids_required")
+    ordered_ids: list[int] = []
+    seen: set[int] = set()
+    for item in ids_raw:
+        try:
+            conv_id = int(item)
+        except (TypeError, ValueError):
+            continue
+        if conv_id <= 0 or conv_id in seen:
+            continue
+        seen.add(conv_id)
+        ordered_ids.append(conv_id)
+    if not ordered_ids:
+        raise HTTPException(status_code=400, detail="conversation_ids_required")
+    ok = reorder_pins_for_user(
+        db,
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        service_user_id=0,
+        ordered_conversation_ids=ordered_ids,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail="invalid_pin_order")
+    db.add(
+        AuditLog(
+            workspace_id=DEFAULT_WORKSPACE_ID,
+            actor_user_id=None,
+            action="chat_pins_reordered",
+            object_type="conversation_pin",
+            object_id="0",
+            details_json=safe_json_dumps({"conversation_ids": ordered_ids, "scope": "admin_chats"}),
+        )
+    )
+    db.commit()
+    return JSONResponse({"ok": True, "ordered_count": len(ordered_ids)}, status_code=200)
+
+
 def _render_customer_profile_page(
     *,
     request: Request,
@@ -3730,6 +3919,10 @@ def _admin_chats_ui() -> dict[str, str | bool]:
         "profile_href_prefix": "/admin/chats/",
         "mark_unread_prefix": "/admin/chats/",
         "move_folder_prefix": "/admin/chats/",
+        "pin_prefix": "/admin/chats/",
+        "unpin_prefix": "/admin/chats/",
+        "pins_reorder_endpoint": "/admin/chats/pins/reorder",
+        "show_pins_info": True,
         "create_folder_endpoint": "/admin/chats/folders",
         "delete_message_prefix": "/admin/chats/",
         "endpoint_query_suffix": "",
@@ -3760,10 +3953,40 @@ def _manager_mini_ui(token: str) -> dict[str, str | bool]:
         "profile_href_prefix": "",
         "mark_unread_prefix": "/mini/manager/chats/",
         "move_folder_prefix": "/mini/manager/chats/",
+        "pin_prefix": "/mini/manager/chats/",
+        "unpin_prefix": "/mini/manager/chats/",
+        "pins_reorder_endpoint": "/mini/manager/chats/pins/reorder",
+        "show_pins_info": False,
         "create_folder_endpoint": "/mini/manager/chats/folders",
         "delete_message_prefix": "/mini/manager/chats/",
         "endpoint_query_suffix": query_suffix,
     }
+
+
+def _build_pins_redirect_url(
+    *,
+    base_path: str,
+    conversation_id: int,
+    q: str,
+    view: str,
+    folder_id: int | None = None,
+    pinned: bool | None = None,
+    unpinned: bool | None = None,
+    pin_limit: bool = False,
+    endpoint_query_suffix: str = "",
+) -> str:
+    url = f"{base_path}?conversation_id={conversation_id}&q={q}&view={view}"
+    if pinned is not None:
+        url += f"&pinned={'1' if pinned else '0'}"
+    if unpinned is not None:
+        url += f"&unpinned={'1' if unpinned else '0'}"
+    if pin_limit:
+        url += "&pin_limit=1"
+    if folder_id is not None:
+        url += f"&folder_id={folder_id}"
+    if endpoint_query_suffix:
+        url += endpoint_query_suffix.replace("?", "&")
+    return url
 
 
 def _resolve_workspace_for_token_or_user(
@@ -4651,6 +4874,10 @@ async def app_chats_page(
             "profile_href_prefix": "/app/chats/",
             "mark_unread_prefix": "/app/chats/",
             "move_folder_prefix": "/app/chats/",
+            "pin_prefix": "/app/chats/",
+            "unpin_prefix": "/app/chats/",
+            "pins_reorder_endpoint": "/app/chats/pins/reorder",
+            "show_pins_info": True,
             "create_folder_endpoint": "/app/chats/folders",
             "delete_message_prefix": "/app/chats/",
             "endpoint_query_suffix": endpoint_scope_suffix,
@@ -5905,6 +6132,7 @@ def app_superadmin_update_workspace_plan(
     messages_per_month_limit: int = Form(5000),
     quick_replies_limit: int = Form(10),
     folders_limit: int = Form(10),
+    pinned_chats_limit: int = Form(5),
     plan_code: str = Form("basic"),
     status: str = Form("active"),
     current_user: ServiceUser = Depends(require_service_user),
@@ -5932,12 +6160,14 @@ def app_superadmin_update_workspace_plan(
         sub.messages_per_month_limit = unlimited_value
         sub.quick_replies_limit = unlimited_value
         sub.folders_limit = unlimited_value
+        sub.pinned_chats_limit = unlimited_value
     else:
         sub.manager_limit = max(1, int(manager_limit))
         sub.dialogs_limit = max(1, int(dialogs_limit))
         sub.messages_per_month_limit = max(1, int(messages_per_month_limit))
         sub.quick_replies_limit = max(1, int(quick_replies_limit))
         sub.folders_limit = max(1, int(folders_limit))
+        sub.pinned_chats_limit = max(1, int(pinned_chats_limit))
     sub.status = (status or "active").strip().lower()
     db.add(sub)
     db.add(
@@ -5950,7 +6180,8 @@ def app_superadmin_update_workspace_plan(
             details_json=(
                 f'{{"plan_code":"{sub.plan_code}","manager_limit":{sub.manager_limit},"dialogs_limit":{sub.dialogs_limit},'
                 f'"messages_per_month_limit":{sub.messages_per_month_limit},"quick_replies_limit":{sub.quick_replies_limit},'
-                f'"folders_limit":{sub.folders_limit},"status":"{sub.status}"}}'
+                f'"folders_limit":{sub.folders_limit},"pinned_chats_limit":{int(getattr(sub, "pinned_chats_limit", 0) or 0)},'
+                f'"status":"{sub.status}"}}'
             ),
         )
     )
@@ -6266,6 +6497,174 @@ def app_chat_move_folder(
         ),
         status_code=302,
     )
+
+
+@app.post("/app/chats/{conversation_id}/pin", response_class=RedirectResponse)
+def app_chat_pin(
+    request: Request,
+    conversation_id: int,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    workspace_id: int | None = None,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    pinned, reason = pin_conversation_for_user(
+        db,
+        workspace_id=workspace_id,
+        service_user_id=int(current_user.id or 0),
+        conversation_id=conversation_id,
+    )
+    if pinned:
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=int(current_user.id),
+                action="chat_pinned",
+                object_type="conversation_pin",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"scope": "app_chats"}),
+            )
+        )
+        db.commit()
+    suffix = "1" if pinned else "0"
+    limit_suffix = "&pin_limit=1" if reason == "pinned_chats_limit_exceeded" else ""
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
+    return RedirectResponse(
+        url=(
+            f"/app/chats?conversation_id={conversation_id}&q={q}&view={view}"
+            f"&pinned={suffix}{limit_suffix}{folder_qs}{workspace_qs}"
+        ),
+        status_code=302,
+    )
+
+
+@app.post("/app/chats/{conversation_id}/unpin", response_class=RedirectResponse)
+def app_chat_unpin(
+    request: Request,
+    conversation_id: int,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    workspace_id: int | None = None,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    unpinned = unpin_conversation_for_user(
+        db,
+        workspace_id=workspace_id,
+        service_user_id=int(current_user.id or 0),
+        conversation_id=conversation_id,
+    )
+    if unpinned:
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=int(current_user.id),
+                action="chat_unpinned",
+                object_type="conversation_pin",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"scope": "app_chats"}),
+            )
+        )
+        db.commit()
+    suffix = "1" if unpinned else "0"
+    folder_qs = f"&folder_id={folder_id}" if folder_id is not None else ""
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
+    return RedirectResponse(
+        url=(
+            f"/app/chats?conversation_id={conversation_id}&q={q}&view={view}"
+            f"&unpinned={suffix}{folder_qs}{workspace_qs}"
+        ),
+        status_code=302,
+    )
+
+
+@app.post("/app/chats/pins/reorder", response_class=JSONResponse)
+async def app_chat_pins_reorder(
+    request: Request,
+    workspace_id: int | None = None,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    workspace_id, _scoped_workspace, _is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    payload = await request.json()
+    ids_raw = payload.get("conversation_ids") if isinstance(payload, dict) else None
+    if not isinstance(ids_raw, list):
+        raise HTTPException(status_code=400, detail="conversation_ids_required")
+    ordered_ids: list[int] = []
+    seen: set[int] = set()
+    for item in ids_raw:
+        try:
+            conv_id = int(item)
+        except (TypeError, ValueError):
+            continue
+        if conv_id <= 0 or conv_id in seen:
+            continue
+        seen.add(conv_id)
+        ordered_ids.append(conv_id)
+    if not ordered_ids:
+        raise HTTPException(status_code=400, detail="conversation_ids_required")
+    ok = reorder_pins_for_user(
+        db,
+        workspace_id=workspace_id,
+        service_user_id=int(current_user.id or 0),
+        ordered_conversation_ids=ordered_ids,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail="invalid_pin_order")
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=int(current_user.id),
+            action="chat_pins_reordered",
+            object_type="conversation_pin",
+            object_id=str(current_user.id),
+            details_json=safe_json_dumps({"conversation_ids": ordered_ids, "scope": "app_chats"}),
+        )
+    )
+    db.commit()
+    return JSONResponse({"ok": True, "ordered_count": len(ordered_ids)}, status_code=200)
 
 
 @app.post("/app/chats/{conversation_id}/send", response_class=RedirectResponse)
@@ -6719,6 +7118,16 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
         op_error = "Не удалось переместить чат в папку"
     if request.query_params.get("foldered_multi") == "1":
         op_message = "Чат добавлен в несколько папок"
+    if request.query_params.get("pinned") == "1":
+        op_message = "Чат закреплен"
+    if request.query_params.get("pinned") == "0":
+        op_error = "Не удалось закрепить чат"
+    if request.query_params.get("unpinned") == "1":
+        op_message = "Чат откреплен"
+    if request.query_params.get("unpinned") == "0":
+        op_error = "Не удалось открепить чат"
+    if request.query_params.get("pin_limit") == "1":
+        op_error = "Достигнут лимит закрепленных чатов по вашему тарифу"
     if request.query_params.get("blocked") == "1":
         op_message = "Пользователь заблокирован"
     if request.query_params.get("blocked") == "0":
@@ -6739,6 +7148,12 @@ def _thread_summary_dict(item: object) -> dict[str, object]:
         "ticket_no": getattr(item, "ticket_no", None),
         "customer_label": str(getattr(item, "customer_label", "") or ""),
         "is_unread": bool(getattr(item, "is_unread", False)),
+        "is_pinned": bool(getattr(item, "is_pinned", False)),
+        "pin_order": (
+            int(getattr(item, "pin_order"))
+            if getattr(item, "pin_order", None) is not None
+            else None
+        ),
         "is_blocked": bool(getattr(item, "is_blocked", False)),
         "is_new": str(getattr(item, "status", "") or "").strip().lower() == "new",
         "has_delivery_errors": bool(getattr(item, "has_delivery_errors", False)),
@@ -6774,6 +7189,7 @@ def _build_chat_updates_payload(
     *,
     db: Session,
     workspace_id: int,
+    service_user_id: int = 0,
     query: str,
     folder_id: int | None,
     conversation_id: int | None,
@@ -6781,7 +7197,12 @@ def _build_chat_updates_payload(
     last_message_id: int | None = None,
     threads_signature: str = "",
 ) -> dict[str, object]:
-    threads = load_chat_threads(db, query=query, workspace_id=workspace_id)
+    threads = load_chat_threads(
+        db,
+        query=query,
+        workspace_id=workspace_id,
+        service_user_id=int(service_user_id or 0),
+    )
     threads = _filter_threads_by_folder(threads, folder_id)
 
     has_explicit_conversation = conversation_id is not None
@@ -6805,7 +7226,11 @@ def _build_chat_updates_payload(
         )
 
     threads_signature_source = "|".join(
-        f"{item.conversation_id}:{item.last_activity_id}:{1 if item.is_unread else 0}"
+        (
+            f"{item.conversation_id}:{item.last_activity_id}:{1 if item.is_unread else 0}:"
+            f"{1 if bool(getattr(item, 'is_pinned', False)) else 0}:"
+            f"{int(getattr(item, 'pin_order') or 0)}"
+        )
         for item in threads
     )
     threads_signature = hashlib.sha256(threads_signature_source.encode("utf-8")).hexdigest()[:16]
@@ -6845,6 +7270,7 @@ def admin_chats_updates(
     payload = _build_chat_updates_payload(
         db=db,
         workspace_id=DEFAULT_WORKSPACE_ID,
+        service_user_id=0,
         query=q,
         folder_id=folder_id,
         conversation_id=conversation_id,
@@ -6883,6 +7309,7 @@ def app_chats_updates(
     payload = _build_chat_updates_payload(
         db=db,
         workspace_id=workspace_id,
+        service_user_id=int(current_user.id or 0),
         query=q,
         folder_id=folder_id,
         conversation_id=conversation_id,
@@ -6911,9 +7338,11 @@ def manager_mini_updates(
     )
     claims = _require_manager_mini_access(token=token, db=db)
     workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    manager_user_id = int(claims.get("service_user_id") or 0)
     payload = _build_chat_updates_payload(
         db=db,
         workspace_id=workspace_id,
+        service_user_id=manager_user_id,
         query=q,
         folder_id=folder_id,
         conversation_id=conversation_id,
@@ -6940,7 +7369,16 @@ async def _render_chat_workspace(
     await process_outbox_queue(db, limit=30)
     op_message, op_error = _chat_op_messages(request)
 
-    threads = load_chat_threads(db, query=q, workspace_id=workspace_id)
+    service_user_id = _chat_scope_service_user_id(
+        current_user=ui.get("current_user") if isinstance(ui.get("current_user"), ServiceUser) else None,
+        manager_claims=ui.get("manager_claims") if isinstance(ui.get("manager_claims"), dict) else None,
+    )
+    threads = load_chat_threads(
+        db,
+        query=q,
+        workspace_id=workspace_id,
+        service_user_id=service_user_id,
+    )
     threads = _filter_threads_by_folder(threads, folder_id)
 
     has_explicit_conversation = conversation_id is not None
@@ -6962,7 +7400,11 @@ async def _render_chat_workspace(
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
     mobile_chat_view = view.strip().lower() == "chat"
     threads_signature_source = "|".join(
-        f"{item.conversation_id}:{item.last_activity_id}:{1 if item.is_unread else 0}"
+        (
+            f"{item.conversation_id}:{item.last_activity_id}:{1 if item.is_unread else 0}:"
+            f"{1 if bool(getattr(item, 'is_pinned', False)) else 0}:"
+            f"{int(getattr(item, 'pin_order') or 0)}"
+        )
         for item in threads
     )
     threads_signature = hashlib.sha256(threads_signature_source.encode("utf-8")).hexdigest()[:16]
@@ -6999,6 +7441,8 @@ async def _render_chat_workspace(
             {"id": folder.id, "name": folder.name}
             for folder in list_chat_folders(db, workspace_id=workspace_id)
         ],
+        "pinned_limit": _pinned_chats_limit_for_workspace(db, workspace_id=workspace_id),
+        "pinned_used": len([item for item in threads if bool(getattr(item, "is_pinned", False))]),
         "ui": ui,
         "chat_state": chat_state,
     }
@@ -7163,6 +7607,166 @@ def manager_mini_move_folder(
         ),
         status_code=302,
     )
+
+
+@app.post("/mini/manager/chats/{conversation_id}/pin", response_class=RedirectResponse)
+def manager_mini_pin_chat(
+    request: Request,
+    conversation_id: int,
+    token: str,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="mini_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    manager_user_id = int(claims.get("service_user_id") or 0)
+    if manager_user_id <= 0:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    pinned, reason = pin_conversation_for_user(
+        db,
+        workspace_id=workspace_id,
+        service_user_id=manager_user_id,
+        conversation_id=conversation_id,
+    )
+    if pinned:
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=manager_user_id,
+                action="chat_pinned",
+                object_type="conversation_pin",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"scope": "mini_manager"}),
+            )
+        )
+        db.commit()
+    suffix = "1" if pinned else "0"
+    limit_suffix = "&pin_limit=1" if reason == "pinned_chats_limit_exceeded" else ""
+    return RedirectResponse(
+        url=_manager_mini_url(
+            token=token,
+            conversation_id=conversation_id,
+            q=q,
+            view=view,
+            folder_id=folder_id,
+            extra=f"pinned={suffix}{limit_suffix}",
+        ),
+        status_code=302,
+    )
+
+
+@app.post("/mini/manager/chats/{conversation_id}/unpin", response_class=RedirectResponse)
+def manager_mini_unpin_chat(
+    request: Request,
+    conversation_id: int,
+    token: str,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="mini_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    manager_user_id = int(claims.get("service_user_id") or 0)
+    if manager_user_id <= 0:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    unpinned = unpin_conversation_for_user(
+        db,
+        workspace_id=workspace_id,
+        service_user_id=manager_user_id,
+        conversation_id=conversation_id,
+    )
+    if unpinned:
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=manager_user_id,
+                action="chat_unpinned",
+                object_type="conversation_pin",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"scope": "mini_manager"}),
+            )
+        )
+        db.commit()
+    suffix = "1" if unpinned else "0"
+    return RedirectResponse(
+        url=_manager_mini_url(
+            token=token,
+            conversation_id=conversation_id,
+            q=q,
+            view=view,
+            folder_id=folder_id,
+            extra=f"unpinned={suffix}",
+        ),
+        status_code=302,
+    )
+
+
+@app.post("/mini/manager/chats/pins/reorder", response_class=JSONResponse)
+async def manager_mini_reorder_pins(
+    request: Request,
+    token: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="mini_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    manager_user_id = int(claims.get("service_user_id") or 0)
+    if manager_user_id <= 0:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    payload = await request.json()
+    ids_raw = payload.get("conversation_ids") if isinstance(payload, dict) else None
+    if not isinstance(ids_raw, list):
+        raise HTTPException(status_code=400, detail="conversation_ids_required")
+    ordered_ids: list[int] = []
+    seen: set[int] = set()
+    for item in ids_raw:
+        try:
+            conv_id = int(item)
+        except (TypeError, ValueError):
+            continue
+        if conv_id <= 0 or conv_id in seen:
+            continue
+        seen.add(conv_id)
+        ordered_ids.append(conv_id)
+    if not ordered_ids:
+        raise HTTPException(status_code=400, detail="conversation_ids_required")
+    ok = reorder_pins_for_user(
+        db,
+        workspace_id=workspace_id,
+        service_user_id=manager_user_id,
+        ordered_conversation_ids=ordered_ids,
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail="invalid_pin_order")
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=manager_user_id,
+            action="chat_pins_reordered",
+            object_type="conversation_pin",
+            object_id=str(manager_user_id),
+            details_json=safe_json_dumps({"conversation_ids": ordered_ids, "scope": "mini_manager"}),
+        )
+    )
+    db.commit()
+    return JSONResponse({"ok": True, "ordered_count": len(ordered_ids)}, status_code=200)
 
 
 @app.post("/mini/manager/chats/{conversation_id}/rename-user", response_class=RedirectResponse)

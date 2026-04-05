@@ -7,7 +7,17 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import BillingEvent, ChatFolder, Conversation, QuickReply, ServiceUser, Subscription, TenantAlert, Workspace
+from app.models import (
+    BillingEvent,
+    ChatFolder,
+    Conversation,
+    ConversationPin,
+    QuickReply,
+    ServiceUser,
+    Subscription,
+    TenantAlert,
+    Workspace,
+)
 from app.services import DEFAULT_WORKSPACE_ID
 
 
@@ -29,6 +39,7 @@ def get_or_create_subscription(db: Session, *, workspace_id: int) -> Subscriptio
         messages_per_month_limit=5000,
         quick_replies_limit=10,
         folders_limit=10,
+        pinned_chats_limit=5,
         current_period_start=now,
         current_period_end=now + timedelta(days=30),
         grace_until=now + timedelta(days=settings.default_grace_days),
@@ -131,6 +142,23 @@ def can_create_folder(db: Session, *, workspace_id: int) -> tuple[bool, str]:
     return True, ""
 
 
+def can_pin_chat(db: Session, *, workspace_id: int, service_user_id: int) -> tuple[bool, str]:
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    if (sub.plan_code or "").strip().lower() == "unlimited":
+        return True, ""
+    current = (
+        db.query(ConversationPin)
+        .filter(
+            ConversationPin.workspace_id == workspace_id,
+            ConversationPin.service_user_id == service_user_id,
+        )
+        .count()
+    )
+    if current >= int(getattr(sub, "pinned_chats_limit", 0) or 0):
+        return False, "pinned_chats_limit_exceeded"
+    return True, ""
+
+
 def track_message_sent(db: Session, *, workspace_id: int, external_id: str = "") -> None:
     db.add(
         BillingEvent(
@@ -207,12 +235,14 @@ def collect_tenant_metrics(db: Session, *, workspace_id: int) -> dict[str, int]:
     )
     quick_replies_total = db.query(QuickReply).filter(QuickReply.workspace_id == workspace_id).count()
     folders_total = db.query(ChatFolder).filter(ChatFolder.workspace_id == workspace_id).count()
+    pins_total = db.query(ConversationPin).filter(ConversationPin.workspace_id == workspace_id).count()
     return {
         "managers_active": managers,
         "dialogs_total": dialogs,
         "messages_month": messages,
         "quick_replies_total": quick_replies_total,
         "folders_total": folders_total,
+        "pins_total": pins_total,
     }
 
 
@@ -225,6 +255,7 @@ def refresh_tenant_alerts(db: Session, *, workspace_id: int) -> list[TenantAlert
         "messages_month_limit": (metrics["messages_month"], int(sub.messages_per_month_limit or 0)),
         "quick_replies_limit": (metrics["quick_replies_total"], int(sub.quick_replies_limit or 0)),
         "folders_limit": (metrics["folders_total"], int(sub.folders_limit or 0)),
+        "pinned_chats_limit": (metrics["pins_total"], int(getattr(sub, "pinned_chats_limit", 0) or 0)),
     }
     created: list[TenantAlert] = []
     for key, (value, limit) in thresholds.items():

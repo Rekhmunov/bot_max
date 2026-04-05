@@ -1157,6 +1157,7 @@
         <div class="hint">Сообщения в текущем месяце: <b>{{ tenant_metrics.messages_month }}</b> / <b>{{ subscription.messages_per_month_limit }}</b></div>
         <div class="hint">Быстрые ответы: <b>{{ tenant_metrics.quick_replies_total }}</b> / <b>{{ subscription.quick_replies_limit }}</b></div>
         <div class="hint">Папки: <b>{{ tenant_metrics.folders_total }}</b> / <b>{{ subscription.folders_limit }}</b></div>
+        <div class="hint">Закрепленные чаты: <b>{{ tenant_metrics.pins_total }}</b> / <b>{{ subscription.pinned_chats_limit }}</b></div>
       {% endif %}
     </section>
     {% endif %}

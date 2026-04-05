@@ -79,6 +79,7 @@ class Subscription(Base):
     messages_per_month_limit: Mapped[int] = mapped_column(Integer, default=5000)
     quick_replies_limit: Mapped[int] = mapped_column(Integer, default=10)
     folders_limit: Mapped[int] = mapped_column(Integer, default=10)
+    pinned_chats_limit: Mapped[int] = mapped_column(Integer, default=5)
     grace_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     current_period_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -382,6 +383,18 @@ class ConversationFolderLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+class ConversationPin(Base):
+    __tablename__ = "conversation_pins"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True, default=1)
+    service_user_id: Mapped[int] = mapped_column(ForeignKey("service_users.id"), index=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class ManagerDispatch(Base):
     __tablename__ = "manager_dispatches"
 
@@ -434,4 +447,17 @@ Index(
     CustomerProfile.workspace_id,
     CustomerProfile.customer_account_id,
     unique=True,
+)
+Index(
+    "ix_conversation_pins_workspace_user_conversation",
+    ConversationPin.workspace_id,
+    ConversationPin.service_user_id,
+    ConversationPin.conversation_id,
+    unique=True,
+)
+Index(
+    "ix_conversation_pins_workspace_user_sort",
+    ConversationPin.workspace_id,
+    ConversationPin.service_user_id,
+    ConversationPin.sort_order,
 )

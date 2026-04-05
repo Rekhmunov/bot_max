@@ -428,7 +428,7 @@
         <section class="card">
           <h2>Тарифы и лимиты</h2>
           <table>
-            <thead><tr><th>Клиент</th><th>План</th><th>Статус</th><th>Менеджеры</th><th>Диалоги</th><th>Сообщения/мес</th><th>Быстрые ответы</th><th>Папки</th><th>Изменить</th></tr></thead>
+            <thead><tr><th>Клиент</th><th>План</th><th>Статус</th><th>Менеджеры</th><th>Диалоги</th><th>Сообщения/мес</th><th>Быстрые ответы</th><th>Папки</th><th>Закрепленные чаты</th><th>Изменить</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
                 {% if row.workspace.id != 1 %}
@@ -441,6 +441,7 @@
                   <td>{{ row.subscription.messages_per_month_limit }}</td>
                   <td>{{ row.subscription.quick_replies_limit }}</td>
                   <td>{{ row.subscription.folders_limit }}</td>
+                  <td>{{ row.subscription.pinned_chats_limit }}</td>
                   <td>
                     <form class="inline-form" method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/plan">
                       <div><label>Менеджеры</label><input type="number" min="1" name="manager_limit" value="{{ row.subscription.manager_limit }}" /></div>
@@ -448,6 +449,7 @@
                       <div><label>Сообщения</label><input type="number" min="1" name="messages_per_month_limit" value="{{ row.subscription.messages_per_month_limit }}" /></div>
                       <div><label>Быстрые ответы</label><input type="number" min="1" name="quick_replies_limit" value="{{ row.subscription.quick_replies_limit }}" /></div>
                       <div><label>Папки</label><input type="number" min="1" name="folders_limit" value="{{ row.subscription.folders_limit }}" /></div>
+                      <div><label>Закрепленные чаты</label><input type="number" min="1" name="pinned_chats_limit" value="{{ row.subscription.pinned_chats_limit }}" /></div>
                       <div>
                         <label>Статус</label>
                         <select name="status">
