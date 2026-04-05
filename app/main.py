@@ -46,6 +46,7 @@ from app.auth import (
     verify_manager_invite_token,
     verify_manager_mini_claims,
     verify_manager_mini_token,
+    _sha256 as auth_sha256,
 )
 from app.config import settings
 from app.database import get_db, init_db
@@ -1958,7 +1959,7 @@ def _resolve_workspace_id_from_event(db: Session, event: MaxWebhookEvent) -> int
 
 
 def _sha256(value: str) -> str:
-    return hashlib.sha256((value or "").encode("utf-8")).hexdigest()
+    return auth_sha256(value)
 
 
 def _email_verify_serializer() -> URLSafeTimedSerializer:
@@ -2331,8 +2332,7 @@ def login_submit(
     username: str = Form(""),
     password: str = Form(""),
 ) -> RedirectResponse:
-    if sign_in_admin(request, username=username, password=password):
-        return RedirectResponse(url="/app", status_code=302)
+    sign_in_admin(request, username=username, password=password)
     return RedirectResponse(url="/app", status_code=302)
 
 
@@ -7188,6 +7188,37 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
     }
 
 
+def _select_active_thread(
+    *,
+    threads: list[object],
+    conversation_id: int | None,
+) -> object | None:
+    has_explicit_conversation = conversation_id is not None
+    active_thread = None
+    if conversation_id is not None:
+        for item in threads:
+            if int(getattr(item, "conversation_id", 0) or 0) == int(conversation_id):
+                active_thread = item
+                break
+    if active_thread is None and threads and not has_explicit_conversation:
+        active_thread = threads[0]
+    return active_thread
+
+
+def _threads_signature(threads: list[object]) -> str:
+    signature_source = "|".join(
+        (
+            f"{int(getattr(item, 'conversation_id', 0) or 0)}:"
+            f"{int(getattr(item, 'last_activity_id', 0) or 0)}:"
+            f"{1 if bool(getattr(item, 'is_unread', False)) else 0}:"
+            f"{1 if bool(getattr(item, 'is_pinned', False)) else 0}:"
+            f"{int(getattr(item, 'pin_order') or 0)}"
+        )
+        for item in threads
+    )
+    return hashlib.sha256(signature_source.encode("utf-8")).hexdigest()[:16]
+
+
 def _build_chat_updates_payload(
     *,
     db: Session,
@@ -7208,15 +7239,10 @@ def _build_chat_updates_payload(
     )
     threads = _filter_threads_by_folder(threads, folder_id)
 
-    has_explicit_conversation = conversation_id is not None
-    active_thread = None
-    if conversation_id is not None:
-        for item in threads:
-            if int(item.conversation_id) == int(conversation_id):
-                active_thread = item
-                break
-    if active_thread is None and threads and not has_explicit_conversation:
-        active_thread = threads[0]
+    active_thread = _select_active_thread(
+        threads=threads,
+        conversation_id=conversation_id,
+    )
 
     messages: list[ChatMessage] = []
     if active_thread is not None:
@@ -7228,15 +7254,7 @@ def _build_chat_updates_payload(
             workspace_id=workspace_id,
         )
 
-    threads_signature_source = "|".join(
-        (
-            f"{item.conversation_id}:{item.last_activity_id}:{1 if item.is_unread else 0}:"
-            f"{1 if bool(getattr(item, 'is_pinned', False)) else 0}:"
-            f"{int(getattr(item, 'pin_order') or 0)}"
-        )
-        for item in threads
-    )
-    threads_signature = hashlib.sha256(threads_signature_source.encode("utf-8")).hexdigest()[:16]
+    threads_signature = _threads_signature(threads)
 
     active_last_message_id = int(messages[-1].id) if messages else 0
     previous_last_message_id = int(last_message_id or 0)
@@ -7384,15 +7402,10 @@ async def _render_chat_workspace(
     )
     threads = _filter_threads_by_folder(threads, folder_id)
 
-    has_explicit_conversation = conversation_id is not None
-    active_thread = None
-    if conversation_id is not None:
-        for item in threads:
-            if item.conversation_id == conversation_id:
-                active_thread = item
-                break
-    if active_thread is None and threads and not has_explicit_conversation:
-        active_thread = threads[0]
+    active_thread = _select_active_thread(
+        threads=threads,
+        conversation_id=conversation_id,
+    )
 
     messages = []
     mark_read_requested = request.query_params.get("mark_read") == "1"
@@ -7402,15 +7415,7 @@ async def _render_chat_workspace(
             mark_thread_read(db, active_thread.conversation_id, workspace_id=workspace_id)
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
     mobile_chat_view = view.strip().lower() == "chat"
-    threads_signature_source = "|".join(
-        (
-            f"{item.conversation_id}:{item.last_activity_id}:{1 if item.is_unread else 0}:"
-            f"{1 if bool(getattr(item, 'is_pinned', False)) else 0}:"
-            f"{int(getattr(item, 'pin_order') or 0)}"
-        )
-        for item in threads
-    )
-    threads_signature = hashlib.sha256(threads_signature_source.encode("utf-8")).hexdigest()[:16]
+    threads_signature = _threads_signature(threads)
     chat_state = {
         "active_conversation_id": (active_thread.conversation_id if active_thread else 0),
         "active_last_message_id": (messages[-1].id if messages else 0),

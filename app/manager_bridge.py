@@ -2898,34 +2898,92 @@ def load_chat_threads(
                 continue
             pin_map[conv_key] = int(sort_order or 0)
 
-    needle = query.strip().lower()
-    items: list[ChatThreadItem] = []
-    for conv in conversations:
-        meta = (
+    meta_by_conversation_id: dict[int, ConversationMeta] = {}
+    profile_by_customer_id: dict[str, CustomerProfile] = {}
+    last_msg_by_conversation_id: dict[int, ChatMessage] = {}
+    failed_conversation_ids: set[int] = set()
+
+    if conversation_ids:
+        meta_rows = (
             db.query(ConversationMeta)
             .filter(
                 ConversationMeta.workspace_id == workspace_id,
-                ConversationMeta.conversation_id == conv.id,
+                ConversationMeta.conversation_id.in_(conversation_ids),
             )
-            .first()
+            .all()
         )
-        profile = (
-            db.query(CustomerProfile)
-            .filter(
-                CustomerProfile.workspace_id == workspace_id,
-                CustomerProfile.customer_account_id == conv.customer_account_id,
+        meta_by_conversation_id = {
+            int(row.conversation_id): row for row in meta_rows if int(row.conversation_id or 0) > 0
+        }
+
+        customer_ids = list(
+            {
+                str(conv.customer_account_id or "").strip()
+                for conv in conversations
+                if str(conv.customer_account_id or "").strip()
+            }
+        )
+        if customer_ids:
+            profile_rows = (
+                db.query(CustomerProfile)
+                .filter(
+                    CustomerProfile.workspace_id == workspace_id,
+                    CustomerProfile.customer_account_id.in_(customer_ids),
+                )
+                .order_by(CustomerProfile.id.asc())
+                .all()
             )
-            .first()
-        )
-        last_msg = (
-            db.query(ChatMessage)
+            for row in profile_rows:
+                key = str(row.customer_account_id or "").strip()
+                if not key or key in profile_by_customer_id:
+                    continue
+                profile_by_customer_id[key] = row
+
+        last_msg_ids = (
+            db.query(func.max(ChatMessage.id), ChatMessage.conversation_id)
             .filter(
                 ChatMessage.workspace_id == workspace_id,
-                ChatMessage.conversation_id == conv.id,
+                ChatMessage.conversation_id.in_(conversation_ids),
             )
-            .order_by(ChatMessage.id.desc())
-            .first()
+            .group_by(ChatMessage.conversation_id)
+            .all()
         )
+        latest_chat_message_ids = [
+            int(row[0]) for row in last_msg_ids if row and int(row[0] or 0) > 0
+        ]
+        if latest_chat_message_ids:
+            for row in (
+                db.query(ChatMessage)
+                .filter(ChatMessage.id.in_(latest_chat_message_ids))
+                .all()
+            ):
+                conv_key = int(row.conversation_id or 0)
+                if conv_key > 0:
+                    last_msg_by_conversation_id[conv_key] = row
+
+        failed_conversation_ids = {
+            int(row[0] or 0)
+            for row in (
+                db.query(ChatMessage.conversation_id)
+                .filter(
+                    ChatMessage.workspace_id == workspace_id,
+                    ChatMessage.conversation_id.in_(conversation_ids),
+                    ChatMessage.direction == "bot",
+                    ChatMessage.delivery_state == "failed",
+                )
+                .distinct()
+                .all()
+            )
+            if row and int(row[0] or 0) > 0
+        }
+
+    needle = query.strip().lower()
+    items: list[ChatThreadItem] = []
+    for conv in conversations:
+        conv_key = int(conv.id or 0)
+        meta = meta_by_conversation_id.get(conv_key)
+        profile = profile_by_customer_id.get(str(conv.customer_account_id or "").strip())
+        last_msg = last_msg_by_conversation_id.get(conv_key)
         name = (profile.first_name if profile and profile.first_name else "Покупатель").strip()
         username = (profile.username if profile and profile.username else "").strip()
         label = f"{name}{(' @' + username) if username else ''}"
@@ -2941,16 +2999,7 @@ def load_chat_threads(
         phone_verified = bool(meta.phone_verified) if meta else False
         ticket_no = meta.ticket_no if meta else None
         last_activity_id = last_msg.id if last_msg else conv.id
-        has_delivery_errors = bool(
-            db.query(ChatMessage)
-            .filter(
-                ChatMessage.workspace_id == workspace_id,
-                ChatMessage.conversation_id == conv.id,
-                ChatMessage.direction == "bot",
-                ChatMessage.delivery_state == "failed",
-            )
-            .first()
-        )
+        has_delivery_errors = conv_key in failed_conversation_ids
 
         searchable = " ".join(
             [
