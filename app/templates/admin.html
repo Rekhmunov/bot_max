@@ -152,11 +152,31 @@
       padding: 0;
       font-weight: 700;
     }
+    .card-title .card-toggle-btn {
+      width: 24px;
+      height: 24px;
+      margin-left: 6px;
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+    .card-head.is-collapsible {
+      cursor: pointer;
+    }
+    .card-head.is-collapsible:focus-visible {
+      outline: 2px solid #c3d7ff;
+      outline-offset: 2px;
+    }
     .card-toggle-btn:hover {
       background: #f5f7fc;
     }
     .card-collapsible-body[hidden] {
       display: none !important;
+    }
+    .card.is-collapsed {
+      padding-bottom: 0;
+    }
+    .card.is-collapsed .card-head {
+      margin-bottom: 0;
     }
     .subsection-title {
       margin: var(--space-2) 0 var(--space-1);
@@ -696,7 +716,7 @@
     <div class="top">
       <h1>
         {% if ui_mode == "app" %}
-          Настройки клиента
+          Настройки
         {% elif ui_mode == "manager" %}
           Быстрые ответы менеджера
         {% else %}
@@ -1274,19 +1294,22 @@
   </div>
   <script>
     (() => {
-      const isClientSettings = {{ "true" if ui_mode == "app" else "false" }};
-      if (!isClientSettings) return;
+      const settingsUiMode = "{{ ui_mode }}";
+      const isSettingsUi = settingsUiMode === "app" || settingsUiMode === "manager";
+      if (!isSettingsUi) return;
       const grid = document.querySelector(".grid");
       if (!(grid instanceof HTMLElement)) return;
 
-      const desiredOrder = [
-        "bot-settings",
-        "managers-status",
-        "business-hours",
-        "quick-replies",
-        "delivery-stats",
-        "tariff-limits",
-      ];
+      const desiredOrder = settingsUiMode === "manager"
+        ? ["quick-replies"]
+        : [
+            "bot-settings",
+            "managers-status",
+            "business-hours",
+            "quick-replies",
+            "delivery-stats",
+            "tariff-limits",
+          ];
       const orderedSections = [];
       desiredOrder.forEach((blockKey) => {
         const section = document.querySelector(`section[data-settings-block="${blockKey}"]`);
@@ -1300,11 +1323,12 @@
         grid.appendChild(section);
       });
 
+      let bodyIdSeq = 1;
       orderedSections.forEach((section) => {
         const header = section.querySelector(".card-head");
         if (!(header instanceof HTMLElement)) return;
-        const actions = header.querySelector(".card-head-actions");
-        if (!(actions instanceof HTMLElement)) return;
+        const title = header.querySelector(".card-title");
+        if (!(title instanceof HTMLElement)) return;
 
         let body = section.querySelector(":scope > .card-collapsible-body");
         if (!(body instanceof HTMLElement)) {
@@ -1316,24 +1340,56 @@
           section.appendChild(collapsible);
           body = collapsible;
         }
+        if (!body.id) {
+          body.id = `settings-collapsible-body-${bodyIdSeq}`;
+          bodyIdSeq += 1;
+        }
 
         const toggleBtn = document.createElement("button");
         toggleBtn.type = "button";
         toggleBtn.className = "card-toggle-btn";
         toggleBtn.setAttribute("aria-label", "Свернуть или развернуть блок");
-        actions.appendChild(toggleBtn);
+        toggleBtn.setAttribute("aria-controls", body.id);
+        title.appendChild(toggleBtn);
+        header.classList.add("is-collapsible");
+        header.tabIndex = 0;
+        header.setAttribute("role", "button");
+        header.setAttribute("aria-controls", body.id);
 
         const setExpanded = (expanded) => {
           body.hidden = !expanded;
+          section.classList.toggle("is-collapsed", !expanded);
           toggleBtn.textContent = expanded ? "▾" : "▸";
           toggleBtn.setAttribute("aria-expanded", expanded ? "true" : "false");
+          header.setAttribute("aria-expanded", expanded ? "true" : "false");
+        };
+        const toggleExpanded = () => {
+          const expandedNow = toggleBtn.getAttribute("aria-expanded") === "true";
+          setExpanded(!expandedNow);
         };
 
         // Client settings blocks are collapsed by default.
         setExpanded(false);
-        toggleBtn.addEventListener("click", () => {
-          const expandedNow = toggleBtn.getAttribute("aria-expanded") === "true";
-          setExpanded(!expandedNow);
+        toggleBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleExpanded();
+        });
+        header.addEventListener("click", (event) => {
+          const target = event.target;
+          if (
+            target instanceof HTMLElement
+            && target.closest("a, input, textarea, select, label, form")
+            && !target.closest(".card-toggle-btn")
+          ) {
+            return;
+          }
+          toggleExpanded();
+        });
+        header.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          toggleExpanded();
         });
       });
     })();
