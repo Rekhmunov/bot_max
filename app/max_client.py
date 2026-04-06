@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
+import asyncio
 import httpx
 
 from app.config import settings
@@ -70,34 +71,95 @@ class MaxClient:
     ) -> dict[str, Any]:
         if not self.token:
             return {"mock": True, "url": url}
-        try:
-            async with httpx.AsyncClient(timeout=60) as client:
-                response = await client.post(
-                    str(url),
-                    files={"data": (file_name, content, mime_type)},
-                    headers={"Authorization": self._headers().get("Authorization", "")},
-                )
-                try:
-                    data: Any = response.json()
-                except ValueError:
-                    data = {"raw": response.text}
-                if response.is_error:
-                    return {
-                        "success": False,
-                        "status_code": response.status_code,
-                        "endpoint": "upload_file",
-                        "response": data,
-                    }
-                if isinstance(data, dict):
-                    return data
-                return {"success": True, "data": data}
-        except httpx.HTTPError as exc:
-            return {
-                "success": False,
-                "endpoint": "upload_file",
-                "error": "http_error",
-                "details": str(exc),
-            }
+        auth_header = self._headers().get("Authorization", "")
+
+        async def _run_upload(
+            *,
+            method: str,
+            field_name: str | None = None,
+            use_auth: bool = False,
+        ) -> dict[str, Any]:
+            headers: dict[str, str] = {}
+            if use_auth and auth_header:
+                headers["Authorization"] = auth_header
+            if method == "put_raw":
+                headers.setdefault("Content-Type", mime_type)
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    if method == "post_multipart":
+                        if not field_name:
+                            return {"success": False, "error": "multipart_field_missing"}
+                        response = await client.post(
+                            str(url),
+                            files={field_name: (file_name, content, mime_type)},
+                            headers=headers,
+                        )
+                    elif method == "put_raw":
+                        response = await client.put(
+                            str(url),
+                            content=content,
+                            headers=headers,
+                        )
+                    elif method == "post_raw":
+                        response = await client.post(
+                            str(url),
+                            content=content,
+                            headers=headers,
+                        )
+                    else:
+                        return {"success": False, "error": "unsupported_upload_method"}
+                    try:
+                        data: Any = response.json()
+                    except ValueError:
+                        data = {"raw": response.text}
+                    if response.is_error:
+                        return {
+                            "success": False,
+                            "status_code": response.status_code,
+                            "endpoint": "upload_file",
+                            "response": data,
+                        }
+                    if isinstance(data, dict):
+                        return data
+                    return {"success": True, "data": data}
+            except httpx.HTTPError as exc:
+                return {
+                    "success": False,
+                    "endpoint": "upload_file",
+                    "error": "http_error",
+                    "details": str(exc),
+                }
+
+        # Provider/webhook setups differ between bots/workspaces:
+        # try multiple common upload variants before returning failure.
+        attempts: list[dict[str, str | bool | None]] = [
+            {"method": "post_multipart", "field_name": "data", "use_auth": True},
+            {"method": "post_multipart", "field_name": "file", "use_auth": True},
+            {"method": "post_multipart", "field_name": "data", "use_auth": False},
+            {"method": "post_multipart", "field_name": "file", "use_auth": False},
+            {"method": "put_raw", "field_name": None, "use_auth": False},
+            {"method": "post_raw", "field_name": None, "use_auth": False},
+        ]
+        last_error: dict[str, Any] = {"success": False, "error": "upload_attempts_exhausted"}
+        for attempt in attempts:
+            result = await _run_upload(
+                method=str(attempt["method"]),
+                field_name=(str(attempt["field_name"]) if attempt["field_name"] else None),
+                use_auth=bool(attempt["use_auth"]),
+            )
+            status_code_raw = result.get("status_code") if isinstance(result, dict) else None
+            try:
+                status_code = int(status_code_raw) if status_code_raw is not None else None
+            except (TypeError, ValueError):
+                status_code = None
+            # Return immediately on success.
+            if bool(result.get("success")) or (status_code is not None and status_code < 400):
+                return result
+            # Do not continue retries for auth failures.
+            if status_code in {401, 403}:
+                return result
+            last_error = result if isinstance(result, dict) else last_error
+        return last_error
 
     async def _put(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
         if not self.token:
@@ -235,9 +297,19 @@ class MaxClient:
         upload_info = await self._post("/uploads?type=image", {})
         if not isinstance(upload_info, dict):
             return {"success": False, "error": "invalid_upload_response"}
-        upload_url = str(upload_info.get("url") or "").strip()
+        upload_url = str(
+            upload_info.get("url")
+            or upload_info.get("upload_url")
+            or upload_info.get("link")
+            or ""
+        ).strip()
         if not upload_url:
             return {"success": False, "error": "upload_url_missing", "response": upload_info}
+        upload_info_token = str(upload_info.get("token") or "").strip()
+        if not upload_info_token:
+            payload_obj = upload_info.get("payload")
+            if isinstance(payload_obj, dict):
+                upload_info_token = str(payload_obj.get("token") or "").strip()
         mime = self._guess_mime_type(file_name)
         upload_result = await self._post_file(
             upload_url,
@@ -253,6 +325,8 @@ class MaxClient:
             payload_obj = upload_result.get("payload")
             if isinstance(payload_obj, dict):
                 token = str(payload_obj.get("token") or "").strip()
+        if not token and upload_info_token:
+            token = upload_info_token
         if not token:
             return {"success": False, "error": "upload_token_missing", "response": upload_result}
         return {
@@ -289,12 +363,24 @@ class MaxClient:
                 attachments.append(attachment)
         if not attachments:
             return {"success": False, "error": "image_attachments_missing"}
-        return await self.send_message(
-            chat_id=chat_id,
-            user_id=user_id,
-            text=(text if text else None),
-            attachments=attachments,
-        )
+        wait_seconds = 0.6
+        max_attempts = 4
+        for attempt_idx in range(max_attempts):
+            result = await self.send_message(
+                chat_id=chat_id,
+                user_id=user_id,
+                text=(text if text else None),
+                attachments=attachments,
+            )
+            response = result.get("response") if isinstance(result, dict) else {}
+            code = str(response.get("code") or "").strip().lower() if isinstance(response, dict) else ""
+            if code != "attachment.not.ready":
+                return result
+            if attempt_idx >= max_attempts - 1:
+                return result
+            await asyncio.sleep(wait_seconds)
+            wait_seconds = min(wait_seconds * 2.0, 5.0)
+        return {"success": False, "error": "attachment_not_ready_retry_exhausted"}
 
     async def edit_message(
         self,

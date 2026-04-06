@@ -2030,6 +2030,13 @@
       let selectedFiles = [];
       let fileViewUrls = [];
       let isUploadReady = true;
+      const canConstructDataTransfer = (() => {
+        try {
+          return typeof DataTransfer !== "undefined" && Boolean(new DataTransfer());
+        } catch (_) {
+          return false;
+        }
+      })();
 
       const isTouchLikeViewport = () => (
         window.matchMedia("(max-width: 900px), (hover: none) and (pointer: coarse)").matches
@@ -2066,6 +2073,7 @@
         mediaPreview.classList.remove("is-visible");
       };
       const syncNativeFiles = () => {
+        if (!canConstructDataTransfer) return;
         const dt = new DataTransfer();
         selectedFiles.forEach((file) => dt.items.add(file));
         photoInput.files = dt.files;
@@ -2090,12 +2098,14 @@
           removeBtn.type = "button";
           removeBtn.className = "compose-media-remove";
           removeBtn.textContent = "×";
-          removeBtn.addEventListener("click", () => {
-            selectedFiles.splice(idx, 1);
-            syncNativeFiles();
-            renderPreview();
-          });
-          chip.appendChild(removeBtn);
+          if (canConstructDataTransfer) {
+            removeBtn.addEventListener("click", () => {
+              selectedFiles.splice(idx, 1);
+              syncNativeFiles();
+              renderPreview();
+            });
+            chip.appendChild(removeBtn);
+          }
           mediaPreview.appendChild(chip);
         });
         mediaPreview.classList.add("is-visible");

@@ -1467,6 +1467,13 @@
         mediaSortGrid instanceof HTMLElement &&
         mediaOrderInput instanceof HTMLInputElement
       ) {
+        const canUseDataTransfer = () => {
+          try {
+            return typeof DataTransfer !== "undefined" && Boolean(new DataTransfer());
+          } catch (_) {
+            return false;
+          }
+        };
         let selectedEntries = [];
         let draggedToken = "";
 
@@ -1486,10 +1493,13 @@
         };
 
         const rebuildFileListAndPreview = () => {
-          const dt = new DataTransfer();
           mediaSortGrid.innerHTML = "";
+          let dt = null;
+          if (canUseDataTransfer()) {
+            dt = new DataTransfer();
+          }
           selectedEntries.forEach((entry, idx) => {
-            dt.items.add(entry.file);
+            if (dt) dt.items.add(entry.file);
             const chip = document.createElement("div");
             chip.className = "media-chip";
             chip.setAttribute("draggable", "true");
@@ -1527,9 +1537,11 @@
             });
             mediaSortGrid.appendChild(chip);
           });
-          filesInput.files = dt.files;
+          if (dt) {
+            filesInput.files = dt.files;
+          }
           updateOrderInput();
-          mediaSortWrap.hidden = selectedEntries.length <= 1;
+          mediaSortWrap.hidden = selectedEntries.length === 0;
         };
 
         filesInput.addEventListener("change", () => {
@@ -1586,7 +1598,7 @@
                   }
                   mediaSortGrid.appendChild(chip);
                 });
-                mediaSortWrap.hidden = rowPreviews.length <= 1;
+                mediaSortWrap.hidden = false;
               }
             }
           }
