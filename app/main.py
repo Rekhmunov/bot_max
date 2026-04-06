@@ -75,8 +75,14 @@ from app.manager_bridge import (
     mark_conversation_messages_read_by_customer,
     handle_customer_event,
     handle_manager_message,
+    backfill_chat_message_media_assets,
+    backfill_quick_reply_media_assets,
     process_outbox_queue,
     run_storage_cleanup_for_all_workspaces,
+    get_message_media_urls,
+    get_quick_reply_media_paths,
+    ensure_media_asset_for_path,
+    sync_quick_reply_media_asset_links,
     remove_chat_message,
     retry_failed_outbox_message,
     replace_conversation_folder_links,
@@ -110,6 +116,7 @@ from app.models import (
     MessageTemplate,
     OutboxMessage,
     PlatformSettings,
+    QuickReplyMediaAssetLink,
     QuickReply,
     QuickReplyMedia,
     ServiceUser,
@@ -1829,6 +1836,11 @@ async def _save_quick_reply_media_files(
             media_path=f"/static/uploads/{safe_name}",
             sort_order=order_by_name.get(upload.filename, next_order),
         )
+        ensure_media_asset_for_path(
+            db,
+            workspace_id=workspace_id,
+            media_path=media.media_path,
+        )
         next_order += 1
         db.add(media)
     db.commit()
@@ -1837,6 +1849,11 @@ async def _save_quick_reply_media_files(
 def _delete_quick_reply_media_files(db: Session, *, reply_id: int) -> None:
     media_rows = _quick_reply_media_rows(db, reply_id)
     for media in media_rows:
+        remove_quick_reply_media_asset_link(
+            db,
+            quick_reply_id=int(reply_id),
+            media_path=str(media.media_path or "").strip(),
+        )
         relative_static_path = (media.media_path or "").removeprefix("/static/")
         if not relative_static_path:
             continue
@@ -2301,6 +2318,10 @@ async def _outbox_worker_loop() -> None:
                 if should_run_cleanup:
                     run_storage_cleanup_for_all_workspaces(db)
                     _storage_cleanup_last_run_at = now_utc
+                # P1 backfill runs in small batches during normal worker cycles
+                # to avoid downtime and reduce migration risk.
+                backfill_chat_message_media_assets(db, limit=250)
+                backfill_quick_reply_media_assets(db, limit=250)
         except Exception:
             # Keep worker alive even if one cycle fails.
             pass
@@ -7212,16 +7233,7 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
     text_value = str(item.text or "")
     delivery_state_value = str(item.delivery_state or "sent")
     delivery_next_retry_at_raw = getattr(item, "delivery_next_retry_at", None)
-    raw_image_urls_json = str(getattr(item, "image_urls_json", "[]") or "[]")
-    image_urls: list[str] = []
-    try:
-        parsed_urls = json.loads(raw_image_urls_json)
-        if isinstance(parsed_urls, list):
-            image_urls = [str(entry).strip() for entry in parsed_urls if str(entry).strip()]
-    except Exception:
-        image_urls = []
-    if not image_urls and str(getattr(item, "image_url", "") or "").strip():
-        image_urls = [str(getattr(item, "image_url", "") or "").strip()]
+    image_urls = get_message_media_urls(item)
     is_scheduled_message = bool(getattr(item, "is_scheduled_message", False))
     is_scheduled_pending = bool(
         delivery_state_value == "queued"

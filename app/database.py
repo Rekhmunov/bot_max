@@ -213,6 +213,126 @@ def _ensure_lightweight_migrations() -> None:
                 "ON storage_cleanup_runs (started_at)"
             )
         )
+
+        if "media_assets" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE media_assets ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "workspace_id INTEGER NOT NULL, "
+                    "storage_provider VARCHAR(32) NOT NULL DEFAULT 'local', "
+                    "storage_key VARCHAR(1024) NOT NULL, "
+                    "public_url VARCHAR(2048) DEFAULT '', "
+                    "mime_type VARCHAR(128) DEFAULT '', "
+                    "byte_size INTEGER NOT NULL DEFAULT 0, "
+                    "width INTEGER, "
+                    "height INTEGER, "
+                    "sha256 VARCHAR(64) DEFAULT '', "
+                    "is_deleted INTEGER NOT NULL DEFAULT 0, "
+                    "deleted_at DATETIME, "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+                    "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_media_assets_workspace "
+                "ON media_assets (workspace_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_media_assets_sha256 "
+                "ON media_assets (sha256)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_media_assets_deleted "
+                "ON media_assets (is_deleted, deleted_at)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_media_assets_workspace_storage_key "
+                "ON media_assets (workspace_id, storage_provider, storage_key)"
+            )
+        )
+
+        if "chat_message_media" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE chat_message_media ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "workspace_id INTEGER NOT NULL, "
+                    "chat_message_id INTEGER NOT NULL, "
+                    "media_asset_id INTEGER NOT NULL, "
+                    "sort_order INTEGER NOT NULL DEFAULT 0, "
+                    "role VARCHAR(32) NOT NULL DEFAULT 'image', "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_chat_message_media_workspace "
+                "ON chat_message_media (workspace_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_chat_message_media_message "
+                "ON chat_message_media (chat_message_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_chat_message_media_asset "
+                "ON chat_message_media (media_asset_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_message_media_unique "
+                "ON chat_message_media (chat_message_id, media_asset_id, role)"
+            )
+        )
+
+        if "quick_reply_media_asset_links" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE quick_reply_media_asset_links ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "workspace_id INTEGER NOT NULL, "
+                    "quick_reply_id INTEGER NOT NULL, "
+                    "media_asset_id INTEGER NOT NULL, "
+                    "sort_order INTEGER NOT NULL DEFAULT 0, "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_qr_media_links_workspace "
+                "ON quick_reply_media_asset_links (workspace_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_qr_media_links_reply "
+                "ON quick_reply_media_asset_links (quick_reply_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_qr_media_links_asset "
+                "ON quick_reply_media_asset_links (media_asset_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_qr_media_links_unique "
+                "ON quick_reply_media_asset_links (quick_reply_id, media_asset_id)"
+            )
+        )
         conn.execute(
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ix_workspace_business_hours_workspace_id "

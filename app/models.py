@@ -183,6 +183,51 @@ class QuickReplyMedia(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
+class MediaAsset(Base):
+    __tablename__ = "media_assets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True, default=1)
+    storage_provider: Mapped[str] = mapped_column(String(32), default="local", index=True)
+    storage_key: Mapped[str] = mapped_column(String(1024))
+    public_url: Mapped[str] = mapped_column(String(2048), default="")
+    mime_type: Mapped[str] = mapped_column(String(128), default="")
+    byte_size: Mapped[int] = mapped_column(Integer, default=0)
+    width: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    height: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sha256: Mapped[str] = mapped_column(String(64), default="", index=True)
+    is_deleted: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    ref_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_accessed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    storage_tier: Mapped[str] = mapped_column(String(32), default="hot")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class ChatMessageMedia(Base):
+    __tablename__ = "chat_message_media"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True, default=1)
+    chat_message_id: Mapped[int] = mapped_column(ForeignKey("chat_messages.id"), index=True)
+    media_asset_id: Mapped[int] = mapped_column(ForeignKey("media_assets.id"), index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    role: Mapped[str] = mapped_column(String(32), default="image")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class QuickReplyMediaAssetLink(Base):
+    __tablename__ = "quick_reply_media_asset_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True, default=1)
+    quick_reply_id: Mapped[int] = mapped_column(ForeignKey("quick_replies.id"), index=True)
+    media_asset_id: Mapped[int] = mapped_column(ForeignKey("media_assets.id"), index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 
@@ -490,5 +535,31 @@ Index(
 Index(
     "ux_workspace_retention_policies_workspace",
     WorkspaceRetentionPolicy.workspace_id,
+    unique=True,
+)
+Index(
+    "ux_media_assets_workspace_storage",
+    MediaAsset.workspace_id,
+    MediaAsset.storage_provider,
+    MediaAsset.storage_key,
+    unique=True,
+)
+Index(
+    "ix_media_assets_workspace_deleted",
+    MediaAsset.workspace_id,
+    MediaAsset.is_deleted,
+    MediaAsset.deleted_at,
+)
+Index(
+    "ux_chat_message_media_message_asset_role",
+    ChatMessageMedia.chat_message_id,
+    ChatMessageMedia.media_asset_id,
+    ChatMessageMedia.role,
+    unique=True,
+)
+Index(
+    "ux_quick_reply_media_asset_links_reply_asset",
+    QuickReplyMediaAssetLink.quick_reply_id,
+    QuickReplyMediaAssetLink.media_asset_id,
     unique=True,
 )

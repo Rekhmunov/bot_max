@@ -23,6 +23,7 @@ from app.models import (
     BotSettings,
     ChatMessage,
     ChatFolder,
+    ChatMessageMedia,
     Conversation,
     ConversationFolderLink,
     ConversationPin,
@@ -35,7 +36,9 @@ from app.models import (
     OutboxMessage,
     QuickReply,
     QuickReplyMedia,
+    QuickReplyMediaAssetLink,
     ServiceUser,
+    MediaAsset,
     Workspace,
     StorageCleanupRun,
     WorkspaceRetentionPolicy,
@@ -970,6 +973,141 @@ def _resolve_local_static_media_file(value: str | None) -> Path | None:
     return file_path if file_path.exists() else None
 
 
+def _mime_from_extension(path_value: str | None) -> str:
+    ext = Path(str(path_value or "")).suffix.lower()
+    if ext in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if ext == ".png":
+        return "image/png"
+    if ext == ".gif":
+        return "image/gif"
+    if ext == ".webp":
+        return "image/webp"
+    if ext == ".bmp":
+        return "image/bmp"
+    return "application/octet-stream"
+
+
+def _compute_sha256(path: Path) -> str:
+    import hashlib
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _get_or_create_media_asset(
+    db: Session,
+    *,
+    workspace_id: int,
+    media_path: str,
+) -> MediaAsset | None:
+    normalized = str(media_path or "").strip()
+    if not normalized.startswith("/static/"):
+        return None
+    file_path = _resolve_local_static_media_file(normalized)
+    if file_path is None or not file_path.exists():
+        return None
+    existing = (
+        db.query(MediaAsset)
+        .filter(
+            MediaAsset.workspace_id == int(workspace_id),
+            MediaAsset.storage_provider == "local",
+            MediaAsset.storage_key == normalized.removeprefix("/static/"),
+        )
+        .first()
+    )
+    if existing is not None:
+        return existing
+    try:
+        byte_size = int(file_path.stat().st_size)
+    except Exception:
+        byte_size = 0
+    asset = MediaAsset(
+        workspace_id=int(workspace_id),
+        storage_provider="local",
+        storage_key=normalized.removeprefix("/static/"),
+        public_url=normalized,
+        mime_type=_mime_from_extension(normalized),
+        byte_size=byte_size,
+        sha256=_compute_sha256(file_path),
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    return asset
+
+
+def _link_chat_message_media_assets(
+    db: Session,
+    *,
+    chat_message_id: int,
+    workspace_id: int,
+    media_paths: list[str],
+) -> None:
+    normalized_paths = [str(item).strip() for item in media_paths if str(item).strip()]
+    if not normalized_paths:
+        return
+    for idx, media_path in enumerate(normalized_paths):
+        asset = _get_or_create_media_asset(
+            db,
+            workspace_id=int(workspace_id),
+            media_path=media_path,
+        )
+        if asset is None:
+            continue
+        exists = (
+            db.query(ChatMessageMedia.id)
+            .filter(
+                ChatMessageMedia.workspace_id == int(workspace_id),
+                ChatMessageMedia.chat_message_id == int(chat_message_id),
+                ChatMessageMedia.media_asset_id == int(asset.id),
+                ChatMessageMedia.role == "image",
+            )
+            .first()
+            is not None
+        )
+        if exists:
+            continue
+        db.add(
+            ChatMessageMedia(
+                workspace_id=int(workspace_id),
+                chat_message_id=int(chat_message_id),
+                media_asset_id=int(asset.id),
+                sort_order=int(idx),
+                role="image",
+            )
+        )
+    db.commit()
+
+
+def _media_paths_from_asset_links(db: Session, *, chat_message_id: int, workspace_id: int) -> list[str]:
+    links = (
+        db.query(ChatMessageMedia, MediaAsset)
+        .join(MediaAsset, MediaAsset.id == ChatMessageMedia.media_asset_id)
+        .filter(
+            ChatMessageMedia.workspace_id == int(workspace_id),
+            ChatMessageMedia.chat_message_id == int(chat_message_id),
+        )
+        .order_by(ChatMessageMedia.sort_order.asc(), ChatMessageMedia.id.asc())
+        .all()
+    )
+    result: list[str] = []
+    for link_row, asset in links:
+        raw = str(asset.public_url or "").strip()
+        if not raw:
+            key = str(asset.storage_key or "").strip()
+            if key:
+                raw = f"/static/{key}"
+        if raw:
+            result.append(raw)
+    return result
+
+
 def _encode_image_bytes_for_payload(content: bytes) -> str:
     if not isinstance(content, (bytes, bytearray)):
         return ""
@@ -991,6 +1129,17 @@ def _decode_image_bytes_from_payload(value: object) -> bytes:
 
 
 def _chat_message_media_paths(item: ChatMessage) -> list[str]:
+    linked_paths = _media_paths_from_asset_links(
+        db=Session.object_session(item),  # type: ignore[arg-type]
+        chat_message_id=int(getattr(item, "id", 0) or 0),
+        workspace_id=int(getattr(item, "workspace_id", DEFAULT_WORKSPACE_ID) or DEFAULT_WORKSPACE_ID),
+    ) if Session.object_session(item) is not None and int(getattr(item, "id", 0) or 0) > 0 else []
+    if linked_paths:
+        normalized_linked: list[str] = []
+        for entry in linked_paths:
+            local = _to_local_static_media_path(entry)
+            normalized_linked.append(local or entry)
+        return normalized_linked
     urls = _parse_image_urls_json(
         getattr(item, "image_urls_json", None),
         fallback_image_url=getattr(item, "image_url", None),
@@ -1941,6 +2090,14 @@ def _store_chat_message(
     db.add(item)
     db.commit()
     db.refresh(item)
+    linked_media_paths = _chat_message_media_paths(item)
+    if linked_media_paths:
+        _link_chat_message_media_assets(
+            db,
+            chat_message_id=int(item.id),
+            workspace_id=int(item.workspace_id or DEFAULT_WORKSPACE_ID),
+            media_paths=linked_media_paths,
+        )
     return item
 
 
@@ -3784,6 +3941,359 @@ def _retention_policy_for_workspace(db: Session, *, workspace_id: int) -> Worksp
     return policy
 
 
+def _normalize_storage_key(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("/static/"):
+        return raw.removeprefix("/static/")
+    return raw
+
+
+def _guess_media_mime_type_from_path(path_value: str | None) -> str:
+    ext = Path(str(path_value or "").strip()).suffix.lower()
+    mapping = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
+    }
+    return mapping.get(ext, "")
+
+
+def _resolve_local_media_info_from_path(path_value: str | None) -> tuple[str, int]:
+    media_file = _resolve_local_static_media_file(path_value)
+    if media_file is None:
+        return "", 0
+    try:
+        return str(media_file), int(media_file.stat().st_size or 0)
+    except Exception:
+        return str(media_file), 0
+
+
+def _upsert_media_asset(
+    db: Session,
+    *,
+    workspace_id: int,
+    source_url: str,
+) -> MediaAsset:
+    normalized_url = str(source_url or "").strip()
+    if not normalized_url:
+        normalized_url = "unknown://empty"
+    storage_key = _normalize_storage_key(normalized_url)
+    provider = "local" if storage_key.startswith("uploads/") else "external"
+    existing = (
+        db.query(MediaAsset)
+        .filter(
+            MediaAsset.workspace_id == int(workspace_id),
+            MediaAsset.storage_provider == provider,
+            MediaAsset.storage_key == storage_key,
+        )
+        .first()
+    )
+    if existing is not None:
+        if normalized_url and not str(existing.public_url or "").strip():
+            existing.public_url = normalized_url
+            db.add(existing)
+            db.commit()
+            db.refresh(existing)
+        return existing
+
+    local_file_path, local_size = _resolve_local_media_info_from_path(normalized_url)
+    mime_type = _guess_media_mime_type_from_path(local_file_path or normalized_url)
+    asset = MediaAsset(
+        workspace_id=int(workspace_id),
+        storage_provider=provider,
+        storage_key=storage_key or normalized_url,
+        public_url=normalized_url,
+        mime_type=mime_type,
+        byte_size=int(local_size or 0),
+    )
+    db.add(asset)
+    db.commit()
+    db.refresh(asset)
+    return asset
+
+
+def _sync_chat_message_media_links(
+    db: Session,
+    *,
+    chat_message_id: int,
+    workspace_id: int,
+    image_urls: list[str] | None = None,
+) -> None:
+    urls: list[str]
+    if image_urls is not None:
+        urls = [str(item).strip() for item in image_urls if str(item).strip()]
+    else:
+        row = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.id == int(chat_message_id))
+            .first()
+        )
+        if row is None:
+            return
+        urls = _chat_message_media_paths(row)
+    if not urls:
+        return
+
+    existing_links = (
+        db.query(ChatMessageMedia)
+        .filter(ChatMessageMedia.chat_message_id == int(chat_message_id))
+        .all()
+    )
+    existing_by_asset_id = {int(link.media_asset_id): link for link in existing_links}
+    desired_asset_ids: list[int] = []
+    changed = False
+    for idx, url in enumerate(urls):
+        asset = _upsert_media_asset(
+            db,
+            workspace_id=int(workspace_id),
+            source_url=url,
+        )
+        asset_id = int(asset.id)
+        desired_asset_ids.append(asset_id)
+        link = existing_by_asset_id.get(asset_id)
+        if link is None:
+            db.add(
+                ChatMessageMedia(
+                    workspace_id=int(workspace_id),
+                    chat_message_id=int(chat_message_id),
+                    media_asset_id=asset_id,
+                    sort_order=int(idx),
+                    role="image",
+                )
+            )
+            changed = True
+        elif int(link.sort_order or 0) != int(idx):
+            link.sort_order = int(idx)
+            db.add(link)
+            changed = True
+
+    desired_asset_ids_set = set(desired_asset_ids)
+    for link in existing_links:
+        if int(link.media_asset_id) not in desired_asset_ids_set:
+            db.delete(link)
+            changed = True
+
+    if changed:
+        db.commit()
+
+
+def _sync_quick_reply_media_asset_links(
+    db: Session,
+    *,
+    quick_reply_id: int,
+    workspace_id: int,
+    media_paths: list[str] | None = None,
+) -> None:
+    if media_paths is None:
+        media_rows = (
+            db.query(QuickReplyMedia)
+            .filter(QuickReplyMedia.quick_reply_id == int(quick_reply_id))
+            .order_by(QuickReplyMedia.sort_order.asc(), QuickReplyMedia.id.asc())
+            .all()
+        )
+        paths = [str(row.media_path or "").strip() for row in media_rows if str(row.media_path or "").strip()]
+    else:
+        paths = [str(item).strip() for item in media_paths if str(item).strip()]
+    existing_links = (
+        db.query(QuickReplyMediaAssetLink)
+        .filter(QuickReplyMediaAssetLink.quick_reply_id == int(quick_reply_id))
+        .all()
+    )
+    existing_by_asset_id = {int(link.media_asset_id): link for link in existing_links}
+    desired_asset_ids: list[int] = []
+    changed = False
+    for idx, media_path in enumerate(paths):
+        asset = _upsert_media_asset(
+            db,
+            workspace_id=int(workspace_id),
+            source_url=media_path,
+        )
+        asset_id = int(asset.id)
+        desired_asset_ids.append(asset_id)
+        link = existing_by_asset_id.get(asset_id)
+        if link is None:
+            db.add(
+                QuickReplyMediaAssetLink(
+                    workspace_id=int(workspace_id),
+                    quick_reply_id=int(quick_reply_id),
+                    media_asset_id=asset_id,
+                    sort_order=int(idx),
+                )
+            )
+            changed = True
+        elif int(link.sort_order or 0) != int(idx):
+            link.sort_order = int(idx)
+            db.add(link)
+            changed = True
+    desired_set = set(desired_asset_ids)
+    for link in existing_links:
+        if int(link.media_asset_id) not in desired_set:
+            db.delete(link)
+            changed = True
+    if changed:
+        db.commit()
+
+
+def list_chat_message_media_urls(
+    db: Session,
+    *,
+    chat_message_id: int,
+) -> list[str]:
+    links = (
+        db.query(ChatMessageMedia)
+        .join(MediaAsset, MediaAsset.id == ChatMessageMedia.media_asset_id)
+        .filter(ChatMessageMedia.chat_message_id == int(chat_message_id))
+        .order_by(ChatMessageMedia.sort_order.asc(), ChatMessageMedia.id.asc())
+        .all()
+    )
+    urls: list[str] = []
+    for link in links:
+        asset = (
+            db.query(MediaAsset)
+            .filter(MediaAsset.id == int(link.media_asset_id))
+            .first()
+        )
+        if asset is None:
+            continue
+        public_url = str(asset.public_url or "").strip()
+        storage_key = str(asset.storage_key or "").strip()
+        if public_url:
+            urls.append(public_url)
+            continue
+        if storage_key.startswith("uploads/"):
+            urls.append(f"/static/{storage_key}")
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        if url in seen:
+            continue
+        seen.add(url)
+        deduped.append(url)
+    return deduped
+
+
+def get_message_media_urls(item: ChatMessage) -> list[str]:
+    """Read message media from normalized links with legacy fallback."""
+    message_id = int(getattr(item, "id", 0) or 0)
+    if message_id > 0:
+        try:
+            from app.database import SessionLocal
+
+            with SessionLocal() as local_db:
+                linked_urls = list_chat_message_media_urls(
+                    local_db,
+                    chat_message_id=message_id,
+                )
+                if linked_urls:
+                    return linked_urls
+        except Exception:
+            pass
+    return _parse_image_urls_json(
+        getattr(item, "image_urls_json", None),
+        fallback_image_url=getattr(item, "image_url", None),
+    )
+
+
+def get_quick_reply_media_paths(db: Session, *, quick_reply_id: int) -> list[str]:
+    links = (
+        db.query(QuickReplyMediaAssetLink)
+        .join(MediaAsset, MediaAsset.id == QuickReplyMediaAssetLink.media_asset_id)
+        .filter(QuickReplyMediaAssetLink.quick_reply_id == int(quick_reply_id))
+        .order_by(QuickReplyMediaAssetLink.sort_order.asc(), QuickReplyMediaAssetLink.id.asc())
+        .all()
+    )
+    paths: list[str] = []
+    for link in links:
+        asset = (
+            db.query(MediaAsset)
+            .filter(MediaAsset.id == int(link.media_asset_id))
+            .first()
+        )
+        if asset is None:
+            continue
+        public_url = str(asset.public_url or "").strip()
+        storage_key = str(asset.storage_key or "").strip()
+        if public_url:
+            paths.append(public_url)
+            continue
+        if storage_key.startswith("uploads/"):
+            paths.append(f"/static/{storage_key}")
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for value in paths:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
+def ensure_media_asset_for_path(
+    db: Session,
+    *,
+    workspace_id: int,
+    media_path: str,
+) -> None:
+    path_value = str(media_path or "").strip()
+    if not path_value:
+        return
+    _upsert_media_asset(
+        db,
+        workspace_id=int(workspace_id),
+        source_url=path_value,
+    )
+
+
+def sync_quick_reply_media_asset_links(
+    db: Session,
+    *,
+    quick_reply_id: int,
+    workspace_id: int,
+) -> None:
+    _sync_quick_reply_media_asset_links(
+        db,
+        quick_reply_id=int(quick_reply_id),
+        workspace_id=int(workspace_id),
+    )
+
+
+def remove_quick_reply_media_asset_link(
+    db: Session,
+    *,
+    quick_reply_id: int,
+    media_path: str,
+) -> None:
+    path_value = str(media_path or "").strip()
+    if not path_value:
+        return
+    storage_key = _normalize_storage_key(path_value)
+    provider = "local" if storage_key.startswith("uploads/") else "external"
+    asset = (
+        db.query(MediaAsset)
+        .filter(
+            MediaAsset.storage_provider == provider,
+            MediaAsset.storage_key == storage_key,
+        )
+        .first()
+    )
+    if asset is None:
+        return
+    (
+        db.query(QuickReplyMediaAssetLink)
+        .filter(
+            QuickReplyMediaAssetLink.quick_reply_id == int(quick_reply_id),
+            QuickReplyMediaAssetLink.media_asset_id == int(asset.id),
+        )
+        .delete(synchronize_session=False)
+    )
+    db.commit()
+
+
 def _delete_rows_with_limit(query, *, model_id_column, limit: int) -> int:
     row_ids = [
         int(row[0])
@@ -3965,6 +4475,89 @@ def run_storage_cleanup_for_all_workspaces(db: Session) -> dict[str, int]:
         db.add(run)
         db.commit()
         raise
+
+
+def backfill_chat_message_media_assets(
+    db: Session,
+    *,
+    workspace_id: int | None = None,
+    limit: int = 500,
+) -> dict[str, int]:
+    query = db.query(ChatMessage)
+    if workspace_id is not None:
+        query = query.filter(ChatMessage.workspace_id == int(workspace_id))
+    rows = query.order_by(ChatMessage.id.asc()).limit(max(1, int(limit))).all()
+    processed = 0
+    linked = 0
+    for row in rows:
+        processed += 1
+        urls = _parse_image_urls_json(
+            getattr(row, "image_urls_json", None),
+            fallback_image_url=getattr(row, "image_url", None),
+        )
+        if not urls:
+            continue
+        linked += _ensure_chat_message_media_links(
+            db,
+            chat_message=row,
+            urls=urls,
+        )
+    if linked:
+        db.commit()
+    return {"processed": int(processed), "linked": int(linked)}
+
+
+def backfill_quick_reply_media_assets(
+    db: Session,
+    *,
+    workspace_id: int | None = None,
+    limit: int = 500,
+) -> dict[str, int]:
+    query = db.query(QuickReplyMedia)
+    if workspace_id is not None:
+        query = query.filter(QuickReplyMedia.workspace_id == int(workspace_id))
+    rows = query.order_by(QuickReplyMedia.id.asc()).limit(max(1, int(limit))).all()
+    processed = 0
+    linked = 0
+    for row in rows:
+        processed += 1
+        media_path = str(row.media_path or "").strip()
+        if not media_path:
+            continue
+        rel = media_path.removeprefix("/static/")
+        storage_key = f"local:{rel}" if rel else f"url:{media_path}"
+        workspace_value = int(getattr(row, "workspace_id", 0) or DEFAULT_WORKSPACE_ID)
+        asset = _upsert_media_asset(
+            db,
+            workspace_id=workspace_value,
+            storage_key=storage_key,
+            public_url=media_path,
+            mime_type="image/*",
+            byte_size=0,
+            sha256="",
+        )
+        exists = (
+            db.query(QuickReplyMediaAssetLink.id)
+            .filter(
+                QuickReplyMediaAssetLink.workspace_id == workspace_value,
+                QuickReplyMediaAssetLink.quick_reply_media_id == int(row.id),
+                QuickReplyMediaAssetLink.media_asset_id == int(asset.id),
+            )
+            .first()
+        )
+        if exists:
+            continue
+        db.add(
+            QuickReplyMediaAssetLink(
+                workspace_id=workspace_value,
+                quick_reply_media_id=int(row.id),
+                media_asset_id=int(asset.id),
+            )
+        )
+        linked += 1
+    if linked:
+        db.commit()
+    return {"processed": int(processed), "linked": int(linked)}
 
 
 def get_delivery_metrics(db: Session, *, workspace_id: int = DEFAULT_WORKSPACE_ID) -> DeliveryStats:
