@@ -7424,6 +7424,7 @@ async def _render_chat_workspace(
         "threads": threads,
         "active_thread": active_thread,
         "messages": messages,
+        "now_utc": datetime.utcnow(),
         "query": q,
         "folder_filter": folder_id,
         "message": op_message,

@@ -382,7 +382,38 @@ class MaxWebhookEvent(BaseModel):
             elif chat_id is not None and sender_id is not None:
                 update_type = "message_created"
 
-        if chat_id is None or sender_id is None:
+        is_read_event = (str(update_type or "").strip().lower() == "message_read")
+        if is_read_event:
+            # Read receipts from providers can be partial: keep the event parseable
+            # even when one side identifier is omitted.
+            if chat_id is None:
+                chat_id = _pick_first(
+                    recipient.get("chat_id"),
+                    recipient.get("chatId"),
+                    chat_node.get("chat_id"),
+                    chat_node.get("chatId"),
+                    chat_node.get("id"),
+                    body_root.get("chat_id"),
+                    body_root.get("chatId"),
+                    "",
+                )
+            if sender_id is None:
+                sender_id = _pick_first(
+                    sender.get("user_id"),
+                    sender.get("id"),
+                    user.get("user_id"),
+                    user.get("userId"),
+                    user.get("id"),
+                    body_root.get("sender_id"),
+                    body_root.get("senderId"),
+                    payload.get("sender_id"),
+                    payload.get("senderId"),
+                    "",
+                )
+
+        if not is_read_event and (chat_id is None or sender_id is None):
+            return None
+        if is_read_event and chat_id is None and sender_id is None:
             return None
 
         event_uid = _pick_first(
@@ -399,8 +430,8 @@ class MaxWebhookEvent(BaseModel):
             )
 
         return cls(
-            chat_id=str(chat_id),
-            sender_id=str(sender_id),
+            chat_id=str(chat_id or ""),
+            sender_id=str(sender_id or ""),
             text=str(text or ""),
             update_type=str(update_type) if update_type is not None else None,
             chat_type=_pick_first(recipient.get("chat_type"), recipient.get("type")),

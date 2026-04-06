@@ -598,6 +598,48 @@ def run() -> None:
             assert sent_after_read is not None
             assert bool(getattr(sent_after_read, "is_read_by_customer", False)) is True
             assert getattr(sent_after_read, "read_at", None) is not None
+            second_sent_probe = ChatMessage(
+                workspace_id=1,
+                conversation_id=started_conv_id,
+                direction="bot",
+                source="bot_system",
+                text="read probe missing sender",
+                max_message_mid=f"read_mid_{uuid4().hex[:8]}",
+                delivery_state="sent",
+                delivery_error="",
+                delivery_retry_count=0,
+                is_read_by_customer=False,
+            )
+            db.add(second_sent_probe)
+            db.commit()
+            db.refresh(second_sent_probe)
+            second_probe_id = int(second_sent_probe.id)
+            second_probe_mid = str(second_sent_probe.max_message_mid or "")
+
+        # Read receipts can arrive without sender_id in some provider payloads.
+        webhook_customer_read_missing_sender = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "updateType": "opened",
+                "chat_id": chat_id,
+                "message": {
+                    "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                    "body": {"last_read_mid": second_probe_mid},
+                },
+            },
+        )
+        assert webhook_customer_read_missing_sender.status_code == 200
+        assert webhook_customer_read_missing_sender.json().get("flow") == "message_read"
+        assert int(webhook_customer_read_missing_sender.json().get("marked_read_count") or 0) >= 1
+        with SessionLocal() as db:
+            second_probe_after_read = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.id == second_probe_id)
+                .first()
+            )
+            assert second_probe_after_read is not None
+            assert bool(getattr(second_probe_after_read, "is_read_by_customer", False)) is True
+            assert getattr(second_probe_after_read, "read_at", None) is not None
 
         webhook_customer_callback_style = client.post(
             "/webhook/max/ws1key",
@@ -1495,6 +1537,13 @@ def run() -> None:
             assert outbox_scheduled is not None
             assert outbox_scheduled.state in ("queued", "failed")
             assert outbox_scheduled.next_retry_at > outbox_scheduled.created_at
+        scheduled_chat_page = client.get(
+            f"/admin/chats?conversation_id={conversation_id}",
+            cookies=cookies,
+        )
+        assert scheduled_chat_page.status_code == 200
+        assert "scheduled message" in scheduled_chat_page.text
+        assert "Отправится" in scheduled_chat_page.text
 
         mobile_list_page = client.get("/admin/chats", cookies=cookies)
         assert mobile_list_page.status_code == 200
