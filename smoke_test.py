@@ -460,6 +460,34 @@ def run() -> None:
         )
         assert webhook_customer_start.status_code == 200
         assert webhook_customer_start.json().get("flow") == "start_prompt"
+        # Regression: fallback "Start / Начать" callback after prestart must switch
+        # flow to start_prompt (and not loop in prestart).
+        fallback_chat_id = f"chat_fb_{uuid4().hex[:8]}"
+        fallback_sender_id = f"buyer_fb_{uuid4().hex[:8]}"
+        webhook_customer_prestart = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_created",
+                "chat_id": fallback_chat_id,
+                "sender_id": fallback_sender_id,
+                "text": "Привет",
+            },
+        )
+        assert webhook_customer_prestart.status_code == 200
+        assert webhook_customer_prestart.json().get("flow") == "prestart"
+        webhook_customer_start_fallback = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_callback",
+                "message": {
+                    "sender": {"user_id": fallback_sender_id},
+                    "recipient": {"chat_id": fallback_chat_id, "chat_type": "dialog"},
+                    "callback": {"payload": "customer:start_fallback"},
+                },
+            },
+        )
+        assert webhook_customer_start_fallback.status_code == 200
+        assert webhook_customer_start_fallback.json().get("flow") == "start_prompt"
         with SessionLocal() as db:
             started_conv = (
                 db.query(Conversation)
