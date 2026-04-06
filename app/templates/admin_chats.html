@@ -1545,16 +1545,17 @@
                 {% endif %}
                 {% if msg.direction == "bot" %}
                   {% set state = (msg.delivery_state or "sent")|lower %}
-                  {% set is_scheduled_pending = (msg.is_scheduled_pending if msg.is_scheduled_pending is defined else false) %}
+                  {% set scheduled_at = (msg.delivery_next_retry_at if msg.delivery_next_retry_at is defined else none) %}
+                  {% set is_scheduled_pending = (state == "queued" and scheduled_at and now_utc and scheduled_at > now_utc) %}
                   <div class="bubble-tail">
-                    {% if is_scheduled_pending and msg.delivery_next_retry_at %}
+                    {% if is_scheduled_pending and scheduled_at %}
                       <span
                         class="scheduled-label"
                         title="Отложенная отправка"
                         aria-label="Отложенная отправка"
-                        data-scheduled-at="{{ msg.delivery_next_retry_at }}"
+                        data-scheduled-at="{{ scheduled_at }}"
                       >
-                        Отправится {{ msg.delivery_next_retry_at|to_local("%d.%m.%Y %H:%M") }}
+                        Отправится {{ scheduled_at|to_local("%d.%m.%Y %H:%M") }}
                       </span>
                     {% else %}
                       {% if state == "failed" %}
