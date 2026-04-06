@@ -65,6 +65,10 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE chat_messages ADD COLUMN delivery_state VARCHAR(20) DEFAULT 'sent'")
                 )
+            if "is_scheduled_message" not in chat_columns:
+                conn.execute(
+                    text("ALTER TABLE chat_messages ADD COLUMN is_scheduled_message INTEGER DEFAULT 0")
+                )
             if "delivery_error" not in chat_columns:
                 conn.execute(text("ALTER TABLE chat_messages ADD COLUMN delivery_error TEXT DEFAULT ''"))
             if "delivery_retry_count" not in chat_columns:

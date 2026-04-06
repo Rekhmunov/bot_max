@@ -1443,6 +1443,7 @@ async def queue_only_send_text(
     text_format: str | None = None,
 ) -> None:
     next_retry_at = _as_naive_utc(scheduled_for or _utc_now())
+    is_scheduled_message = scheduled_for is not None
     msg = _store_chat_message(
         db,
         conversation_id=conversation_id,
@@ -1454,6 +1455,7 @@ async def queue_only_send_text(
         delivery_error="",
         delivery_retry_count=0,
         delivery_next_retry_at=next_retry_at,
+        is_scheduled_message=is_scheduled_message,
     )
     _enqueue_outbox_message(
         db,
@@ -1479,6 +1481,7 @@ async def queue_only_send_photo(
     scheduled_for: datetime | None = None,
 ) -> None:
     next_retry_at = _as_naive_utc(scheduled_for or _utc_now())
+    is_scheduled_message = scheduled_for is not None
     msg = _store_chat_message(
         db,
         conversation_id=conversation_id,
@@ -1490,6 +1493,7 @@ async def queue_only_send_photo(
         delivery_error="",
         delivery_retry_count=0,
         delivery_next_retry_at=next_retry_at,
+        is_scheduled_message=is_scheduled_message,
     )
     _enqueue_outbox_message(
         db,
@@ -1517,6 +1521,7 @@ def _store_chat_message(
     delivery_error: str = "",
     delivery_retry_count: int = 0,
     delivery_next_retry_at: datetime | None = None,
+    is_scheduled_message: bool = False,
     workspace_id: int | None = None,
 ) -> ChatMessage:
     resolved_workspace_id = workspace_id
@@ -1539,6 +1544,7 @@ def _store_chat_message(
         max_message_mid=max_message_mid,
         link_mid=link_mid,
         delivery_state=delivery_state,
+        is_scheduled_message=is_scheduled_message,
         delivery_error=delivery_error,
         delivery_retry_count=delivery_retry_count,
         delivery_next_retry_at=delivery_next_retry_at,

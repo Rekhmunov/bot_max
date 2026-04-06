@@ -1546,7 +1546,15 @@
                 {% if msg.direction == "bot" %}
                   {% set state = (msg.delivery_state or "sent")|lower %}
                   {% set scheduled_at = (msg.delivery_next_retry_at if msg.delivery_next_retry_at is defined else none) %}
-                  {% set is_scheduled_pending = (state == "queued" and scheduled_at and now_utc and scheduled_at > now_utc) %}
+                  {% set has_scheduled_marker = (msg.is_scheduled_message if msg.is_scheduled_message is defined else false) %}
+                  {% set is_scheduled_pending = (
+                    state == "queued"
+                    and scheduled_at
+                    and (
+                      has_scheduled_marker
+                      or (now_utc and scheduled_at > now_utc)
+                    )
+                  ) %}
                   <div class="bubble-tail">
                     {% if is_scheduled_pending and scheduled_at %}
                       <span

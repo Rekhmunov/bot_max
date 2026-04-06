@@ -7116,10 +7116,16 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
     text_value = str(item.text or "")
     delivery_state_value = str(item.delivery_state or "sent")
     delivery_next_retry_at_raw = getattr(item, "delivery_next_retry_at", None)
+    is_scheduled_message = bool(getattr(item, "is_scheduled_message", False))
     is_scheduled_pending = bool(
         delivery_state_value == "queued"
-        and isinstance(delivery_next_retry_at_raw, datetime)
-        and delivery_next_retry_at_raw > datetime.utcnow()
+        and (
+            is_scheduled_message
+            or (
+                isinstance(delivery_next_retry_at_raw, datetime)
+                and delivery_next_retry_at_raw > datetime.utcnow()
+            )
+        )
     )
     return {
         "id": int(item.id),
@@ -7141,6 +7147,7 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
             if isinstance(delivery_next_retry_at_raw, datetime)
             else ""
         ),
+        "is_scheduled_message": is_scheduled_message,
         "is_scheduled_pending": is_scheduled_pending,
     }
 
@@ -7260,6 +7267,7 @@ def _build_chat_updates_payload(
         "threads_changed": threads_changed,
         "threads": [_thread_summary_dict(item) for item in threads],
         "messages": [_message_summary_dict(item) for item in messages],
+        "now_utc": datetime.utcnow().isoformat(),
     }
 
 

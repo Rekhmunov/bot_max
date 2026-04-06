@@ -1528,6 +1528,7 @@ def run() -> None:
             assert scheduled_chat_message is not None
             assert scheduled_chat_message.max_message_mid in (None, "")
             assert scheduled_chat_message.delivery_state in ("queued", "failed")
+            assert bool(getattr(scheduled_chat_message, "is_scheduled_message", False)) is True
             outbox_scheduled = (
                 db.query(OutboxMessage)
                 .filter(OutboxMessage.chat_message_id == scheduled_chat_message.id)
