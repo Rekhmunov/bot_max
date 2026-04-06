@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from urllib.parse import quote_plus, urlsplit
 from uuid import uuid4
 
@@ -1406,7 +1408,7 @@ def run() -> None:
         assert "quick=" in admin_quick_reply.headers.get("location", "")
 
         send_attempt = client.post(
-            f"/app/chats/{conversation_id}/send",
+            f"/admin/chats/{conversation_id}/send",
             data={"text": "retry_me"},
             cookies=cookies,
             follow_redirects=False,
@@ -1545,6 +1547,73 @@ def run() -> None:
         assert scheduled_chat_page.status_code == 200
         assert "scheduled message" in scheduled_chat_page.text
         assert "Отправится" in scheduled_chat_page.text
+
+        # Mini-smoke: grouped photo message should be stored as one chat message
+        # and local uploaded files must be cleaned up after message deletion.
+        png_probe = b"\x89PNG\r\n\x1a\nsmoke-photo"
+        media_probe_token = uuid4().hex[:8]
+        media_probe_text = f"media_probe_{media_probe_token}"
+        scheduled_media_send = client.post(
+            f"/admin/chats/{conversation_id}/send",
+            data={"text": media_probe_text, "schedule_at": "2999-01-02T12:35"},
+            files=[
+                ("photos", ("probe_one.png", png_probe, "image/png")),
+                ("photos", ("probe_two.png", png_probe, "image/png")),
+            ],
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert scheduled_media_send.status_code in (302, 303)
+        stored_media_paths: list[str] = []
+        with SessionLocal() as db:
+            scheduled_media_msg = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.conversation_id == conversation_id,
+                    ChatMessage.text == media_probe_text,
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            assert scheduled_media_msg is not None
+            assert bool(getattr(scheduled_media_msg, "is_scheduled_message", False)) is True
+            parsed_media_urls = json.loads(str(getattr(scheduled_media_msg, "image_urls_json", "[]") or "[]"))
+            assert isinstance(parsed_media_urls, list)
+            assert len(parsed_media_urls) == 2
+            stored_media_paths = [
+                urlsplit(str(item)).path
+                for item in parsed_media_urls
+                if str(item or "").strip()
+            ]
+            assert len(stored_media_paths) == 2
+            for media_path in stored_media_paths:
+                media_file = Path("app/static") / media_path.removeprefix("/static/")
+                assert media_file.exists()
+            scheduled_media_msg_id = int(scheduled_media_msg.id)
+        scheduled_media_page = client.get(
+            f"/admin/chats?conversation_id={conversation_id}",
+            cookies=cookies,
+        )
+        assert scheduled_media_page.status_code == 200
+        assert "bubble-media-grid" in scheduled_media_page.text
+        assert "Фото от оператора" not in scheduled_media_page.text
+        delete_scheduled_media = client.post(
+            f"/admin/chats/{conversation_id}/messages/{scheduled_media_msg_id}/delete",
+            data={"q": "", "view": "chat"},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert delete_scheduled_media.status_code in (302, 303)
+        with SessionLocal() as db:
+            deleted_media_message = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.id == scheduled_media_msg_id)
+                .first()
+            )
+            assert deleted_media_message is None
+        for media_path in stored_media_paths:
+            media_file = Path("app/static") / media_path.removeprefix("/static/")
+            assert not media_file.exists()
 
         mobile_list_page = client.get("/admin/chats", cookies=cookies)
         assert mobile_list_page.status_code == 200
