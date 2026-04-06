@@ -245,13 +245,56 @@ class MaxWebhookEvent(BaseModel):
             link_message.get("mid"),
             link_message.get("message_id"),
         )
+        message_callback = message.get("callback") if isinstance(message.get("callback"), dict) else {}
+        if not message_callback:
+            message_callback = (
+                message.get("message_callback")
+                if isinstance(message.get("message_callback"), dict)
+                else {}
+            )
+        payload_callback = payload.get("callback") if isinstance(payload.get("callback"), dict) else {}
+        if not payload_callback:
+            payload_callback = (
+                payload.get("message_callback")
+                if isinstance(payload.get("message_callback"), dict)
+                else {}
+            )
+        body_callback = body_root.get("callback") if isinstance(body_root.get("callback"), dict) else {}
+        if not body_callback:
+            body_callback = (
+                body_root.get("message_callback")
+                if isinstance(body_root.get("message_callback"), dict)
+                else {}
+            )
+        deep_callback = _deep_find_first(payload, {"callback", "message_callback"})
+        deep_callback = deep_callback if isinstance(deep_callback, dict) else {}
         callback_payload = _pick_first(
             message.get("callback_data"),
             message.get("callbackData"),
+            message_callback.get("callback_data"),
+            message_callback.get("callbackData"),
+            message_callback.get("payload"),
+            message_callback.get("data"),
+            message_callback.get("command"),
             body.get("callback_data"),
             body.get("callbackData"),
             body.get("data"),
             body.get("payload"),
+            payload_callback.get("callback_data"),
+            payload_callback.get("callbackData"),
+            payload_callback.get("payload"),
+            payload_callback.get("data"),
+            payload_callback.get("command"),
+            body_callback.get("callback_data"),
+            body_callback.get("callbackData"),
+            body_callback.get("payload"),
+            body_callback.get("data"),
+            body_callback.get("command"),
+            deep_callback.get("callback_data"),
+            deep_callback.get("callbackData"),
+            deep_callback.get("payload"),
+            deep_callback.get("data"),
+            deep_callback.get("command"),
             payload.get("callback_data"),
             payload.get("callbackData"),
             payload.get("data"),
