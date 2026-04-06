@@ -140,7 +140,13 @@ from app.ops import (
 )
 from app.security import InMemoryRateLimiter, is_safe_image, is_same_origin, verify_hmac_signature, safe_json_dumps
 from app.schemas import MaxWebhookEvent
-from app.storage import ensure_storage_ready, save_upload_bytes, delete_by_public_url
+from app.storage import (
+    ensure_storage_ready,
+    save_upload_bytes,
+    delete_by_public_url,
+    get_storage_health,
+    get_storage_health_snapshot,
+)
 from app.services import (
     DEFAULT_WORKSPACE_ID,
     create_service_user,
@@ -2165,6 +2171,7 @@ def _render_app_settings_page(
     bot_connection_note = ""
     webhook_workspace_url = _workspace_webhook_url(bot_settings)
     business_hours_vm = _business_hours_view_model(db, workspace_id=workspace_id)
+    storage_health = get_storage_health_snapshot()
 
     return templates.TemplateResponse(
         request,
@@ -2223,6 +2230,7 @@ def _render_app_settings_page(
             "workspace_bot_token_masked": masked_token,
             "workspace_bot_connection_ok": bot_connection_ok,
             "workspace_bot_connection_note": bot_connection_note,
+            "storage_health": storage_health,
             "workspace_webhook_url": webhook_workspace_url,
             "routing_mode_label": _manager_routing_mode_label(bot_settings.routing_mode or "round_robin"),
             "business_hours": business_hours_vm,
@@ -2380,6 +2388,7 @@ def admin_page(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    storage_health = get_storage_health()
     workspace_id = DEFAULT_WORKSPACE_ID
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
     business_hours_vm = _business_hours_view_model(db, workspace_id=workspace_id)
@@ -2445,6 +2454,7 @@ def admin_page(
             "business_hours": business_hours_vm,
             "business_hours_preview_action": "/app/settings/business-hours/preview",
             "show_business_hours_card": True,
+            "storage_health": storage_health,
         },
     )
 
@@ -2750,6 +2760,33 @@ async def admin_copy_manager_link(
     if not ok:
         return JSONResponse({"ok": False, "error": msg}, status_code=400)
     return JSONResponse({"ok": True, "message": msg, "link": invite_link}, status_code=200)
+
+
+@app.get("/admin/settings/storage-health", response_class=JSONResponse)
+def admin_storage_health(
+    _admin: str = Depends(require_admin),
+) -> JSONResponse:
+    health = get_storage_health()
+    status_code = 200 if bool(health.get("ok", False)) else 503
+    return JSONResponse({"ok": bool(health.get("ok", False)), "health": health}, status_code=status_code)
+
+
+@app.get("/app/settings/storage-health", response_class=JSONResponse)
+def app_storage_health(
+    request: Request,
+    current_user: ServiceUser = Depends(require_service_user),
+) -> JSONResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_settings",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    if current_user.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    health = get_storage_health()
+    status_code = 200 if bool(health.get("ok", False)) else 503
+    return JSONResponse({"ok": bool(health.get("ok", False)), "health": health}, status_code=status_code)
 
 
 @app.post("/admin/quick-replies", response_class=HTMLResponse)

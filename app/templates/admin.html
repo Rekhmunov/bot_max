@@ -772,6 +772,32 @@
               <b>Не подключено</b>
             {% endif %}
           </div>
+          {% if storage_health %}
+            <div class="hint storage-health" style="margin-top:-4px; margin-bottom:10px;">
+              Хранилище медиа:
+              {% if storage_health.ok %}
+                <b>{{ storage_health.summary or "OK" }}</b>
+              {% else %}
+                <b style="color:#991b1b;">{{ storage_health.summary or "Ошибка" }}</b>
+              {% endif %}
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs storage-health-refresh"
+                data-storage-health-endpoint="{% if ui_mode in ['app', 'manager'] %}/app/settings/storage-health{% else %}/admin/settings/storage-health{% endif %}"
+                style="margin-left:8px;"
+              >Проверить</button>
+              <span class="storage-health-status" style="margin-left:6px;"></span>
+              <div class="hint storage-health-details" style="margin-top:4px;">
+                backend: <code>{{ storage_health.provider or "local" }}</code>
+                {% if storage_health.mode %}
+                  · mode: <code>{{ storage_health.mode }}</code>
+                {% endif %}
+                {% if storage_health.error %}
+                  · <span style="color:#991b1b;">{{ storage_health.error }}</span>
+                {% endif %}
+              </div>
+            </div>
+          {% endif %}
           {% if workspace_bot_connection_note %}
             <div class="hint" style="margin-top:-2px; margin-bottom:10px;">{{ workspace_bot_connection_note }}</div>
           {% endif %}
@@ -1453,6 +1479,46 @@
           tokenLink.remove();
         });
       }
+    })();
+
+    (() => {
+      const refreshBtn = document.querySelector(".storage-health-refresh");
+      if (!(refreshBtn instanceof HTMLButtonElement)) return;
+      const endpoint = String(refreshBtn.getAttribute("data-storage-health-endpoint") || "").trim();
+      if (!endpoint) return;
+      const card = refreshBtn.closest(".storage-health");
+      const statusEl = card ? card.querySelector(".storage-health-status") : null;
+      const detailsEl = card ? card.querySelector(".storage-health-details") : null;
+      const setStatus = (text, isError = false) => {
+        if (!(statusEl instanceof HTMLElement)) return;
+        statusEl.textContent = text;
+        statusEl.style.color = isError ? "#991b1b" : "#0f172a";
+      };
+      refreshBtn.addEventListener("click", async () => {
+        refreshBtn.disabled = true;
+        setStatus("Проверяю...");
+        try {
+          const response = await fetch(endpoint, { method: "GET", headers: { "Accept": "application/json" } });
+          const payload = await response.json();
+          const health = payload && payload.health ? payload.health : {};
+          const ok = Boolean(payload && payload.ok);
+          const summary = String(health.summary || (ok ? "OK" : "Ошибка"));
+          setStatus(summary, !ok);
+          if (detailsEl instanceof HTMLElement) {
+            const provider = String(health.provider || "local");
+            const mode = String(health.mode || "");
+            const error = String(health.error || "");
+            let html = `backend: <code>${provider}</code>`;
+            if (mode) html += ` · mode: <code>${mode}</code>`;
+            if (error) html += ` · <span style="color:#991b1b;">${error}</span>`;
+            detailsEl.innerHTML = html;
+          }
+        } catch (_) {
+          setStatus("Не удалось обновить статус", true);
+        } finally {
+          refreshBtn.disabled = false;
+        }
+      });
     })();
 
     (() => {
