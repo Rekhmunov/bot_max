@@ -165,6 +165,54 @@ def _ensure_lightweight_migrations() -> None:
                     "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
                 )
             )
+
+        if "workspace_retention_policies" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE workspace_retention_policies ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "workspace_id INTEGER NOT NULL, "
+                    "outbox_sent_ttl_days INTEGER NOT NULL DEFAULT 30, "
+                    "outbox_failed_ttl_days INTEGER NOT NULL DEFAULT 90, "
+                    "message_logs_ttl_days INTEGER NOT NULL DEFAULT 180, "
+                    "chat_messages_ttl_days INTEGER NOT NULL DEFAULT 0, "
+                    "deleted_media_grace_days INTEGER NOT NULL DEFAULT 7, "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+                    "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_workspace_retention_policies_workspace "
+                "ON workspace_retention_policies (workspace_id)"
+            )
+        )
+        if "workspaces" in table_names:
+            conn.execute(
+                text(
+                    "INSERT OR IGNORE INTO workspace_retention_policies "
+                    "(workspace_id, outbox_sent_ttl_days, outbox_failed_ttl_days, message_logs_ttl_days, chat_messages_ttl_days, deleted_media_grace_days, created_at, updated_at) "
+                    "SELECT id, 30, 90, 180, 0, 7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP FROM workspaces"
+                )
+            )
+
+        if "storage_cleanup_runs" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE storage_cleanup_runs ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "started_at DATETIME NOT NULL, "
+                    "finished_at DATETIME, "
+                    "status VARCHAR(20) NOT NULL, "
+                    "details_json TEXT NOT NULL DEFAULT '{}')"
+                )
+            )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_storage_cleanup_runs_started_at "
+                "ON storage_cleanup_runs (started_at)"
+            )
+        )
         conn.execute(
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ix_workspace_business_hours_workspace_id "
@@ -487,6 +535,10 @@ def _ensure_lightweight_migrations() -> None:
                     text("ALTER TABLE quick_replies ADD COLUMN owner_user_id INTEGER DEFAULT 0")
                 )
             conn.execute(text("UPDATE quick_replies SET owner_user_id = 0 WHERE owner_user_id IS NULL"))
+
+        if "workspace_retention_policies" in table_names:
+            # Avoid index name collision with SQLAlchemy metadata index.
+            conn.execute(text("DROP INDEX IF EXISTS ux_workspace_retention_policies_workspace"))
 
         if "platform_settings" in table_names:
             platform_cols = {col["name"] for col in inspector.get_columns("platform_settings")}

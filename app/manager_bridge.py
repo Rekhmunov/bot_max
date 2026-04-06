@@ -36,6 +36,9 @@ from app.models import (
     QuickReply,
     QuickReplyMedia,
     ServiceUser,
+    Workspace,
+    StorageCleanupRun,
+    WorkspaceRetentionPolicy,
     WorkspaceBusinessException,
     WorkspaceBusinessHours,
     WorkspaceBusinessSlot,
@@ -3715,6 +3718,19 @@ def delete_conversation(
     if conversation is None:
         return False
     ws_id = conversation.workspace_id
+    # Collect media paths before message rows are removed, so we can
+    # safely delete now-unreferenced local files after conversation delete.
+    media_paths_to_cleanup: list[str] = []
+    chat_media_rows = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.workspace_id == ws_id,
+            ChatMessage.conversation_id == conversation_id,
+        )
+        .all()
+    )
+    for row in chat_media_rows:
+        media_paths_to_cleanup.extend(_chat_message_media_paths(row))
     db.query(OutboxMessage).filter(
         OutboxMessage.workspace_id == ws_id,
         OutboxMessage.conversation_id == conversation_id,
@@ -3745,7 +3761,210 @@ def delete_conversation(
     ).delete()
     db.delete(conversation)
     db.commit()
+    for media_path in media_paths_to_cleanup:
+        _try_delete_unreferenced_media_file(
+            db,
+            media_path=media_path,
+        )
     return True
+
+
+def _retention_policy_for_workspace(db: Session, *, workspace_id: int) -> WorkspaceRetentionPolicy:
+    policy = (
+        db.query(WorkspaceRetentionPolicy)
+        .filter(WorkspaceRetentionPolicy.workspace_id == int(workspace_id))
+        .first()
+    )
+    if policy is not None:
+        return policy
+    policy = WorkspaceRetentionPolicy(workspace_id=int(workspace_id))
+    db.add(policy)
+    db.commit()
+    db.refresh(policy)
+    return policy
+
+
+def _delete_rows_with_limit(query, *, model_id_column, limit: int) -> int:
+    row_ids = [
+        int(row[0])
+        for row in query.order_by(model_id_column.asc()).limit(max(1, int(limit))).all()
+        if row and row[0]
+    ]
+    if not row_ids:
+        return 0
+    deleted = (
+        query.session.query(model_id_column.class_)
+        .filter(model_id_column.in_(row_ids))
+        .delete(synchronize_session=False)
+    )
+    return int(deleted or 0)
+
+
+def _scan_orphan_upload_files(
+    db: Session,
+    *,
+    now: datetime,
+    deleted_media_grace_days: int,
+) -> tuple[int, int]:
+    orphans_scanned = 0
+    orphans_deleted = 0
+    uploads_root = Path("app/static/uploads")
+    if not uploads_root.exists():
+        return 0, 0
+    grace_before = now - timedelta(days=deleted_media_grace_days)
+    for file_path in uploads_root.iterdir():
+        if not file_path.is_file():
+            continue
+        orphans_scanned += 1
+        if deleted_media_grace_days > 0:
+            modified = datetime.utcfromtimestamp(file_path.stat().st_mtime)
+            if modified >= grace_before:
+                continue
+        media_path = f"/static/uploads/{file_path.name}"
+        before_exists = file_path.exists()
+        _try_delete_unreferenced_media_file(db, media_path=media_path)
+        if before_exists and not file_path.exists():
+            orphans_deleted += 1
+    return orphans_scanned, orphans_deleted
+
+
+def run_storage_cleanup_cycle(
+    db: Session,
+    *,
+    workspace_id: int,
+    now: datetime | None = None,
+    outbox_batch_limit: int = 500,
+    logs_batch_limit: int = 1000,
+    scan_orphans: bool = True,
+) -> dict[str, int]:
+    workspace_value = int(workspace_id or DEFAULT_WORKSPACE_ID)
+    current = _as_naive_utc(now or _utc_now())
+    policy = _retention_policy_for_workspace(db, workspace_id=workspace_value)
+
+    outbox_sent_ttl_days = max(1, int(policy.outbox_sent_ttl_days or 30))
+    outbox_failed_ttl_days = max(1, int(policy.outbox_failed_ttl_days or 90))
+    logs_ttl_days = max(1, int(policy.message_logs_ttl_days or 180))
+    deleted_media_grace_days = max(0, int(policy.deleted_media_grace_days or 7))
+
+    sent_before = current - timedelta(days=outbox_sent_ttl_days)
+    failed_before = current - timedelta(days=outbox_failed_ttl_days)
+    logs_before = current - timedelta(days=logs_ttl_days)
+
+    outbox_sent_ids_query = (
+        db.query(OutboxMessage.id)
+        .filter(
+            OutboxMessage.workspace_id == workspace_value,
+            OutboxMessage.state == "sent",
+            OutboxMessage.sent_at.is_not(None),
+            OutboxMessage.sent_at < sent_before,
+        )
+    )
+    removed_outbox_sent = _delete_rows_with_limit(
+        outbox_sent_ids_query,
+        model_id_column=OutboxMessage.id,
+        limit=outbox_batch_limit,
+    )
+    outbox_failed_ids_query = (
+        db.query(OutboxMessage.id)
+        .filter(
+            OutboxMessage.workspace_id == workspace_value,
+            OutboxMessage.state == "failed",
+            OutboxMessage.updated_at < failed_before,
+        )
+    )
+    removed_outbox_failed = _delete_rows_with_limit(
+        outbox_failed_ids_query,
+        model_id_column=OutboxMessage.id,
+        limit=outbox_batch_limit,
+    )
+    logs_ids_query = (
+        db.query(MessageLog.id)
+        .filter(
+            MessageLog.workspace_id == workspace_value,
+            MessageLog.created_at < logs_before,
+        )
+    )
+    removed_logs = _delete_rows_with_limit(
+        logs_ids_query,
+        model_id_column=MessageLog.id,
+        limit=logs_batch_limit,
+    )
+    db.commit()
+
+    orphans_scanned = 0
+    orphans_deleted = 0
+    if scan_orphans:
+        orphans_scanned, orphans_deleted = _scan_orphan_upload_files(
+            db,
+            now=current,
+            deleted_media_grace_days=deleted_media_grace_days,
+        )
+
+    return {
+        "workspace_id": workspace_value,
+        "removed_outbox_sent": int(removed_outbox_sent or 0),
+        "removed_outbox_failed": int(removed_outbox_failed or 0),
+        "removed_message_logs": int(removed_logs or 0),
+        "orphans_scanned": int(orphans_scanned),
+        "orphans_deleted": int(orphans_deleted),
+    }
+
+
+def run_storage_cleanup_for_all_workspaces(db: Session) -> dict[str, int]:
+    started = _as_naive_utc(_utc_now())
+    run = StorageCleanupRun(
+        status="running",
+        details_json="{}",
+        started_at=started,
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+    total = {
+        "workspaces_total": 0,
+        "removed_outbox_sent": 0,
+        "removed_outbox_failed": 0,
+        "removed_message_logs": 0,
+        "orphans_scanned": 0,
+        "orphans_deleted": 0,
+    }
+    try:
+        workspace_ids = [int(row[0]) for row in db.query(Workspace.id).all() if row and row[0]]
+        if not workspace_ids:
+            workspace_ids = [DEFAULT_WORKSPACE_ID]
+        max_grace_days = 0
+        for ws_id in sorted(set(workspace_ids)):
+            result = run_storage_cleanup_cycle(
+                db,
+                workspace_id=int(ws_id),
+                scan_orphans=False,
+            )
+            total["workspaces_total"] += 1
+            total["removed_outbox_sent"] += int(result.get("removed_outbox_sent") or 0)
+            total["removed_outbox_failed"] += int(result.get("removed_outbox_failed") or 0)
+            total["removed_message_logs"] += int(result.get("removed_message_logs") or 0)
+            policy = _retention_policy_for_workspace(db, workspace_id=int(ws_id))
+            max_grace_days = max(max_grace_days, int(policy.deleted_media_grace_days or 7))
+        scanned, deleted = _scan_orphan_upload_files(
+            db,
+            now=_as_naive_utc(_utc_now()),
+            deleted_media_grace_days=max_grace_days,
+        )
+        total["orphans_scanned"] = int(scanned)
+        total["orphans_deleted"] = int(deleted)
+        run.status = "ok"
+        run.finished_at = _as_naive_utc(_utc_now())
+        run.details_json = json.dumps(total, ensure_ascii=False)
+        db.add(run)
+        db.commit()
+        return total
+    except Exception as exc:
+        run.status = "failed"
+        run.finished_at = _as_naive_utc(_utc_now())
+        run.details_json = json.dumps({"error": str(exc)}, ensure_ascii=False)
+        db.add(run)
+        db.commit()
+        raise
 
 
 def get_delivery_metrics(db: Session, *, workspace_id: int = DEFAULT_WORKSPACE_ID) -> DeliveryStats:

@@ -76,6 +76,7 @@ from app.manager_bridge import (
     handle_customer_event,
     handle_manager_message,
     process_outbox_queue,
+    run_storage_cleanup_for_all_workspaces,
     remove_chat_message,
     retry_failed_outbox_message,
     replace_conversation_folder_links,
@@ -1581,6 +1582,7 @@ webhook_path = settings.webhook_path if settings.webhook_path.startswith("/") el
 Path("app/static/uploads").mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 _outbox_worker_task: asyncio.Task | None = None
+_storage_cleanup_last_run_at: datetime | None = None
 _rate_limiter = InMemoryRateLimiter()
 _MAX_UPLOAD_BYTES = int(settings.max_upload_bytes)
 _QUICK_REPLY_PHOTO_MAX_BYTES = 1 * 1024 * 1024
@@ -2282,6 +2284,7 @@ def _ensure_superadmin_credentials(db: Session) -> ServiceUser:
 async def _outbox_worker_loop() -> None:
     from app.database import SessionLocal
 
+    global _storage_cleanup_last_run_at
     while True:
         try:
             with SessionLocal() as db:
@@ -2290,6 +2293,14 @@ async def _outbox_worker_loop() -> None:
                 for workspace_id in workspace_ids:
                     refresh_tenant_alerts(db, workspace_id=int(workspace_id))
                     ensure_workspace_active_by_billing(db, workspace_id=int(workspace_id))
+                now_utc = datetime.now(UTC)
+                should_run_cleanup = (
+                    _storage_cleanup_last_run_at is None
+                    or (now_utc - _storage_cleanup_last_run_at) >= timedelta(hours=24)
+                )
+                if should_run_cleanup:
+                    run_storage_cleanup_for_all_workspaces(db)
+                    _storage_cleanup_last_run_at = now_utc
         except Exception:
             # Keep worker alive even if one cycle fails.
             pass

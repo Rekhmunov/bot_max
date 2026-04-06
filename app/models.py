@@ -354,6 +354,30 @@ class TenantAlert(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class WorkspaceRetentionPolicy(Base):
+    __tablename__ = "workspace_retention_policies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    outbox_sent_ttl_days: Mapped[int] = mapped_column(Integer, default=30)
+    outbox_failed_ttl_days: Mapped[int] = mapped_column(Integer, default=90)
+    message_logs_ttl_days: Mapped[int] = mapped_column(Integer, default=180)
+    chat_messages_ttl_days: Mapped[int] = mapped_column(Integer, default=0)
+    deleted_media_grace_days: Mapped[int] = mapped_column(Integer, default=7)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class StorageCleanupRun(Base):
+    __tablename__ = "storage_cleanup_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="running", index=True)
+    details_json: Mapped[str] = mapped_column(Text, default="{}")
+
+
 class CustomerProfile(Base):
     __tablename__ = "customer_profiles"
 
@@ -462,4 +486,9 @@ Index(
     ConversationPin.workspace_id,
     ConversationPin.service_user_id,
     ConversationPin.sort_order,
+)
+Index(
+    "ux_workspace_retention_policies_workspace",
+    WorkspaceRetentionPolicy.workspace_id,
+    unique=True,
 )
