@@ -155,9 +155,8 @@ class MaxClient:
             # Return immediately on success.
             if bool(result.get("success")) or (status_code is not None and status_code < 400):
                 return result
-            # Do not continue retries for auth failures.
-            if status_code in {401, 403}:
-                return result
+            # Some signed upload URLs reject Authorization header (403/401),
+            # but work without it; continue fallback attempts.
             last_error = result if isinstance(result, dict) else last_error
         return last_error
 
