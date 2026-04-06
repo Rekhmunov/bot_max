@@ -1556,6 +1556,41 @@
           });
           rebuildFileListAndPreview();
         });
+
+        // When editing existing quick reply, preload current media previews
+        // into the sortable strip so preview is always visible before reupload.
+        const editTargetInput = document.querySelector("input[name='edit_quick_reply_id']");
+        if (!selectedEntries.length && editTargetInput instanceof HTMLInputElement && editTargetInput.value) {
+          const existingPreviewNodes = Array.from(
+            document.querySelectorAll(
+              `.quick-replies-table tr td form.inline-edit-form input[value="${editTargetInput.value}"]`
+            )
+          );
+          if (existingPreviewNodes.length) {
+            const row = existingPreviewNodes[0].closest("tr");
+            if (row instanceof HTMLElement) {
+              const rowPreviews = Array.from(row.querySelectorAll("img.preview"));
+              if (rowPreviews.length) {
+                mediaSortGrid.innerHTML = "";
+                rowPreviews.forEach((imgNode, idx) => {
+                  const chip = document.createElement("div");
+                  chip.className = "media-chip";
+                  chip.innerHTML = `<img alt="preview" /><span class="name"></span>`;
+                  const img = chip.querySelector("img");
+                  const name = chip.querySelector(".name");
+                  if (img instanceof HTMLImageElement) {
+                    img.src = String(imgNode.getAttribute("src") || "");
+                  }
+                  if (name instanceof HTMLElement) {
+                    name.textContent = `${idx + 1}. current_${idx + 1}`;
+                  }
+                  mediaSortGrid.appendChild(chip);
+                });
+                mediaSortWrap.hidden = rowPreviews.length <= 1;
+              }
+            }
+          }
+        }
       }
     })();
 

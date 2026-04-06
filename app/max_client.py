@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -55,6 +56,45 @@ class MaxClient:
             return {
                 "success": False,
                 "endpoint": endpoint,
+                "error": "http_error",
+                "details": str(exc),
+            }
+
+    async def _post_file(
+        self,
+        url: str,
+        *,
+        file_name: str,
+        content: bytes,
+        mime_type: str,
+    ) -> dict[str, Any]:
+        if not self.token:
+            return {"mock": True, "url": url}
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(
+                    str(url),
+                    files={"data": (file_name, content, mime_type)},
+                    headers={"Authorization": self._headers().get("Authorization", "")},
+                )
+                try:
+                    data: Any = response.json()
+                except ValueError:
+                    data = {"raw": response.text}
+                if response.is_error:
+                    return {
+                        "success": False,
+                        "status_code": response.status_code,
+                        "endpoint": "upload_file",
+                        "response": data,
+                    }
+                if isinstance(data, dict):
+                    return data
+                return {"success": True, "data": data}
+        except httpx.HTTPError as exc:
+            return {
+                "success": False,
+                "endpoint": "upload_file",
                 "error": "http_error",
                 "details": str(exc),
             }
@@ -151,8 +191,8 @@ class MaxClient:
         return await self.send_message(text=text, user_id=user_id, text_format=text_format)
 
     async def send_photo(self, chat_id: str, photo_url: str, caption: str | None = None) -> dict[str, Any]:
-        # Max API requires media upload, so for now we send URL as text fallback.
-        # This keeps quick replies functional even without implementing /uploads flow.
+        # Backward-compatible path: if caller passes URL instead of bytes,
+        # keep legacy behavior. New media-group flow uploads image bytes.
         text = f"{caption}\n{photo_url}" if caption else photo_url
         return await self.send_text(chat_id=chat_id, text=text)
 
@@ -163,9 +203,98 @@ class MaxClient:
         photo_url: str,
         caption: str | None = None,
     ) -> dict[str, Any]:
-        # Same URL-as-text fallback as send_photo, but routed by user_id.
+        # Backward-compatible URL fallback.
         text = f"{caption}\n{photo_url}" if caption else photo_url
         return await self.send_text_to_user(user_id=user_id, text=text)
+
+    @staticmethod
+    def _guess_mime_type(file_name: str) -> str:
+        ext = Path(file_name or "").suffix.lower()
+        mapping = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".gif": "image/gif",
+            ".webp": "image/webp",
+            ".bmp": "image/bmp",
+            ".tiff": "image/tiff",
+            ".heic": "image/heic",
+        }
+        return mapping.get(ext, "application/octet-stream")
+
+    async def upload_image_bytes(
+        self,
+        *,
+        file_name: str,
+        content: bytes,
+    ) -> dict[str, Any]:
+        """
+        Upload image to MAX and return attachment payload:
+        {"type":"image","payload":{"token":"..."}}
+        """
+        upload_info = await self._post("/uploads?type=image", {})
+        if not isinstance(upload_info, dict):
+            return {"success": False, "error": "invalid_upload_response"}
+        upload_url = str(upload_info.get("url") or "").strip()
+        if not upload_url:
+            return {"success": False, "error": "upload_url_missing", "response": upload_info}
+        mime = self._guess_mime_type(file_name)
+        upload_result = await self._post_file(
+            upload_url,
+            file_name=(file_name or "image.jpg"),
+            content=content,
+            mime_type=mime,
+        )
+        if not isinstance(upload_result, dict):
+            return {"success": False, "error": "invalid_upload_result"}
+        token = str(upload_result.get("token") or "").strip()
+        if not token:
+            # Some responses can still include token under nested payload.
+            payload_obj = upload_result.get("payload")
+            if isinstance(payload_obj, dict):
+                token = str(payload_obj.get("token") or "").strip()
+        if not token:
+            return {"success": False, "error": "upload_token_missing", "response": upload_result}
+        return {
+            "success": True,
+            "attachment": {
+                "type": "image",
+                "payload": {"token": token},
+            },
+            "token": token,
+        }
+
+    async def send_images(
+        self,
+        *,
+        chat_id: str | None = None,
+        user_id: str | None = None,
+        images: list[tuple[str, bytes]],
+        text: str | None = None,
+    ) -> dict[str, Any]:
+        if not chat_id and not user_id:
+            return {"success": False, "error": "chat_id_or_user_id_required"}
+        if not images:
+            return {"success": False, "error": "images_required"}
+        attachments: list[dict[str, Any]] = []
+        for file_name, content in images:
+            uploaded = await self.upload_image_bytes(
+                file_name=(file_name or "image.jpg"),
+                content=content,
+            )
+            if not bool(uploaded.get("success")):
+                return uploaded
+            attachment = uploaded.get("attachment")
+            if isinstance(attachment, dict):
+                attachments.append(attachment)
+        if not attachments:
+            return {"success": False, "error": "image_attachments_missing"}
+        return await self.send_message(
+            chat_id=chat_id,
+            user_id=user_id,
+            text=(text if text else None),
+            attachments=attachments,
+        )
 
     async def edit_message(
         self,

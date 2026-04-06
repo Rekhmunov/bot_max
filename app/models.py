@@ -228,6 +228,7 @@ class ChatMessage(Base):
     source: Mapped[str] = mapped_column(String(50), default="customer")  # customer | manager | bot_system
     text: Mapped[str] = mapped_column(Text, default="")
     image_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    image_urls_json: Mapped[str] = mapped_column(Text, default="[]")
     max_message_mid: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     link_mid: Mapped[str | None] = mapped_column(String(255), nullable=True)
     delivery_state: Mapped[str] = mapped_column(String(20), default="sent", index=True)  # sent | queued | failed

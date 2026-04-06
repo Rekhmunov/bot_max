@@ -1655,6 +1655,65 @@ async def _read_and_validate_upload(photo: UploadFile | None) -> tuple[str | Non
     return ext, content
 
 
+async def _read_and_validate_uploads(photos: list[UploadFile] | None) -> list[tuple[str, bytes, str]]:
+    validated: list[tuple[str, bytes, str]] = []
+    for upload in photos or []:
+        if not upload or not upload.filename:
+            continue
+        ext, content = await _read_and_validate_upload(upload)
+        if ext is None or content is None:
+            continue
+        validated.append((ext, content, str(upload.filename)))
+    return validated
+
+
+async def _merge_upload_inputs(
+    request: Request,
+    *,
+    files_field: str = "photos",
+    legacy_file_field: str = "photo",
+    provided_files: list[UploadFile] | None = None,
+) -> list[UploadFile]:
+    merged: list[UploadFile] = [item for item in (provided_files or []) if item and getattr(item, "filename", "")]
+    if merged:
+        return merged
+    form_data = await request.form()
+    all_items_getter = getattr(form_data, "getlist", None)
+    if callable(all_items_getter):
+        candidate_items = all_items_getter(files_field) or []
+    else:
+        candidate_items = []
+    for item in candidate_items:
+        if isinstance(item, UploadFile) and item.filename:
+            merged.append(item)
+    if merged:
+        return merged
+    legacy_item = form_data.get(legacy_file_field)
+    if isinstance(legacy_item, UploadFile) and legacy_item.filename:
+        merged.append(legacy_item)
+    return merged
+
+
+def _store_uploaded_images(validated_files: list[tuple[str, bytes, str]]) -> list[str]:
+    stored_paths: list[str] = []
+    for ext, content, _name in validated_files:
+        safe_name = f"{uuid4().hex}{ext}"
+        target = Path("app/static/uploads") / safe_name
+        target.write_bytes(content)
+        stored_paths.append(f"/static/uploads/{safe_name}")
+    return stored_paths
+
+
+def _cleanup_uploaded_images(paths: list[str]) -> None:
+    for item in paths:
+        rel = str(item or "").strip().removeprefix("/static/")
+        if not rel:
+            continue
+        file_path = Path("app/static") / rel
+        if file_path.exists():
+            file_path.unlink()
+
+
 async def _resolve_schedule_at_value(request: Request, schedule_at: str) -> str:
     """Read schedule value with backward-compatible legacy key fallback."""
     value = (schedule_at or "").strip()
@@ -1663,6 +1722,15 @@ async def _resolve_schedule_at_value(request: Request, schedule_at: str) -> str:
     form_data = await request.form()
     legacy_value = str(form_data.get("scheduled_at") or "").strip()
     return legacy_value
+
+
+async def _resolve_text_value(request: Request, text: str) -> str:
+    """Read message text with form fallback for non-multipart clients."""
+    value = (text or "").strip()
+    if value:
+        return value
+    form_data = await request.form()
+    return str(form_data.get("text") or "").strip()
 
 
 async def _read_and_validate_quick_reply_photo(photo: UploadFile | None) -> tuple[str | None, bytes | None]:
@@ -2843,14 +2911,16 @@ async def _update_quick_reply_data(
     if duplicate:
         raise HTTPException(status_code=400, detail=f"Команда /{normalized} уже существует")
 
+    new_files = [item for item in photos if item and item.filename]
+    for upload in new_files:
+        if upload.size is not None and int(upload.size) > _QUICK_REPLY_PHOTO_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="Фото в быстром ответе не должно превышать 1 МБ.")
     reply.command = normalized
     reply.title = title.strip()
     reply.text = text.strip()
     db.add(reply)
     db.commit()
     db.refresh(reply)
-
-    new_files = [item for item in photos if item and item.filename]
     if new_files:
         _delete_quick_reply_media_files(db, reply_id=reply.id)
         sort_tokens = [token.strip() for token in (media_order or "").split(",") if token.strip()]
@@ -3363,7 +3433,7 @@ async def admin_chats_send_message(
     conversation_id: int,
     text: str = Form(""),
     edit_message_id: int | None = Form(default=None),
-    photo: UploadFile | None = File(default=None),
+    photos: list[UploadFile] = File(default=[]),
     q: str = Form(""),
     view: str = Form(""),
     schedule_at: str = Form(""),
@@ -3378,17 +3448,20 @@ async def admin_chats_send_message(
     workspace_id = DEFAULT_WORKSPACE_ID
     text_value = text.strip()
     view_value = view.strip().lower()
-    image_path = None
-    if photo and photo.filename:
-        ext, content = await _read_and_validate_upload(photo)
-        safe_name = f"{uuid4().hex}{ext}"
-        target = Path("app/static/uploads") / safe_name
-        target.write_bytes(content)
-        image_path = f"/static/uploads/{safe_name}"
+    image_paths: list[str] = []
+    uploads_to_validate = [item for item in photos if item and item.filename]
+    if not uploads_to_validate:
+        form_data = await request.form()
+        legacy_photo = form_data.get("photo")
+        if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
+            uploads_to_validate = [legacy_photo]
+    validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
+    if validated_uploads:
+        image_paths = _store_uploaded_images(validated_uploads)
 
     if edit_message_id is not None:
         updated = None
-        if text_value and not image_path:
+        if text_value and not image_paths:
             updated = await update_chat_message_text(
                 db=db,
                 chat_message_id=edit_message_id,
@@ -3403,7 +3476,7 @@ async def admin_chats_send_message(
             redirect_url += "&view=chat"
         return RedirectResponse(url=redirect_url, status_code=302)
 
-    if text_value.startswith("/") and not image_path:
+    if text_value.startswith("/") and not image_paths:
         sent_ok = await send_admin_quick_reply(
             db=db,
             conversation_id=conversation_id,
@@ -3420,14 +3493,20 @@ async def admin_chats_send_message(
         return RedirectResponse(url=redirect_url, status_code=302)
 
     schedule_at_value = await _resolve_schedule_at_value(request, schedule_at)
-    sent_ok = await send_admin_chat_message(
-        db=db,
-        conversation_id=conversation_id,
-        text=text_value,
-        image_path=image_path,
-        workspace_id=workspace_id,
-        schedule_at_iso=schedule_at_value,
-    )
+    try:
+        sent_ok = await send_admin_chat_message(
+            db=db,
+            conversation_id=conversation_id,
+            text=text_value,
+            image_paths=image_paths,
+            workspace_id=workspace_id,
+            schedule_at_iso=schedule_at_value,
+        )
+    except Exception:
+        _cleanup_uploaded_images(image_paths)
+        raise
+    if not sent_ok:
+        _cleanup_uploaded_images(image_paths)
     scheduled_at_clean = schedule_at_value
     is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"
@@ -6620,7 +6699,7 @@ async def app_chats_send_message(
     conversation_id: int,
     text: str = Form(""),
     edit_message_id: int | None = Form(default=None),
-    photo: UploadFile | None = File(default=None),
+    photos: list[UploadFile] = File(default=[]),
     q: str = Form(""),
     view: str = Form(""),
     schedule_at: str = Form(""),
@@ -6644,17 +6723,18 @@ async def app_chats_send_message(
     )
     text_value = text.strip()
     view_value = view.strip().lower()
-    image_path = None
-    if photo and photo.filename:
-        ext, content = await _read_and_validate_upload(photo)
-        safe_name = f"{uuid4().hex}{ext}"
-        target = Path("app/static/uploads") / safe_name
-        target.write_bytes(content)
-        image_path = f"/static/uploads/{safe_name}"
+    uploads_to_validate = [item for item in photos if item and item.filename]
+    if not uploads_to_validate:
+        form_data = await request.form()
+        legacy_photo = form_data.get("photo")
+        if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
+            uploads_to_validate = [legacy_photo]
+    validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
+    image_paths = _store_uploaded_images(validated_uploads)
 
     if edit_message_id is not None:
         updated = None
-        if text_value and not image_path:
+        if text_value and not image_paths:
             updated = await update_chat_message_text(
                 db=db,
                 chat_message_id=edit_message_id,
@@ -6669,7 +6749,7 @@ async def app_chats_send_message(
             redirect_url += "&view=chat"
         return RedirectResponse(url=f"{redirect_url}{workspace_qs}", status_code=302)
 
-    if text_value.startswith("/") and not image_path:
+    if text_value.startswith("/") and not image_paths:
         quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
         sent_ok = await send_admin_quick_reply(
             db=db,
@@ -6687,14 +6767,19 @@ async def app_chats_send_message(
         return RedirectResponse(url=f"{redirect_url}{workspace_qs}", status_code=302)
 
     schedule_at_value = await _resolve_schedule_at_value(request, schedule_at)
-    sent_ok = await send_admin_chat_message(
-        db=db,
-        conversation_id=conversation_id,
-        text=text_value,
-        image_path=image_path,
-        workspace_id=workspace_id,
-        schedule_at_iso=schedule_at_value,
-    )
+    sent_ok = False
+    try:
+        sent_ok = await send_admin_chat_message(
+            db=db,
+            conversation_id=conversation_id,
+            text=text_value,
+            image_paths=image_paths,
+            workspace_id=workspace_id,
+            schedule_at_iso=schedule_at_value,
+        )
+    finally:
+        if not sent_ok and image_paths:
+            _cleanup_uploaded_images(image_paths)
     scheduled_at_clean = schedule_at_value
     is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"
@@ -7116,6 +7201,16 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
     text_value = str(item.text or "")
     delivery_state_value = str(item.delivery_state or "sent")
     delivery_next_retry_at_raw = getattr(item, "delivery_next_retry_at", None)
+    raw_image_urls_json = str(getattr(item, "image_urls_json", "[]") or "[]")
+    image_urls: list[str] = []
+    try:
+        parsed_urls = json.loads(raw_image_urls_json)
+        if isinstance(parsed_urls, list):
+            image_urls = [str(entry).strip() for entry in parsed_urls if str(entry).strip()]
+    except Exception:
+        image_urls = []
+    if not image_urls and str(getattr(item, "image_url", "") or "").strip():
+        image_urls = [str(getattr(item, "image_url", "") or "").strip()]
     is_scheduled_message = bool(getattr(item, "is_scheduled_message", False))
     is_scheduled_pending = bool(
         delivery_state_value == "queued"
@@ -7133,6 +7228,7 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
         "source": str(item.source or ""),
         "text": text_value,
         "image_url": str(item.image_url or ""),
+        "image_urls": image_urls,
         "delivery_state": delivery_state_value,
         "delivery_error": str(item.delivery_error or ""),
         "max_message_mid": str(item.max_message_mid or ""),
@@ -7822,7 +7918,7 @@ async def manager_mini_send_message(
     conversation_id: int,
     token: str,
     text: str = Form(""),
-    photo: UploadFile | None = File(default=None),
+    photos: list[UploadFile] = File(default=[]),
     q: str = Form(""),
     view: str = Form(""),
     schedule_at: str = Form(""),
@@ -7838,15 +7934,16 @@ async def manager_mini_send_message(
     workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
     text_value = text.strip()
     view_value = view.strip().lower()
-    image_path = None
-    if photo and photo.filename:
-        ext, content = await _read_and_validate_upload(photo)
-        safe_name = f"{uuid4().hex}{ext}"
-        target = Path("app/static/uploads") / safe_name
-        target.write_bytes(content)
-        image_path = f"/static/uploads/{safe_name}"
+    uploads_to_validate = [item for item in photos if item and item.filename]
+    if not uploads_to_validate:
+        form_data = await request.form()
+        legacy_photo = form_data.get("photo")
+        if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
+            uploads_to_validate = [legacy_photo]
+    validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
+    image_paths = _store_uploaded_images(validated_uploads)
 
-    if text_value.startswith("/") and not image_path:
+    if text_value.startswith("/") and not image_paths:
         quick_reply_owner_id = _chat_scope_quick_reply_owner_id(manager_claims=claims)
         sent_ok = await send_admin_quick_reply(
             db=db,
@@ -7869,14 +7966,19 @@ async def manager_mini_send_message(
         )
 
     schedule_at_value = await _resolve_schedule_at_value(request, schedule_at)
-    sent_ok = await send_admin_chat_message(
-        db=db,
-        conversation_id=conversation_id,
-        text=text_value,
-        image_path=image_path,
-        workspace_id=workspace_id,
-        schedule_at_iso=schedule_at_value,
-    )
+    sent_ok = False
+    try:
+        sent_ok = await send_admin_chat_message(
+            db=db,
+            conversation_id=conversation_id,
+            text=text_value,
+            image_paths=image_paths,
+            workspace_id=workspace_id,
+            schedule_at_iso=schedule_at_value,
+        )
+    finally:
+        if not sent_ok and image_paths:
+            _cleanup_uploaded_images(image_paths)
     scheduled_at_clean = schedule_at_value
     is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"

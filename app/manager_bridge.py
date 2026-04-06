@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
 import json
 import re
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from typing import Optional
+import asyncio
+from pathlib import Path
 from urllib.parse import quote_plus
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -881,6 +884,11 @@ def _is_retriable_error(result: dict) -> bool:
     status_code = result.get("status_code")
     if isinstance(status_code, int) and (status_code == 429 or status_code >= 500):
         return True
+    response = result.get("response")
+    if isinstance(response, dict):
+        code = str(response.get("code") or "").strip().lower()
+        if code == "attachment.not.ready":
+            return True
     return result.get("error") == "http_error"
 
 
@@ -896,6 +904,187 @@ def _schedule_outbox_retry(item: OutboxMessage, result: dict) -> None:
     item.last_attempt_at = _as_naive_utc(_utc_now())
     item.last_error = _format_delivery_error(result)
     item.next_retry_at = _as_naive_utc(_utc_now() + timedelta(seconds=_next_backoff_delay(item.retry_count)))
+
+
+def _normalize_image_urls_json(image_urls_json: str | None, fallback_image_url: str | None = None) -> str:
+    raw = str(image_urls_json or "").strip()
+    parsed: list[str] = []
+    if raw:
+        try:
+            value = json.loads(raw)
+            if isinstance(value, list):
+                parsed = [str(item).strip() for item in value if str(item).strip()]
+        except Exception:
+            parsed = []
+    if not parsed and str(fallback_image_url or "").strip():
+        parsed = [str(fallback_image_url or "").strip()]
+    return json.dumps(parsed, ensure_ascii=False)
+
+
+def _parse_image_urls_json(image_urls_json: str | None, fallback_image_url: str | None = None) -> list[str]:
+    raw = str(image_urls_json or "").strip()
+    parsed: list[str] = []
+    if raw:
+        try:
+            value = json.loads(raw)
+            if isinstance(value, list):
+                parsed = [str(item).strip() for item in value if str(item).strip()]
+        except Exception:
+            parsed = []
+    if not parsed and str(fallback_image_url or "").strip():
+        parsed = [str(fallback_image_url or "").strip()]
+    # Preserve order while removing duplicates.
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in parsed:
+        if item in seen:
+            continue
+        seen.add(item)
+        deduped.append(item)
+    return deduped
+
+
+def _to_local_static_media_path(value: str | None) -> str | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("/static/"):
+        return raw
+    base = str(app_settings.public_base_url or "").strip().rstrip("/")
+    if base and raw.startswith(f"{base}/static/"):
+        return raw[len(base):]
+    return None
+
+
+def _resolve_local_static_media_file(value: str | None) -> Path | None:
+    media_path = _to_local_static_media_path(value)
+    if not media_path:
+        return None
+    relative = media_path.removeprefix("/static/")
+    if not relative:
+        return None
+    file_path = Path("app/static") / relative
+    return file_path if file_path.exists() else None
+
+
+def _encode_image_bytes_for_payload(content: bytes) -> str:
+    if not isinstance(content, (bytes, bytearray)):
+        return ""
+    return base64.b64encode(bytes(content)).decode("ascii")
+
+
+def _decode_image_bytes_from_payload(value: object) -> bytes:
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value)
+    if not isinstance(value, str):
+        return b""
+    raw = value.strip()
+    if not raw:
+        return b""
+    try:
+        return base64.b64decode(raw, validate=True)
+    except Exception:
+        return b""
+
+
+def _chat_message_media_paths(item: ChatMessage) -> list[str]:
+    urls = _parse_image_urls_json(
+        getattr(item, "image_urls_json", None),
+        fallback_image_url=getattr(item, "image_url", None),
+    )
+    normalized: list[str] = []
+    for entry in urls:
+        local = _to_local_static_media_path(entry)
+        normalized.append(local or entry)
+    # Keep at least first image_url fallback for very old rows.
+    if not normalized:
+        fallback = _to_local_static_media_path(getattr(item, "image_url", None))
+        if fallback:
+            normalized = [fallback]
+    return normalized
+
+
+def _chat_message_has_media_ref(
+    item: ChatMessage,
+    *,
+    media_path: str,
+    skip_chat_message_id: int | None = None,
+) -> bool:
+    target = str(media_path or "").strip()
+    if not target:
+        return False
+    if skip_chat_message_id is not None and int(getattr(item, "id", 0) or 0) == int(skip_chat_message_id):
+        return False
+    paths = _chat_message_media_paths(item)
+    return any(str(path or "").strip() == target for path in paths)
+
+
+def _try_delete_unreferenced_media_file(
+    db: Session,
+    *,
+    media_path: str,
+    skip_chat_message_id: int | None = None,
+) -> None:
+    normalized_path = str(media_path or "").strip()
+    if not normalized_path.startswith("/static/"):
+        return
+    chat_rows = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.image_url == normalized_path)
+        .all()
+    )
+    has_chat_ref = any(
+        _chat_message_has_media_ref(
+            row,
+            media_path=normalized_path,
+            skip_chat_message_id=skip_chat_message_id,
+        )
+        for row in chat_rows
+    )
+    if not has_chat_ref:
+        other_rows = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.image_urls_json.like(f"%{normalized_path}%"))
+            .all()
+        )
+        has_chat_ref = any(
+            _chat_message_has_media_ref(
+                row,
+                media_path=normalized_path,
+                skip_chat_message_id=skip_chat_message_id,
+            )
+            for row in other_rows
+        )
+    if not has_chat_ref:
+        # Also check grouped media JSON for references.
+        group_query = db.query(ChatMessage.id).filter(ChatMessage.image_urls_json.like(f"%{normalized_path}%"))
+        if skip_chat_message_id is not None:
+            group_query = group_query.filter(ChatMessage.id != int(skip_chat_message_id))
+        has_chat_ref = group_query.first() is not None
+    if has_chat_ref:
+        return
+    quick_media_ref = (
+        db.query(QuickReplyMedia.id)
+        .filter(QuickReplyMedia.media_path == normalized_path)
+        .first()
+        is not None
+    )
+    if quick_media_ref:
+        return
+    quick_legacy_ref = (
+        db.query(QuickReply.id)
+        .filter(QuickReply.image_path == normalized_path)
+        .first()
+        is not None
+    )
+    if quick_legacy_ref:
+        return
+    rel = normalized_path.removeprefix("/static/")
+    if not rel:
+        return
+    file_path = Path("app/static") / rel
+    if file_path.exists():
+        file_path.unlink()
 
 
 def _pick_manager_for_workspace(db: Session, *, workspace_id: int, settings: BotSettings) -> str | None:
@@ -1160,7 +1349,37 @@ async def _dispatch_outbox(
     target_user_id = (item.target_user_id or "").strip() or None
     target_chat_id = (item.target_chat_id or "").strip()
 
+    async def _send_message_with_attachment_ready_retry(
+        *,
+        chat_id: str | None = None,
+        user_id: str | None = None,
+        text: str | None = None,
+        attachments: list[dict] | None = None,
+        max_attempts: int = 4,
+    ) -> dict:
+        wait_seconds = 0.6
+        attempts = max(1, int(max_attempts or 1))
+        for idx in range(attempts):
+            result_value = await client.send_message(
+                chat_id=chat_id,
+                user_id=user_id,
+                text=text,
+                attachments=attachments,
+            )
+            code = ""
+            response = result_value.get("response") if isinstance(result_value, dict) else {}
+            if isinstance(response, dict):
+                code = str(response.get("code") or "").strip().lower()
+            if code != "attachment.not.ready":
+                return result_value
+            if idx >= attempts - 1:
+                return result_value
+            await asyncio.sleep(wait_seconds)
+            wait_seconds = min(wait_seconds * 2.0, 5.0)
+        return {"success": False, "error": "attachment_not_ready_retry_exhausted"}
+
     async def _send_by_chat() -> dict:
+
         if item.operation == "send_text":
             return await client.send_text(
                 chat_id=target_chat_id,
@@ -1174,7 +1393,27 @@ async def _dispatch_outbox(
                 caption=str(payload.get("caption")) if payload.get("caption") is not None else None,
             )
         if item.operation == "send_message":
-            return await client.send_message(
+            images_payload = payload.get("images")
+            if isinstance(images_payload, list) and images_payload:
+                images: list[tuple[str, bytes]] = []
+                for row in images_payload:
+                    if not isinstance(row, list) or len(row) != 2:
+                        images = []
+                        break
+                    file_name = str(row[0] or "").strip() or "image.jpg"
+                    content_raw = row[1]
+                    content_bytes = _decode_image_bytes_from_payload(content_raw)
+                    if not content_bytes:
+                        images = []
+                        break
+                    images.append((file_name, content_bytes))
+                if images:
+                    return await client.send_images(
+                        chat_id=target_chat_id,
+                        images=images,
+                        text=str(payload.get("text")) if payload.get("text") is not None else None,
+                    )
+            return await _send_message_with_attachment_ready_retry(
                 chat_id=target_chat_id,
                 text=str(payload.get("text")) if payload.get("text") is not None else None,
                 attachments=payload.get("attachments"),
@@ -1182,6 +1421,7 @@ async def _dispatch_outbox(
         return {"success": False, "error": "unsupported_operation", "operation": item.operation}
 
     async def _send_by_user() -> dict:
+
         if not target_user_id:
             return {"success": False, "error": "user_id_unavailable"}
         if item.operation == "send_text":
@@ -1197,7 +1437,27 @@ async def _dispatch_outbox(
                 caption=str(payload.get("caption")) if payload.get("caption") is not None else None,
             )
         if item.operation == "send_message":
-            return await client.send_message(
+            images_payload = payload.get("images")
+            if isinstance(images_payload, list) and images_payload:
+                images: list[tuple[str, bytes]] = []
+                for row in images_payload:
+                    if not isinstance(row, list) or len(row) != 2:
+                        images = []
+                        break
+                    file_name = str(row[0] or "").strip() or "image.jpg"
+                    content_raw = row[1]
+                    content_bytes = _decode_image_bytes_from_payload(content_raw)
+                    if not content_bytes:
+                        images = []
+                        break
+                    images.append((file_name, content_bytes))
+                if images:
+                    return await client.send_images(
+                        user_id=target_user_id,
+                        images=images,
+                        text=str(payload.get("text")) if payload.get("text") is not None else None,
+                    )
+            return await _send_message_with_attachment_ready_retry(
                 user_id=target_user_id,
                 text=str(payload.get("text")) if payload.get("text") is not None else None,
                 attachments=payload.get("attachments"),
@@ -1430,6 +1690,66 @@ async def enqueue_and_process_send_photo(
     return ok
 
 
+async def enqueue_and_process_send_media_group(
+    db: Session,
+    *,
+    conversation_id: int,
+    target_chat_id: str,
+    target_user_id: str | None = None,
+    photo_urls: list[str],
+    text: str = "",
+    source: str,
+) -> bool:
+    urls = [str(item).strip() for item in (photo_urls or []) if str(item).strip()]
+    if not urls:
+        return False
+    now_utc_naive = _as_naive_utc(_utc_now())
+    first_image = urls[0]
+    msg = _store_chat_message(
+        db,
+        conversation_id=conversation_id,
+        direction="bot",
+        source=source,
+        text=(text or "").strip(),
+        image_url=first_image,
+        image_urls_json=json.dumps(urls, ensure_ascii=False),
+        delivery_state="queued",
+        delivery_error="",
+        delivery_retry_count=0,
+        delivery_next_retry_at=now_utc_naive,
+    )
+    image_payloads: list[tuple[str, bytes]] = []
+    for value in urls:
+        local_file = _resolve_local_static_media_file(value)
+        if local_file is None:
+            image_payloads = []
+            break
+        try:
+            image_payloads.append((local_file.name or "image.jpg", local_file.read_bytes()))
+        except Exception:
+            image_payloads = []
+            break
+    item = _enqueue_outbox_message(
+        db,
+        conversation_id=conversation_id,
+        chat_message_id=msg.id,
+        target_chat_id=target_chat_id,
+        target_user_id=target_user_id,
+        operation="send_message",
+        payload=(
+            {
+                "text": (text or "").strip() or None,
+                "images": [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads],
+            }
+            if image_payloads
+            else {"text": (text or "").strip() or None, "attachments": [{"type": "image_url", "payload": {"url": value}} for value in urls]}
+        ),
+    )
+    client = _workspace_client(db, workspace_id=item.workspace_id)
+    ok, _, _ = await _dispatch_outbox(db, client=client, item=item)
+    return ok
+
+
 async def queue_only_send_text(
     db: Session,
     *,
@@ -1465,6 +1785,68 @@ async def queue_only_send_text(
         target_user_id=target_user_id,
         operation="send_text",
         payload={"text": text, "format": text_format},
+        next_retry_at=next_retry_at,
+    )
+
+
+async def queue_only_send_media_group(
+    db: Session,
+    *,
+    conversation_id: int,
+    target_chat_id: str,
+    target_user_id: str | None = None,
+    photo_urls: list[str],
+    text: str = "",
+    source: str,
+    scheduled_for: datetime | None = None,
+) -> None:
+    urls = [str(item).strip() for item in (photo_urls or []) if str(item).strip()]
+    if not urls:
+        return
+    next_retry_at = _as_naive_utc(scheduled_for or _utc_now())
+    is_scheduled_message = scheduled_for is not None
+    first_image = urls[0]
+    msg = _store_chat_message(
+        db,
+        conversation_id=conversation_id,
+        direction="bot",
+        source=source,
+        text=(text or "").strip(),
+        image_url=first_image,
+        image_urls_json=json.dumps(urls, ensure_ascii=False),
+        delivery_state="queued",
+        delivery_error="",
+        delivery_retry_count=0,
+        delivery_next_retry_at=next_retry_at,
+        is_scheduled_message=is_scheduled_message,
+    )
+    attachments = [{"type": "image_url", "payload": {"url": value}} for value in urls]
+    image_payloads: list[tuple[str, bytes]] = []
+    for value in urls:
+        local_file = _resolve_local_static_media_file(value)
+        if local_file is None:
+            image_payloads = []
+            break
+        try:
+            image_payloads.append((local_file.name or "image.jpg", local_file.read_bytes()))
+        except Exception:
+            image_payloads = []
+            break
+    _enqueue_outbox_message(
+        db,
+        conversation_id=conversation_id,
+        chat_message_id=msg.id,
+        target_chat_id=target_chat_id,
+        target_user_id=target_user_id,
+        operation="send_message",
+        payload=(
+            {
+                "text": (text or "").strip() or None,
+                "images": [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads],
+            }
+            if image_payloads
+            else {"text": (text or "").strip() or None, "attachments": attachments}
+        ),
         next_retry_at=next_retry_at,
     )
 
@@ -1515,6 +1897,7 @@ def _store_chat_message(
     source: str,
     text: str = "",
     image_url: str | None = None,
+    image_urls_json: str | None = None,
     max_message_mid: str | None = None,
     link_mid: str | None = None,
     delivery_state: str = "sent",
@@ -1541,6 +1924,7 @@ def _store_chat_message(
         source=source,
         text=text,
         image_url=image_url,
+        image_urls_json=_normalize_image_urls_json(image_urls_json, image_url),
         max_message_mid=max_message_mid,
         link_mid=link_mid,
         delivery_state=delivery_state,
@@ -1752,7 +2136,6 @@ async def _send_manager_payload_to_conversation(
     if payload_text.startswith("/"):
         return await send_quick_reply_to_customer(
             db=db,
-            client=client,
             conversation_id=conversation.id,
             customer_chat_id=customer_chat_id,
             customer_user_id=customer_user_id,
@@ -2458,6 +2841,12 @@ async def handle_customer_event(
         direction="customer",
         source="customer",
         text=event.text or "",
+        image_url=(event.image_urls[0] if getattr(event, "image_urls", []) else None),
+        image_urls_json=(
+            json.dumps([str(url).strip() for url in event.image_urls if str(url).strip()], ensure_ascii=False)
+            if getattr(event, "image_urls", [])
+            else None
+        ),
         max_message_mid=event.message_mid,
         link_mid=event.link_mid,
         workspace_id=workspace_id,
@@ -2774,7 +3163,6 @@ async def handle_manager_message(
 
 async def send_quick_reply_to_customer(
     db: Session,
-    client: MaxClient,
     conversation_id: int,
     customer_chat_id: str,
     command_text: str,
@@ -2783,7 +3171,6 @@ async def send_quick_reply_to_customer(
     owner_user_id: int = 0,
     sender_prefix: str | None = None,
     source: str = "manager",
-    image_caption: str = "Менеджер отправил изображение",
     workspace_id: int = DEFAULT_WORKSPACE_ID,
 ) -> bool:
     command = command_text.strip().lstrip("/").strip().lower()
@@ -2809,39 +3196,35 @@ async def send_quick_reply_to_customer(
         .order_by(QuickReplyMedia.sort_order.asc(), QuickReplyMedia.id.asc())
         .all()
     )
+    media_urls: list[str] = []
     if media_items:
         for media in media_items:
-            image_url = f"{app_settings.public_base_url.rstrip('/')}{media.media_path}"
-            ok = await enqueue_and_process_send_photo(
-                db,
-                conversation_id=conversation_id,
-                target_chat_id=customer_chat_id,
-                target_user_id=customer_user_id,
-                photo_url=image_url,
-                caption=image_caption,
-                source=source,
-            )
-            if not ok:
-                return False
+            media_url = f"{app_settings.public_base_url.rstrip('/')}{media.media_path}"
+            media_urls.append(media_url)
     elif quick_reply.image_path:
         # Backward-compatibility for legacy quick replies with single image_path.
-        image_url = f"{app_settings.public_base_url.rstrip('/')}{quick_reply.image_path}"
-        ok = await enqueue_and_process_send_photo(
-            db,
-            conversation_id=conversation_id,
-            target_chat_id=customer_chat_id,
-            target_user_id=customer_user_id,
-            photo_url=image_url,
-            caption=image_caption,
-            source=source,
-        )
-        if not ok:
-            return False
+        media_urls.append(f"{app_settings.public_base_url.rstrip('/')}{quick_reply.image_path}")
 
     if quick_reply.text:
         rendered_text = (
             f"{sender_prefix}{quick_reply.text}" if sender_prefix is not None else quick_reply.text
         )
+    else:
+        rendered_text = ""
+
+    if media_urls:
+        ok = await enqueue_and_process_send_media_group(
+            db,
+            conversation_id=conversation_id,
+            target_chat_id=customer_chat_id,
+            target_user_id=customer_user_id,
+            photo_urls=media_urls,
+            text=rendered_text,
+            source=source,
+        )
+        if not ok:
+            return False
+    elif rendered_text:
         ok = await enqueue_and_process_send_text(
             db,
             conversation_id=conversation_id,
@@ -2886,10 +3269,8 @@ async def send_admin_quick_reply(
     conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
     if conversation is None:
         return False
-    client = _workspace_client(db, workspace_id=conversation.workspace_id)
     return await send_quick_reply_to_customer(
         db=db,
-        client=client,
         conversation_id=conversation_id,
         customer_chat_id=conversation.chat_id,
         customer_user_id=conversation.customer_account_id,
@@ -2897,7 +3278,6 @@ async def send_admin_quick_reply(
         owner_user_id=owner_user_id,
         sender_prefix=None,
         source="bot_system",
-        image_caption="Изображение от оператора",
         workspace_id=conversation.workspace_id,
     )
 
@@ -3764,7 +4144,7 @@ async def send_admin_chat_message(
     *,
     conversation_id: int,
     text: str,
-    image_path: str | None,
+    image_paths: list[str] | None = None,
     workspace_id: int | None = None,
     schedule_at_iso: str = "",
 ) -> bool:
@@ -3773,6 +4153,38 @@ async def send_admin_chat_message(
         return False
     scheduled_for = _parse_schedule_at_iso(schedule_at_iso)
     sent_any = False
+
+    normalized_image_paths = [str(item).strip() for item in (image_paths or []) if str(item).strip()]
+
+    # If message contains media, send one grouped message with optional text
+    # (Telegram-style UX). Plain text-only path stays unchanged.
+    if normalized_image_paths:
+        image_urls = [f"{app_settings.public_base_url.rstrip('/')}{path}" for path in normalized_image_paths]
+        if scheduled_for:
+            await queue_only_send_media_group(
+                db,
+                conversation_id=conversation_id,
+                target_chat_id=conversation.chat_id,
+                target_user_id=conversation.customer_account_id,
+                photo_urls=image_urls,
+                text=(text or "").strip(),
+                source="bot_system",
+                scheduled_for=scheduled_for,
+            )
+            sent_any = True
+        else:
+            ok = await enqueue_and_process_send_media_group(
+                db,
+                conversation_id=conversation_id,
+                target_chat_id=conversation.chat_id,
+                target_user_id=conversation.customer_account_id,
+                photo_urls=image_urls,
+                text=(text or "").strip(),
+                source="bot_system",
+            )
+            if ok:
+                sent_any = True
+        return sent_any
 
     if text:
         if scheduled_for:
@@ -3793,33 +4205,6 @@ async def send_admin_chat_message(
                 target_chat_id=conversation.chat_id,
                 target_user_id=conversation.customer_account_id,
                 text=text,
-                source="bot_system",
-            )
-        if ok:
-            sent_any = True
-
-    if image_path:
-        image_url = f"{app_settings.public_base_url.rstrip('/')}{image_path}"
-        if scheduled_for:
-            await queue_only_send_photo(
-                db,
-                conversation_id=conversation_id,
-                target_chat_id=conversation.chat_id,
-                target_user_id=conversation.customer_account_id,
-                photo_url=image_url,
-                caption="Изображение от оператора",
-                source="bot_system",
-                scheduled_for=scheduled_for,
-            )
-            ok = True
-        else:
-            ok = await enqueue_and_process_send_photo(
-                db,
-                conversation_id=conversation_id,
-                target_chat_id=conversation.chat_id,
-                target_user_id=conversation.customer_account_id,
-                photo_url=image_url,
-                caption="Изображение от оператора",
                 source="bot_system",
             )
         if ok:
@@ -3867,6 +4252,13 @@ async def remove_chat_message(
     if msg.max_message_mid:
         client = _workspace_client(db, workspace_id=msg.workspace_id)
         await client.delete_message(message_id=msg.max_message_mid)
+    media_paths = _chat_message_media_paths(msg)
     db.delete(msg)
     db.commit()
+    for media_path in media_paths:
+        _try_delete_unreferenced_media_file(
+            db,
+            media_path=media_path,
+            skip_chat_message_id=chat_message_id,
+        )
     return True

@@ -118,6 +118,7 @@ class MaxWebhookEvent(BaseModel):
     callback_payload: str | None = Field(default=None)
     start_payload: str | None = Field(default=None)
     read_message_mid: str | None = Field(default=None)
+    image_urls: list[str] = Field(default_factory=list)
 
     def event_uid_value(self) -> str | None:
         if self.update_id:
@@ -168,10 +169,22 @@ class MaxWebhookEvent(BaseModel):
         link_message = link.get("message") if isinstance(link.get("message"), dict) else {}
 
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
+        image_urls: list[str] = []
         contact_phone = None
         for item in attachments:
             if not isinstance(item, dict):
                 continue
+            attachment_type = str(item.get("type") or "").strip().lower()
+            if attachment_type in {"image", "photo", "image_url"}:
+                payload_item = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+                image_url = _pick_first(
+                    payload_item.get("url"),
+                    payload_item.get("src"),
+                    payload_item.get("link"),
+                    item.get("url"),
+                )
+                if image_url:
+                    image_urls.append(str(image_url))
             if item.get("type") != "contact":
                 continue
             payload_item = item.get("payload") if isinstance(item.get("payload"), dict) else {}
@@ -450,4 +463,5 @@ class MaxWebhookEvent(BaseModel):
             callback_payload=str(callback_payload) if callback_payload is not None else None,
             start_payload=str(start_payload) if start_payload is not None else None,
             read_message_mid=str(read_message_mid) if read_message_mid is not None else None,
+            image_urls=image_urls,
         )

@@ -574,12 +574,124 @@
       margin-bottom: 6px;
     }
     .bubble-text { white-space: pre-wrap; }
-    .bubble img {
+    .bubble-media-grid {
       margin-top: 8px;
-      max-width: 240px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
       width: 100%;
+      max-width: 240px;
+    }
+    .bubble-media-item {
+      display: block;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: #f3f6fd;
+      cursor: zoom-in;
+    }
+    .bubble-media-item img {
+      margin-top: 0;
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      aspect-ratio: 1 / 1;
+      border: 0;
+    }
+    .compose-media-preview {
+      display: none;
+      gap: 6px;
+      margin-top: 2px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+    .compose-media-preview.is-visible {
+      display: flex;
+    }
+    .compose-media-chip {
+      width: 56px;
+      height: 56px;
       border-radius: 10px;
       border: 1px solid var(--line);
+      background: #f4f7fd;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      flex: 0 0 auto;
+    }
+    .compose-media-chip img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .compose-media-remove {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 0;
+      background: rgba(15, 24, 44, 0.78);
+      color: #fff;
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+    .compose-upload-status {
+      min-height: 16px;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+    .compose-upload-status.error {
+      color: var(--danger);
+    }
+    .compose-upload-status.ok {
+      color: #2f8a52;
+    }
+    .media-lightbox {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(6, 12, 24, 0.86);
+      z-index: 1400;
+      padding: 18px;
+    }
+    .media-lightbox.is-visible {
+      display: flex;
+    }
+    .media-lightbox img {
+      max-width: min(96vw, 1080px);
+      max-height: 90vh;
+      object-fit: contain;
+      border-radius: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.28);
+      background: #091224;
+    }
+    .media-lightbox-close {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      border: 0;
+      background: rgba(255, 255, 255, 0.2);
+      color: #fff;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
     }
     .delivery-status {
       display: inline-flex;
@@ -1529,7 +1641,8 @@
           {% if messages %}
             {% set shown = namespace(count=0) %}
             {% for msg in messages %}
-              {% if msg.text or msg.image_url or (msg.direction == "bot" and msg.delivery_state == "failed") %}
+              {% set message_images = (msg.image_urls if msg.image_urls is defined else []) %}
+              {% if msg.text or message_images or (msg.direction == "bot" and msg.delivery_state == "failed") %}
               {% set shown.count = shown.count + 1 %}
               <article
                 class="bubble {{ msg.direction }}"
@@ -1537,13 +1650,19 @@
                 data-message-text="{{ (msg.text or '')|e }}"
                 data-message-direction="{{ msg.direction }}"
               >
-                {% if msg.text or msg.image_url %}
+                {% if msg.text %}
                   <div class="bubble-text">{{ msg.text }}</div>
                 {% endif %}
-                {% if msg.image_url %}
-                  <img src="{{ msg.image_url }}" alt="image" />
+                {% if message_images %}
+                  <div class="bubble-media-grid">
+                    {% for image_url in message_images %}
+                      <a href="{{ image_url }}" class="bubble-media-item" data-media-open>
+                        <img src="{{ image_url }}" alt="image" loading="lazy" />
+                      </a>
+                    {% endfor %}
+                  </div>
                 {% endif %}
-                {% if msg.direction == "bot" %}
+                {% if msg.direction == "bot" and (msg.text or message_images) %}
                   {% set state = (msg.delivery_state or "sent")|lower %}
                   {% set scheduled_at = (msg.delivery_next_retry_at if msg.delivery_next_retry_at is defined else none) %}
                   {% set has_scheduled_marker = (msg.is_scheduled_message if msg.is_scheduled_message is defined else false) %}
@@ -1620,7 +1739,7 @@
             <div class="compose-row">
               <label class="attach-wrap" title="Прикрепить файл">
                 📎
-                <input type="file" name="photo" accept=".png,.jpg,.jpeg,.gif,.webp" />
+                <input type="file" name="photos" accept=".png,.jpg,.jpeg,.gif,.webp" multiple />
               </label>
               <input
                 id="message-input"
@@ -1642,6 +1761,8 @@
                 </svg>
               </button>
             </div>
+            <div class="compose-media-preview" id="compose-media-preview" aria-live="polite"></div>
+            <div class="compose-upload-status" id="compose-upload-status" aria-live="polite"></div>
             <input type="hidden" id="scheduled-at-input" name="schedule_at" value="" />
             {% if allow_message_edit_actions %}
               <div id="edit-mode-hint" class="thread-meta" style="display:none; padding: 0 4px;">
@@ -1839,6 +1960,10 @@
       </div>
     </div>
   </div>
+  <div class="media-lightbox" id="media-lightbox">
+    <button type="button" class="media-lightbox-close" id="media-lightbox-close" aria-label="Закрыть просмотр фото">×</button>
+    <img id="media-lightbox-image" alt="Фото" />
+  </div>
 
   <script>
     (() => {
@@ -1887,6 +2012,8 @@
     (() => {
       const messageInput = document.getElementById("message-input");
       const photoInput = document.querySelector(".attach-wrap input[type='file']");
+      const mediaPreview = document.getElementById("compose-media-preview");
+      const uploadStatus = document.getElementById("compose-upload-status");
       const sendBtn = document.getElementById("send-btn");
       const scheduleBtnMobile = document.getElementById("schedule-btn-mobile");
       const scheduleTriggerMenu = document.getElementById("schedule-trigger-menu");
@@ -1897,7 +2024,12 @@
       const scheduleSubmitBtn = document.getElementById("schedule-submit-btn");
       const scheduledAtInput = document.getElementById("scheduled-at-input");
       const composeForm = document.querySelector(".compose form");
-      if (!messageInput || !photoInput || !sendBtn || !scheduleBtnMobile || !scheduleTriggerMenu || !schedulePopup || !scheduleDateInput || !scheduleTimeInput || !scheduleHint || !scheduleSubmitBtn || !scheduledAtInput || !composeForm) return;
+      if (!messageInput || !photoInput || !sendBtn || !scheduleBtnMobile || !scheduleTriggerMenu || !schedulePopup || !scheduleDateInput || !scheduleTimeInput || !scheduleHint || !scheduleSubmitBtn || !scheduledAtInput || !composeForm || !mediaPreview || !uploadStatus) return;
+
+      const MAX_FILE_BYTES = 5 * 1024 * 1024;
+      let selectedFiles = [];
+      let fileViewUrls = [];
+      let isUploadReady = true;
 
       const isTouchLikeViewport = () => (
         window.matchMedia("(max-width: 900px), (hover: none) and (pointer: coarse)").matches
@@ -1905,7 +2037,7 @@
 
       const hasPayload = () => {
         const text = (messageInput.value || "").trim();
-        const hasFile = Boolean(photoInput.files && photoInput.files.length);
+        const hasFile = selectedFiles.length > 0;
         return Boolean(text || hasFile);
       };
 
@@ -1914,6 +2046,77 @@
         sendBtn.classList.toggle("is-visible", visible);
         scheduleBtnMobile.classList.toggle("is-visible", visible);
         scheduleBtnMobile.classList.toggle("mobile-visible", visible && isTouchLikeViewport());
+        const canSend = visible && isUploadReady;
+        sendBtn.disabled = !canSend;
+        scheduleBtnMobile.disabled = !canSend;
+      };
+      const setUploadStatus = (text, kind = "") => {
+        uploadStatus.textContent = String(text || "");
+        uploadStatus.classList.remove("error", "ok");
+        if (kind) {
+          uploadStatus.classList.add(kind);
+        }
+      };
+      const clearPreviews = () => {
+        fileViewUrls.forEach((url) => {
+          try { URL.revokeObjectURL(url); } catch (_) {}
+        });
+        fileViewUrls = [];
+        mediaPreview.innerHTML = "";
+        mediaPreview.classList.remove("is-visible");
+      };
+      const syncNativeFiles = () => {
+        const dt = new DataTransfer();
+        selectedFiles.forEach((file) => dt.items.add(file));
+        photoInput.files = dt.files;
+      };
+      const renderPreview = () => {
+        clearPreviews();
+        if (!selectedFiles.length) {
+          setUploadStatus("");
+          syncSendVisibility();
+          return;
+        }
+        selectedFiles.forEach((file, idx) => {
+          const chip = document.createElement("div");
+          chip.className = "compose-media-chip";
+          const img = document.createElement("img");
+          const objectUrl = URL.createObjectURL(file);
+          fileViewUrls.push(objectUrl);
+          img.src = objectUrl;
+          img.alt = file.name || `photo-${idx + 1}`;
+          chip.appendChild(img);
+          const removeBtn = document.createElement("button");
+          removeBtn.type = "button";
+          removeBtn.className = "compose-media-remove";
+          removeBtn.textContent = "×";
+          removeBtn.addEventListener("click", () => {
+            selectedFiles.splice(idx, 1);
+            syncNativeFiles();
+            renderPreview();
+          });
+          chip.appendChild(removeBtn);
+          mediaPreview.appendChild(chip);
+        });
+        mediaPreview.classList.add("is-visible");
+        setUploadStatus(`Выбрано файлов: ${selectedFiles.length}`, "ok");
+        syncSendVisibility();
+      };
+      const validateSelectedFiles = (files) => {
+        const prepared = [];
+        for (const file of files) {
+          const mime = String(file.type || "").toLowerCase();
+          if (!mime.startsWith("image/")) {
+            setUploadStatus(`Файл "${file.name}" не является изображением.`, "error");
+            return [];
+          }
+          if (Number(file.size || 0) > MAX_FILE_BYTES) {
+            setUploadStatus(`Файл "${file.name}" больше 5 МБ.`, "error");
+            return [];
+          }
+          prepared.push(file);
+        }
+        return prepared;
       };
       const scrollMessagesToBottom = () => {
         const wrap = document.querySelector(".messages-wrap");
@@ -2002,6 +2205,16 @@
         schedulePopup.style.display = "none";
       };
 
+      const clearSelectedMedia = () => {
+        selectedFiles = [];
+        photoInput.value = "";
+        syncNativeFiles();
+        clearPreviews();
+        setUploadStatus("");
+        isUploadReady = true;
+        syncSendVisibility();
+      };
+
       sendBtn.addEventListener("contextmenu", (event) => {
         if (isTouchLikeViewport()) return;
         event.preventDefault();
@@ -2025,6 +2238,10 @@
       });
 
       scheduleSubmitBtn.addEventListener("click", () => {
+        if (!isUploadReady) {
+          setUploadStatus("Дождитесь подготовки фото к отправке.", "error");
+          return;
+        }
         const dateValue = (scheduleDateInput.value || "").trim();
         const timeValue = (scheduleTimeInput.value || "").trim();
         if (!dateValue || !timeValue) {
@@ -2101,15 +2318,85 @@
       });
 
       messageInput.addEventListener("input", syncSendVisibility);
-      photoInput.addEventListener("change", syncSendVisibility);
-      composeForm.addEventListener("submit", () => {
+      photoInput.addEventListener("change", () => {
+        const incoming = Array.from(photoInput.files || []);
+        isUploadReady = false;
+        syncSendVisibility();
+        const validated = validateSelectedFiles(incoming);
+        if (!validated.length && incoming.length) {
+          selectedFiles = [];
+          syncNativeFiles();
+          clearPreviews();
+          isUploadReady = true;
+          syncSendVisibility();
+          return;
+        }
+        selectedFiles = validated;
+        syncNativeFiles();
+        isUploadReady = true;
+        renderPreview();
+      });
+      composeForm.addEventListener("submit", (event) => {
+        if (!isUploadReady) {
+          event.preventDefault();
+          setUploadStatus("Дождитесь подготовки фото к отправке.", "error");
+          return;
+        }
         if (!scheduledAtInput.value) return;
         scheduleHint.textContent = "Запланировано";
+      });
+      window.addEventListener("beforeunload", () => {
+        clearPreviews();
       });
       setKeyboardInset();
       scrollMessagesToBottom();
       setTimeout(scrollMessagesToBottom, 90);
+      if (window.__chatSoftVisit) {
+        const originalSoftVisit = window.__chatSoftVisit;
+        window.__chatSoftVisit = async (...args) => {
+          clearSelectedMedia();
+          return await originalSoftVisit(...args);
+        };
+      }
       syncSendVisibility();
+    })();
+
+    (() => {
+      const lightbox = document.getElementById("media-lightbox");
+      const lightboxImage = document.getElementById("media-lightbox-image");
+      const closeBtn = document.getElementById("media-lightbox-close");
+      if (!(lightbox instanceof HTMLElement) || !(lightboxImage instanceof HTMLImageElement) || !(closeBtn instanceof HTMLButtonElement)) return;
+
+      const openLightbox = (src) => {
+        lightboxImage.src = String(src || "");
+        lightbox.classList.add("is-visible");
+      };
+      const closeLightbox = () => {
+        lightbox.classList.remove("is-visible");
+        lightboxImage.removeAttribute("src");
+      };
+
+      document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const mediaLink = target.closest("[data-media-open]");
+        if (mediaLink instanceof HTMLAnchorElement) {
+          if (target.closest(".compose-media-preview")) {
+            return;
+          }
+          event.preventDefault();
+          openLightbox(mediaLink.getAttribute("href") || "");
+          return;
+        }
+        if (target === lightbox || target === closeBtn) {
+          closeLightbox();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && lightbox.classList.contains("is-visible")) {
+          closeLightbox();
+        }
+      });
     })();
 
     (() => {
