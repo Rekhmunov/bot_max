@@ -2123,10 +2123,6 @@
         if (!wrap) return;
         wrap.scrollTop = wrap.scrollHeight;
       };
-      let baselineVisualHeight = Math.max(
-        320,
-        Math.round(window.innerHeight || document.documentElement.clientHeight || 0),
-      );
       const setKeyboardInset = () => {
         const vv = window.visualViewport;
         const fallbackHeight = Math.max(
@@ -2134,23 +2130,17 @@
           Math.round(window.innerHeight || document.documentElement.clientHeight || 0),
         );
         if (!vv) {
-          baselineVisualHeight = Math.max(baselineVisualHeight, fallbackHeight);
           const fallbackPx = `${fallbackHeight}px`;
-          document.documentElement.style.setProperty("--app-height", fallbackPx);
+          document.documentElement.style.setProperty("--layout-height", fallbackPx);
           document.documentElement.style.setProperty("--keyboard-offset", "0px");
           return;
         }
         const safeVisualTop = Math.max(0, Math.round(vv.offsetTop || 0));
         const viewportHeight = Math.max(320, Math.round(vv.height + safeVisualTop));
-        const isInputFocused = document.activeElement === messageInput;
-
-        if (!isInputFocused || viewportHeight >= baselineVisualHeight - 6) {
-          baselineVisualHeight = Math.max(baselineVisualHeight, viewportHeight, fallbackHeight);
-        }
-
-        const keyboard = Math.max(0, baselineVisualHeight - viewportHeight);
-        document.documentElement.style.setProperty("--app-height", `${viewportHeight}px`);
-        document.documentElement.style.setProperty("--keyboard-offset", `${keyboard}px`);
+        // Layout height follows visual viewport to prevent iOS first-focus overlap
+        // and to avoid Android double keyboard compensation gap.
+        document.documentElement.style.setProperty("--layout-height", `${viewportHeight}px`);
+        document.documentElement.style.setProperty("--keyboard-offset", "0px");
       };
       let keyboardSyncTimer = null;
       const stopKeyboardSync = () => {
