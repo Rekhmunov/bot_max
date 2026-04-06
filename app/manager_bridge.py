@@ -18,6 +18,14 @@ from sqlalchemy.orm import Session
 from app.auth import create_manager_mini_token
 from app.config import settings as app_settings
 from app.max_client import MaxClient
+from app.storage import (
+    delete_by_public_url,
+    iter_local_upload_files,
+    local_upload_abspath,
+    normalize_storage_public_url,
+    storage_public_url_for_key,
+    upload_file_public_url,
+)
 from app.models import (
     AuditLog,
     BotSettings,
@@ -951,25 +959,14 @@ def _parse_image_urls_json(image_urls_json: str | None, fallback_image_url: str 
 
 
 def _to_local_static_media_path(value: str | None) -> str | None:
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    if raw.startswith("/static/"):
-        return raw
-    base = str(app_settings.public_base_url or "").strip().rstrip("/")
-    if base and raw.startswith(f"{base}/static/"):
-        return raw[len(base):]
-    return None
+    return normalize_storage_public_url(value)
 
 
 def _resolve_local_static_media_file(value: str | None) -> Path | None:
     media_path = _to_local_static_media_path(value)
     if not media_path:
         return None
-    relative = media_path.removeprefix("/static/")
-    if not relative:
-        return None
-    file_path = Path("app/static") / relative
+    file_path = local_upload_abspath(media_path)
     return file_path if file_path.exists() else None
 
 
@@ -1031,7 +1028,7 @@ def _get_or_create_media_asset(
         workspace_id=int(workspace_id),
         storage_provider="local",
         storage_key=normalized.removeprefix("/static/"),
-        public_url=normalized,
+        public_url=upload_file_public_url(normalized),
         mime_type=_mime_from_extension(normalized),
         byte_size=byte_size,
         sha256=_compute_sha256(file_path),
@@ -1231,12 +1228,7 @@ def _try_delete_unreferenced_media_file(
     )
     if quick_legacy_ref:
         return
-    rel = normalized_path.removeprefix("/static/")
-    if not rel:
-        return
-    file_path = Path("app/static") / rel
-    if file_path.exists():
-        file_path.unlink()
+    delete_by_public_url(normalized_path)
 
 
 def _pick_manager_for_workspace(db: Session, *, workspace_id: int, settings: BotSettings) -> str | None:
@@ -4007,7 +3999,7 @@ def _upsert_media_asset(
         workspace_id=int(workspace_id),
         storage_provider=provider,
         storage_key=storage_key or normalized_url,
-        public_url=normalized_url,
+        public_url=upload_file_public_url(normalized_url),
         mime_type=mime_type,
         byte_size=int(local_size or 0),
     )
@@ -4166,7 +4158,7 @@ def list_chat_message_media_urls(
             urls.append(public_url)
             continue
         if storage_key.startswith("uploads/"):
-            urls.append(f"/static/{storage_key}")
+            urls.append(storage_public_url_for_key(storage_key=storage_key))
     deduped: list[str] = []
     seen: set[str] = set()
     for url in urls:
@@ -4222,7 +4214,7 @@ def get_quick_reply_media_paths(db: Session, *, quick_reply_id: int) -> list[str
             paths.append(public_url)
             continue
         if storage_key.startswith("uploads/"):
-            paths.append(f"/static/{storage_key}")
+            paths.append(storage_public_url_for_key(storage_key=storage_key))
     deduped: list[str] = []
     seen: set[str] = set()
     for value in paths:
@@ -4318,13 +4310,11 @@ def _scan_orphan_upload_files(
 ) -> tuple[int, int]:
     orphans_scanned = 0
     orphans_deleted = 0
-    uploads_root = Path("app/static/uploads")
-    if not uploads_root.exists():
+    files = list(iter_local_upload_files())
+    if not files:
         return 0, 0
     grace_before = now - timedelta(days=deleted_media_grace_days)
-    for file_path in uploads_root.iterdir():
-        if not file_path.is_file():
-            continue
+    for file_path in files:
         orphans_scanned += 1
         if deleted_media_grace_days > 0:
             modified = datetime.utcfromtimestamp(file_path.stat().st_mtime)

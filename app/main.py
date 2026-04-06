@@ -140,6 +140,7 @@ from app.ops import (
 )
 from app.security import InMemoryRateLimiter, is_safe_image, is_same_origin, verify_hmac_signature, safe_json_dumps
 from app.schemas import MaxWebhookEvent
+from app.storage import ensure_storage_ready, save_upload_bytes, delete_by_public_url
 from app.services import (
     DEFAULT_WORKSPACE_ID,
     create_service_user,
@@ -1586,7 +1587,7 @@ templates.env.filters["to_local"] = _to_local
 app.add_middleware(SessionMiddleware, secret_key=settings.secret_key)
 webhook_path = settings.webhook_path if settings.webhook_path.startswith("/") else f"/{settings.webhook_path}"
 
-Path("app/static/uploads").mkdir(parents=True, exist_ok=True)
+ensure_storage_ready()
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 _outbox_worker_task: asyncio.Task | None = None
 _storage_cleanup_last_run_at: datetime | None = None
@@ -1707,20 +1708,13 @@ def _store_uploaded_images(validated_files: list[tuple[str, bytes, str]]) -> lis
     stored_paths: list[str] = []
     for ext, content, _name in validated_files:
         safe_name = f"{uuid4().hex}{ext}"
-        target = Path("app/static/uploads") / safe_name
-        target.write_bytes(content)
-        stored_paths.append(f"/static/uploads/{safe_name}")
+        stored_paths.append(save_upload_bytes(file_name=safe_name, content=content))
     return stored_paths
 
 
 def _cleanup_uploaded_images(paths: list[str]) -> None:
     for item in paths:
-        rel = str(item or "").strip().removeprefix("/static/")
-        if not rel:
-            continue
-        file_path = Path("app/static") / rel
-        if file_path.exists():
-            file_path.unlink()
+        delete_by_public_url(str(item or "").strip())
 
 
 async def _resolve_schedule_at_value(request: Request, schedule_at: str) -> str:
@@ -1827,13 +1821,12 @@ async def _save_quick_reply_media_files(
         if len(content) > _QUICK_REPLY_PHOTO_MAX_BYTES:
             raise HTTPException(status_code=413, detail="Фото в быстром ответе не должно превышать 1 МБ.")
         safe_name = f"{uuid4().hex}{ext}"
-        target = Path("app/static/uploads") / safe_name
-        target.write_bytes(content)
+        stored_public_url = save_upload_bytes(file_name=safe_name, content=content)
         workspace_id = int(reply.workspace_id or DEFAULT_WORKSPACE_ID)
         media = QuickReplyMedia(
             workspace_id=workspace_id,
             quick_reply_id=reply.id,
-            media_path=f"/static/uploads/{safe_name}",
+            media_path=stored_public_url,
             sort_order=order_by_name.get(upload.filename, next_order),
         )
         ensure_media_asset_for_path(
@@ -1854,12 +1847,7 @@ def _delete_quick_reply_media_files(db: Session, *, reply_id: int) -> None:
             quick_reply_id=int(reply_id),
             media_path=str(media.media_path or "").strip(),
         )
-        relative_static_path = (media.media_path or "").removeprefix("/static/")
-        if not relative_static_path:
-            continue
-        media_file = Path("app/static") / relative_static_path
-        if media_file.exists():
-            media_file.unlink()
+        delete_by_public_url(str(media.media_path or "").strip())
     db.query(QuickReplyMedia).filter(QuickReplyMedia.quick_reply_id == reply_id).delete(synchronize_session=False)
     db.commit()
 

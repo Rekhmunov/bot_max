@@ -61,5 +61,19 @@ class AppSettings(BaseSettings):
     rate_limit_billing_per_minute: int = 60
     force_https: bool = False
 
+    # Media storage backend (P2):
+    # - local: store files in app/static/uploads
+    # - s3 / r2 / minio: S3-compatible object storage
+    media_storage_provider: str = "local"
+    media_storage_fallback_to_local_on_error: bool = True
+    media_storage_public_base_url: str = ""
+    media_storage_prefix: str = "uploads"
+    media_storage_bucket: str = ""
+    media_storage_endpoint: str = ""
+    media_storage_region: str = ""
+    media_storage_access_key: str = ""
+    media_storage_secret_key: str = ""
+    media_storage_force_path_style: bool = True
+
 
 settings = AppSettings()
