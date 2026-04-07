@@ -221,6 +221,30 @@
       word-break: break-word;
       line-height: 1.25;
     }
+    .folder-item-inner {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      max-width: 100%;
+    }
+    .folder-unread-badge,
+    .folder-badge {
+      flex: 0 0 auto;
+      min-width: 18px;
+      height: 18px;
+      border-radius: 999px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 5px;
+      box-shadow: 0 2px 6px rgba(25, 118, 255, 0.25);
+      vertical-align: middle;
+    }
     .folder-rail-item:hover {
       border-color: var(--line);
       background: #f5f9ff;
@@ -1485,9 +1509,17 @@
               class="mobile-folder-item {% if folder_filter == folder.id %}active{% endif %}"
               href="{{ page_query_prefix }}q={{ query }}&folder_id={{ folder.id }}"
               title="{{ folder.name }}"
+              data-folder-id="{{ folder.id }}"
+              data-folder-unread-target="1"
               data-soft-nav
             >
-              {{ folder.name }}
+              <span class="folder-item-inner">
+                <span>{{ folder.name }}</span>
+                {% set folder_unread_count = folder_unread_counts.get(folder.id, 0) if folder_unread_counts is defined else 0 %}
+                {% if folder_unread_count > 0 %}
+                  <span class="folder-unread-badge folder-badge" aria-label="Непрочитанные в папке: {{ folder_unread_count }}">{{ folder_unread_count if folder_unread_count < 100 else "99+" }}</span>
+                {% endif %}
+              </span>
             </a>
           {% endfor %}
         </div>
@@ -1504,9 +1536,17 @@
                 class="folder-rail-item {% if folder_filter == folder.id %}active{% endif %}"
                 href="{{ page_query_prefix }}q={{ query }}&folder_id={{ folder.id }}"
                 title="{{ folder.name }}"
+                data-folder-id="{{ folder.id }}"
+                data-folder-unread-target="1"
                 data-soft-nav
               >
-                {{ folder.name }}
+                <span class="folder-item-inner">
+                  <span>{{ folder.name }}</span>
+                  {% set folder_unread_count = folder_unread_counts.get(folder.id, 0) if folder_unread_counts is defined else 0 %}
+                  {% if folder_unread_count > 0 %}
+                    <span class="folder-unread-badge folder-badge" aria-label="Непрочитанные в папке: {{ folder_unread_count }}">{{ folder_unread_count if folder_unread_count < 100 else "99+" }}</span>
+                  {% endif %}
+                </span>
               </a>
             {% endfor %}
           </div>
@@ -3523,6 +3563,51 @@
           .map((node) => Number(node.getAttribute("data-message-id") || 0))
           .filter((id) => id > 0)
       );
+      const updateFolderUnreadBadges = (threadsPayload) => {
+        if (!Array.isArray(threadsPayload)) return;
+        const counts = new Map();
+        threadsPayload.forEach((thread) => {
+          if (!thread || typeof thread !== "object") return;
+          if (!Boolean(thread.is_unread)) return;
+          const folderIdsRaw = Array.isArray(thread.folder_ids) ? thread.folder_ids : [];
+          const uniqueFolderIds = new Set();
+          folderIdsRaw.forEach((value) => {
+            const folderId = Number(value || 0);
+            if (folderId > 0) {
+              uniqueFolderIds.add(folderId);
+            }
+          });
+          uniqueFolderIds.forEach((folderId) => {
+            counts.set(folderId, Number(counts.get(folderId) || 0) + 1);
+          });
+        });
+        const folderNodes = Array.from(document.querySelectorAll("[data-folder-unread-target='1'][data-folder-id]"));
+        folderNodes.forEach((node) => {
+          if (!(node instanceof HTMLElement)) return;
+          const folderId = Number(node.getAttribute("data-folder-id") || 0);
+          if (folderId <= 0) return;
+          const nextCount = Number(counts.get(folderId) || 0);
+          const container = node.querySelector(".folder-item-inner");
+          if (!(container instanceof HTMLElement)) return;
+          const existing = container.querySelector(".folder-unread-badge");
+          if (nextCount <= 0) {
+            existing?.remove();
+            return;
+          }
+          const text = nextCount > 99 ? "99+" : String(nextCount);
+          const label = `Непрочитанные в папке: ${text}`;
+          if (existing instanceof HTMLElement) {
+            existing.textContent = text;
+            existing.setAttribute("aria-label", label);
+            return;
+          }
+          const badge = document.createElement("span");
+          badge.className = "folder-unread-badge folder-badge";
+          badge.textContent = text;
+          badge.setAttribute("aria-label", label);
+          container.appendChild(badge);
+        });
+      };
       let deferredLastMessageId = 0;
       let deferredIncomingCount = 0;
 
@@ -3647,6 +3732,7 @@
           const nextMessagesSig = String(payload.active_messages_signature || "");
           const hasMessageChanges = Boolean(payload.messages_changed);
           const hasThreadsChanges = Boolean(payload.threads_changed);
+          updateFolderUnreadBadges(payload.threads);
 
           if (hasMessageChanges || hasThreadsChanges) {
             if (shouldDeferAutoRefresh()) {

@@ -7450,6 +7450,25 @@ def _threads_signature(threads: list[object]) -> str:
     return hashlib.sha256(signature_source.encode("utf-8")).hexdigest()[:16]
 
 
+def _folder_unread_counts(threads: list[object]) -> dict[int, int]:
+    counts: dict[int, int] = {}
+    for item in threads:
+        if not bool(getattr(item, "is_unread", False)):
+            continue
+        raw_folder_ids = getattr(item, "folder_ids", []) or []
+        folder_ids: set[int] = set()
+        for value in raw_folder_ids:
+            try:
+                folder_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if folder_id > 0:
+                folder_ids.add(folder_id)
+        for folder_id in folder_ids:
+            counts[folder_id] = int(counts.get(folder_id, 0)) + 1
+    return counts
+
+
 def _messages_signature(messages: list[object]) -> str:
     signature_source = "|".join(
         (
@@ -7663,12 +7682,14 @@ async def _render_chat_workspace(
         current_user=ui.get("current_user") if isinstance(ui.get("current_user"), ServiceUser) else None,
         manager_claims=ui.get("manager_claims") if isinstance(ui.get("manager_claims"), dict) else None,
     )
-    threads = load_chat_threads(
+    all_threads = load_chat_threads(
         db,
         query=q,
         workspace_id=workspace_id,
         service_user_id=service_user_id,
     )
+    folder_unread_counts = _folder_unread_counts(all_threads)
+    threads = all_threads
     threads = _filter_threads_by_folder(threads, folder_id)
 
     active_thread = _select_active_thread(
@@ -7724,7 +7745,11 @@ async def _render_chat_workspace(
             )
         ],
         "chat_folders": [
-            {"id": folder.id, "name": folder.name}
+            {
+                "id": folder.id,
+                "name": folder.name,
+                "unread_count": int(folder_unread_counts.get(int(folder.id), 0)),
+            }
             for folder in list_chat_folders(db, workspace_id=workspace_id)
         ],
         "pinned_limit": _pinned_chats_limit_for_workspace(db, workspace_id=workspace_id),

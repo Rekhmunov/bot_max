@@ -2296,6 +2296,22 @@ def run() -> None:
         assert folder_filtered_page.status_code == 200
         assert f"conversation_id={conversation_id}" in folder_filtered_page.text
 
+        # Mark the multi-folder chat unread and verify unread badge appears in both folders.
+        mark_unread_multi_folder = client.post(
+            f"/admin/chats/{conversation_id}/mark-unread",
+            data={"q": "", "view": "chat", "current_conversation_id": str(conversation_id)},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert mark_unread_multi_folder.status_code in (302, 303)
+        assert "unread=1" in mark_unread_multi_folder.headers.get("location", "")
+        folder_page_after_unread = client.get("/admin/chats", cookies=cookies)
+        assert folder_page_after_unread.status_code == 200
+        folder_page_after_unread_text = folder_page_after_unread.text
+        assert folder_page_after_unread_text.count("folder-unread-badge") >= 2
+        assert f'data-folder-id="{int(folder_id)}"' in folder_page_after_unread_text
+        assert f'data-folder-id="{int(second_folder_id)}"' in folder_page_after_unread_text
+
         metrics_page = client.get("/admin/chats", cookies=cookies)
         assert metrics_page.status_code == 200
         assert "Success rate" not in metrics_page.text
