@@ -1294,7 +1294,9 @@ def _format_delivery_error(result: dict) -> str:
     lowered_message = message.lower()
     lowered_code = code.lower()
 
-    if lowered_code == "chat.not_found":
+    if lowered_code == "verify.token" or status_code == 401:
+        human = "Недействительный токен бота"
+    elif lowered_code == "chat.not_found":
         human = "Не найден чат получателя"
     elif "dialogs.suspended" in lowered_message or lowered_code == "chat.denied":
         human = "Пользователь запретил сообщения от бота или не активировал диалог"
@@ -1314,6 +1316,12 @@ def _format_delivery_error(result: dict) -> str:
         details.append(f"code={code}")
     if message:
         details.append(f"message={message}")
+    raw_error = str(result.get("error") or "").strip()
+    raw_details = str(result.get("details") or "").strip()
+    if raw_error:
+        details.append(f"error={raw_error}")
+    if raw_details:
+        details.append(f"details={raw_details}")
     if result.get("endpoint"):
         details.append(f"endpoint={result.get('endpoint')}")
     detail_text = "; ".join(details)

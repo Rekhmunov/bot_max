@@ -1713,7 +1713,13 @@
                   </div>
                 {% endif %}
                 {% if msg.direction == "bot" and msg.delivery_state == "failed" %}
-                  <div class="delivery-error">{{ msg.delivery_error }}</div>
+                  <div class="delivery-error">
+                    {% if msg.delivery_error and not msg.delivery_error.startswith("Ошибка отправки сообщения:") %}
+                      Ошибка отправки сообщения: {{ msg.delivery_error }}
+                    {% else %}
+                      {{ msg.delivery_error }}
+                    {% endif %}
+                  </div>
                 {% endif %}
               </article>
               {% endif %}
