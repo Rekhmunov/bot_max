@@ -144,13 +144,26 @@ class MaxWebhookEvent(BaseModel):
             payload.get("event_type"),
             payload.get("eventType"),
             payload.get("type"),
+            payload.get("type_webhook"),
+            payload.get("typeWebhook"),
             body_root.get("update_type"),
             body_root.get("updateType"),
             body_root.get("event_type"),
             body_root.get("eventType"),
             body_root.get("type"),
+            body_root.get("type_webhook"),
+            body_root.get("typeWebhook"),
         )
         update_type = _normalize_update_type(update_type)
+        update_status = _pick_first(
+            payload.get("status"),
+            body_root.get("status"),
+            _deep_find_first(payload, {"status"}),
+        )
+        update_status_value = str(update_status or "").strip().lower()
+        if update_type == "outgoing_message_status" and update_status_value in {"read", "seen", "opened"}:
+            # Some providers send read receipts as outgoingMessageStatus + status=read.
+            update_type = "message_read"
         message = payload.get("message") if isinstance(payload.get("message"), dict) else {}
         if not message and body_root:
             # Some Max webhook deliveries wrap message object under `body`.
@@ -239,6 +252,11 @@ class MaxWebhookEvent(BaseModel):
             body_root.get("userId"),
             payload.get("user_id"),
             payload.get("userId"),
+            (
+                payload.get("instanceData", {}).get("wid")
+                if isinstance(payload.get("instanceData"), dict)
+                else None
+            ),
             _deep_find_first(payload, {"sender_id", "senderId", "user_id", "userId", "from_user_id"}),
         )
         text = _pick_first(
@@ -347,6 +365,10 @@ class MaxWebhookEvent(BaseModel):
             ),
         )
         read_message_mid = _pick_first(
+            payload.get("idMessage"),
+            payload.get("id_message"),
+            payload.get("messageId"),
+            payload.get("message_id"),
             payload.get("read_message_mid"),
             payload.get("readMessageMid"),
             payload.get("last_read_mid"),
@@ -357,16 +379,28 @@ class MaxWebhookEvent(BaseModel):
             payload.get("readToMid"),
             payload.get("read_mid"),
             payload.get("readMid"),
+            message.get("idMessage"),
+            message.get("id_message"),
+            message.get("messageId"),
+            message.get("message_id"),
             message.get("read_message_mid"),
             message.get("readMessageMid"),
             message.get("last_read_mid"),
             message.get("lastReadMid"),
             message.get("last_read_message_mid"),
             message.get("lastReadMessageMid"),
+            body.get("idMessage"),
+            body.get("id_message"),
+            body.get("messageId"),
+            body.get("message_id"),
             body.get("read_message_mid"),
             body.get("readMessageMid"),
             body.get("last_read_mid"),
             body.get("lastReadMid"),
+            body_root.get("idMessage"),
+            body_root.get("id_message"),
+            body_root.get("messageId"),
+            body_root.get("message_id"),
             body_root.get("read_message_mid"),
             body_root.get("readMessageMid"),
             body_root.get("last_read_mid"),
@@ -374,6 +408,10 @@ class MaxWebhookEvent(BaseModel):
             _deep_find_first(
                 payload,
                 {
+                    "idMessage",
+                    "id_message",
+                    "messageId",
+                    "message_id",
                     "read_message_mid",
                     "readMessageMid",
                     "last_read_mid",

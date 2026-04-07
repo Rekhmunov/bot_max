@@ -824,6 +824,48 @@ def run() -> None:
             assert bool(getattr(second_probe_after_read, "is_read_by_customer", False)) is True
             assert getattr(second_probe_after_read, "read_at", None) is not None
 
+        # MAX status webhook format (outgoingMessageStatus) should also mark read.
+        with SessionLocal() as db:
+            third_sent_probe = ChatMessage(
+                workspace_id=1,
+                conversation_id=started_conv_id,
+                direction="bot",
+                source="bot_system",
+                text="read probe outgoingMessageStatus",
+                max_message_mid=f"read_mid_{uuid4().hex[:8]}",
+                delivery_state="sent",
+                delivery_error="",
+                delivery_retry_count=0,
+                is_read_by_customer=False,
+            )
+            db.add(third_sent_probe)
+            db.commit()
+            db.refresh(third_sent_probe)
+            third_probe_id = int(third_sent_probe.id)
+            third_probe_mid = str(third_sent_probe.max_message_mid or "")
+
+        webhook_customer_read_outgoing_status = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "typeWebhook": "outgoingMessageStatus",
+                "chatId": chat_id,
+                "idMessage": third_probe_mid,
+                "status": "read",
+            },
+        )
+        assert webhook_customer_read_outgoing_status.status_code == 200
+        assert webhook_customer_read_outgoing_status.json().get("flow") == "message_read"
+        assert int(webhook_customer_read_outgoing_status.json().get("marked_read_count") or 0) >= 1
+        with SessionLocal() as db:
+            third_probe_after_read = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.id == third_probe_id)
+                .first()
+            )
+            assert third_probe_after_read is not None
+            assert bool(getattr(third_probe_after_read, "is_read_by_customer", False)) is True
+            assert getattr(third_probe_after_read, "read_at", None) is not None
+
         webhook_customer_callback_style = client.post(
             "/webhook/max/ws1key",
             json={
