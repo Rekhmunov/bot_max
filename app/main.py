@@ -7529,6 +7529,19 @@ def _build_chat_updates_payload(
     if active_thread is not None:
         if mark_read:
             mark_thread_read(db, int(active_thread.conversation_id), workspace_id=workspace_id)
+            # Keep current payload consistent in the same request cycle:
+            # once thread is marked as read, avoid stale unread badges until next poll.
+            try:
+                setattr(active_thread, "is_unread", False)
+            except Exception:
+                pass
+            for item in threads:
+                if int(getattr(item, "conversation_id", 0) or 0) == int(active_thread.conversation_id):
+                    try:
+                        setattr(item, "is_unread", False)
+                    except Exception:
+                        pass
+                    break
         messages = load_chat_messages(
             db,
             int(active_thread.conversation_id),
@@ -7578,6 +7591,7 @@ def admin_chats_updates(
     conversation_id: int | None = None,
     q: str = "",
     folder_id: int | None = None,
+    auto_mark_read: int = 0,
     last_message_id: int = 0,
     threads_sig: str = "",
     messages_sig: str = "",
@@ -7591,7 +7605,7 @@ def admin_chats_updates(
         query=q,
         folder_id=folder_id,
         conversation_id=conversation_id,
-        mark_read=False,
+        mark_read=(int(auto_mark_read or 0) == 1),
         last_message_id=last_message_id,
         threads_signature=threads_sig,
         messages_signature=messages_sig,
@@ -7605,6 +7619,7 @@ def app_chats_updates(
     conversation_id: int | None = None,
     q: str = "",
     folder_id: int | None = None,
+    auto_mark_read: int = 0,
     workspace_id: int | None = None,
     last_message_id: int = 0,
     threads_sig: str = "",
@@ -7632,7 +7647,7 @@ def app_chats_updates(
         query=q,
         folder_id=folder_id,
         conversation_id=conversation_id,
-        mark_read=False,
+        mark_read=(int(auto_mark_read or 0) == 1),
         last_message_id=last_message_id,
         threads_signature=threads_sig,
         messages_signature=messages_sig,
@@ -7647,6 +7662,7 @@ def manager_mini_updates(
     conversation_id: int | None = None,
     q: str = "",
     folder_id: int | None = None,
+    auto_mark_read: int = 0,
     last_message_id: int = 0,
     threads_sig: str = "",
     messages_sig: str = "",
@@ -7667,7 +7683,7 @@ def manager_mini_updates(
         query=q,
         folder_id=folder_id,
         conversation_id=conversation_id,
-        mark_read=False,
+        mark_read=(int(auto_mark_read or 0) == 1),
         last_message_id=last_message_id,
         threads_signature=threads_sig,
         messages_signature=messages_sig,
@@ -7701,7 +7717,6 @@ async def _render_chat_workspace(
         workspace_id=workspace_id,
         service_user_id=service_user_id,
     )
-    folder_unread_counts = _folder_unread_counts(all_threads)
     threads = all_threads
     threads = _filter_threads_by_folder(threads, folder_id)
 
@@ -7716,7 +7731,19 @@ async def _render_chat_workspace(
     if active_thread:
         if mark_read_requested and not opened_unread_same:
             mark_thread_read(db, active_thread.conversation_id, workspace_id=workspace_id)
+            try:
+                setattr(active_thread, "is_unread", False)
+            except Exception:
+                pass
+            for item in all_threads:
+                if int(getattr(item, "conversation_id", 0) or 0) == int(active_thread.conversation_id):
+                    try:
+                        setattr(item, "is_unread", False)
+                    except Exception:
+                        pass
+                    break
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
+    folder_unread_counts = _folder_unread_counts(all_threads)
     message_summaries = [_message_summary_dict(item) for item in messages]
     # Ensure media links are available to templates and polling signatures.
     # Without this, operator-side history can miss image-only/group media updates.
