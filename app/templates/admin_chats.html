@@ -622,6 +622,10 @@
       overflow: hidden;
       flex: 0 0 auto;
     }
+    .compose-media-chip.dragging {
+      opacity: 0.6;
+      transform: scale(0.98);
+    }
     .compose-media-chip img {
       width: 100%;
       height: 100%;
@@ -2033,9 +2037,10 @@
       if (!messageInput || !photoInput || !sendBtn || !scheduleBtnMobile || !scheduleTriggerMenu || !schedulePopup || !scheduleDateInput || !scheduleTimeInput || !scheduleHint || !scheduleSubmitBtn || !scheduledAtInput || !composeForm || !mediaPreview || !uploadStatus) return;
 
       const MAX_FILE_BYTES = 5 * 1024 * 1024;
-      let selectedFiles = [];
+      let selectedEntries = [];
       let fileViewUrls = [];
       let isUploadReady = true;
+      let draggedToken = "";
       const canConstructDataTransfer = (() => {
         try {
           return typeof DataTransfer !== "undefined" && Boolean(new DataTransfer());
@@ -2050,7 +2055,7 @@
 
       const hasPayload = () => {
         const text = (messageInput.value || "").trim();
-        const hasFile = selectedFiles.length > 0;
+        const hasFile = selectedEntries.length > 0;
         return Boolean(text || hasFile);
       };
 
@@ -2081,19 +2086,34 @@
       const syncNativeFiles = () => {
         if (!canConstructDataTransfer) return;
         const dt = new DataTransfer();
-        selectedFiles.forEach((file) => dt.items.add(file));
+        selectedEntries.forEach((entry) => {
+          if (entry.file instanceof File) {
+            dt.items.add(entry.file);
+          }
+        });
         photoInput.files = dt.files;
+      };
+      const moveEntry = (fromIdx, toIdx) => {
+        if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
+        const [moved] = selectedEntries.splice(fromIdx, 1);
+        if (!moved) return;
+        selectedEntries.splice(toIdx, 0, moved);
       };
       const renderPreview = () => {
         clearPreviews();
-        if (!selectedFiles.length) {
+        if (!selectedEntries.length) {
           setUploadStatus("");
           syncSendVisibility();
           return;
         }
-        selectedFiles.forEach((file, idx) => {
+        selectedEntries.forEach((entry, idx) => {
+          const file = entry.file;
+          const token = String(entry.token || "");
+          if (!(file instanceof File)) return;
           const chip = document.createElement("div");
           chip.className = "compose-media-chip";
+          chip.setAttribute("draggable", "true");
+          chip.dataset.token = token;
           const img = document.createElement("img");
           const objectUrl = URL.createObjectURL(file);
           fileViewUrls.push(objectUrl);
@@ -2105,7 +2125,7 @@
           removeBtn.className = "compose-media-remove";
           removeBtn.textContent = "×";
           removeBtn.addEventListener("click", () => {
-            selectedFiles = selectedFiles.filter((_, fileIdx) => fileIdx !== idx);
+            selectedEntries = selectedEntries.filter((item) => item.token !== token);
             if (!canConstructDataTransfer) {
               photoInput.value = "";
             } else {
@@ -2114,10 +2134,31 @@
             renderPreview();
           });
           chip.appendChild(removeBtn);
+          chip.addEventListener("dragstart", () => {
+            draggedToken = token;
+            chip.classList.add("dragging");
+          });
+          chip.addEventListener("dragend", () => {
+            draggedToken = "";
+            chip.classList.remove("dragging");
+          });
+          chip.addEventListener("dragover", (event) => {
+            event.preventDefault();
+          });
+          chip.addEventListener("drop", (event) => {
+            event.preventDefault();
+            const targetToken = String(chip.dataset.token || "");
+            if (!draggedToken || !targetToken || draggedToken === targetToken) return;
+            const from = selectedEntries.findIndex((item) => String(item.token || "") === draggedToken);
+            const to = selectedEntries.findIndex((item) => String(item.token || "") === targetToken);
+            moveEntry(from, to);
+            syncNativeFiles();
+            renderPreview();
+          });
           mediaPreview.appendChild(chip);
         });
         mediaPreview.classList.add("is-visible");
-        setUploadStatus(`Выбрано файлов: ${selectedFiles.length}`, "ok");
+        setUploadStatus(`Выбрано файлов: ${selectedEntries.length}`, "ok");
         syncSendVisibility();
       };
       const validateSelectedFiles = (files) => {
@@ -2214,7 +2255,7 @@
       };
 
       const clearSelectedMedia = () => {
-        selectedFiles = [];
+        selectedEntries = [];
         photoInput.value = "";
         syncNativeFiles();
         clearPreviews();
@@ -2328,19 +2369,33 @@
       messageInput.addEventListener("input", syncSendVisibility);
       photoInput.addEventListener("change", () => {
         const incoming = Array.from(photoInput.files || []);
+        if (!incoming.length) {
+          syncSendVisibility();
+          return;
+        }
         isUploadReady = false;
         syncSendVisibility();
         const validated = validateSelectedFiles(incoming);
-        if (!validated.length && incoming.length) {
-          selectedFiles = [];
+        if (!validated.length) {
           syncNativeFiles();
-          clearPreviews();
+          if (!selectedEntries.length) {
+            clearPreviews();
+          }
           isUploadReady = true;
           syncSendVisibility();
           return;
         }
-        selectedFiles = validated;
+        const existingTokens = new Set(selectedEntries.map((entry) => String(entry.token || "")));
+        validated.forEach((file) => {
+          const token = `${file.name}|${file.size}|${file.lastModified}`;
+          if (existingTokens.has(token)) return;
+          selectedEntries.push({ file, token });
+          existingTokens.add(token);
+        });
         syncNativeFiles();
+        if (!canConstructDataTransfer) {
+          photoInput.value = "";
+        }
         isUploadReady = true;
         renderPreview();
       });
