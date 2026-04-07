@@ -870,7 +870,7 @@
       position: absolute;
       right: 12px;
       bottom: calc(84px + env(safe-area-inset-bottom));
-      z-index: 20;
+      z-index: 3;
       border: 0;
       border-radius: 999px;
       min-width: 36px;
@@ -886,9 +886,11 @@
       align-items: center;
       justify-content: center;
       cursor: pointer;
+      pointer-events: none;
     }
     .new-messages-indicator.is-visible {
       display: inline-flex;
+      pointer-events: auto;
     }
     .slash-menu {
       display: none;

@@ -918,6 +918,33 @@ def _extract_sent_mid(send_result: dict) -> str | None:
     return None
 
 
+def _is_multi_image_payload_validation_error(result_value: dict, *, min_images: int = 2) -> bool:
+    """
+    Detect provider-side validation failures that appear only for multi-image sends.
+    We fallback to URL attachments in those cases to keep operator flow unblocked.
+    """
+    if not isinstance(result_value, dict):
+        return False
+    raw_status = result_value.get("status_code")
+    try:
+        status_code = int(raw_status) if raw_status is not None else None
+    except (TypeError, ValueError):
+        status_code = None
+    if status_code != 400:
+        return False
+    response = result_value.get("response")
+    if not isinstance(response, dict):
+        return False
+    code = str(response.get("code") or "").strip().lower()
+    message = str(response.get("message") or "").strip().lower()
+    if code == "proto.payload" and ("errors.required" in message or "required" in message):
+        return True
+    # Some providers only return generic image upload error for batch payload.
+    if code == "proto.payload" and ("failed to upload image" in message):
+        return bool(int(min_images or 0) >= 2)
+    return False
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -1691,6 +1718,11 @@ async def _dispatch_outbox(
             return False
         return ("failed to upload image" in message) or ("can't deserialize body" in message)
 
+    def _is_multi_image_proto_required_error(result_value: dict, *, image_count: int) -> bool:
+        if image_count < 2:
+            return False
+        return _is_multi_image_payload_validation_error(result_value, min_images=image_count)
+
     async def _send_message_with_attachment_ready_retry(
         *,
         chat_id: str | None = None,
@@ -1738,6 +1770,7 @@ async def _dispatch_outbox(
             images_payload = payload.get("images")
             if isinstance(images_payload, list) and images_payload:
                 images: list[tuple[str, bytes]] = []
+                images_count = 0
                 for row in images_payload:
                     if not isinstance(row, list) or len(row) != 2:
                         images = []
@@ -1749,6 +1782,7 @@ async def _dispatch_outbox(
                         images = []
                         break
                     images.append((file_name, content_bytes))
+                images_count = len(images)
                 if images:
                     images_result = await client.send_images(
                         chat_id=target_chat_id,
@@ -1758,6 +1792,7 @@ async def _dispatch_outbox(
                     if isinstance(images_result, dict) and (
                         str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
                         or _is_proto_payload_upload_error(images_result)
+                        or _is_multi_image_payload_validation_error(images_result, min_images=images_count)
                     ):
                         # Fallback for upload providers returning non-standard token response:
                         # send by URL attachments to avoid blocking operator flow.
@@ -1794,6 +1829,7 @@ async def _dispatch_outbox(
             images_payload = payload.get("images")
             if isinstance(images_payload, list) and images_payload:
                 images: list[tuple[str, bytes]] = []
+                images_count = 0
                 for row in images_payload:
                     if not isinstance(row, list) or len(row) != 2:
                         images = []
@@ -1805,6 +1841,7 @@ async def _dispatch_outbox(
                         images = []
                         break
                     images.append((file_name, content_bytes))
+                images_count = len(images)
                 if images:
                     images_result = await client.send_images(
                         user_id=target_user_id,
@@ -1814,6 +1851,7 @@ async def _dispatch_outbox(
                     if isinstance(images_result, dict) and (
                         str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
                         or _is_proto_payload_upload_error(images_result)
+                        or _is_multi_image_payload_validation_error(images_result, min_images=images_count)
                     ):
                         # Fallback for upload providers returning non-standard token response:
                         # send by URL attachments to avoid blocking operator flow.

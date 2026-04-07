@@ -1733,6 +1733,51 @@ def run() -> None:
             assert idmessage_probe_msg is not None
             assert str(getattr(idmessage_probe_msg, "max_message_mid", "") or "").strip() == idmessage_probe_value
 
+        # Multi-image fallback path: proto.payload errors.required should still deliver.
+        sent_multi_attachments: list[list[dict]] = []
+
+        async def _fake_send_images_multi(*args, **kwargs):
+            images = kwargs.get("images")
+            count = len(images) if isinstance(images, list) else 0
+            if count >= 2:
+                return {
+                    "success": False,
+                    "status_code": 400,
+                    "response": {"code": "proto.payload", "message": "errors.required"},
+                    "endpoint": "/messages",
+                }
+            return {"success": True, "message": {"body": {"mid": f"mid_{uuid4().hex[:8]}"}}}
+
+        async def _fake_send_message_multi(*args, **kwargs):
+            attachments = kwargs.get("attachments")
+            assert isinstance(attachments, list) and len(attachments) >= 2
+            for entry in attachments:
+                assert isinstance(entry, dict)
+                assert str(entry.get("type") or "").strip() == "image"
+                payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+                assert str(payload.get("url") or "").strip().startswith(("http://", "https://"))
+            sent_multi_attachments.append(attachments)
+            return {"success": True, "message": {"body": {"mid": f"mid_{uuid4().hex[:8]}"}}}
+
+        with patch("app.max_client.MaxClient.send_images", new=AsyncMock(side_effect=_fake_send_images_multi)), patch(
+            "app.max_client.MaxClient.send_message",
+            new=AsyncMock(side_effect=_fake_send_message_multi),
+        ):
+            multi_send = client.post(
+                f"/admin/chats/{conversation_id}/send",
+                data={"text": "multi_proto_fallback"},
+                files=[
+                    ("photos", ("multi_one.png", b"\x89PNG\r\n\x1a\nmulti-one", "image/png")),
+                    ("photos", ("multi_two.png", b"\x89PNG\r\n\x1a\nmulti-two", "image/png")),
+                ],
+                cookies=cookies,
+                follow_redirects=False,
+            )
+            assert multi_send.status_code in (302, 303)
+            location = str(multi_send.headers.get("location", ""))
+            assert "sent=1" in location
+        assert len(sent_multi_attachments) >= 1
+
         admin_chats_page_after_send = client.get(
             f"/admin/chats?conversation_id={conversation_id}",
             cookies=cookies,
