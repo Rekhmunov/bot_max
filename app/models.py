@@ -329,7 +329,6 @@ class ConversationMeta(Base):
     status: Mapped[str] = mapped_column(String(50), default="new")
     manager_owner_id: Mapped[str] = mapped_column(String(255), default="", index=True)
     is_unread: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-    unread_messages_count: Mapped[int] = mapped_column(Integer, default=0)
     manual_unread_mark: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     phone_verified: Mapped[bool] = mapped_column(Boolean, default=False)
     start_prompt_sent: Mapped[bool] = mapped_column(Boolean, default=False)

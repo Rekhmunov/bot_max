@@ -609,7 +609,6 @@ class ChatThreadItem:
     last_message_preview: str
     has_delivery_errors: bool
     is_unread: bool
-    unread_messages_count: int
     is_blocked: bool
     last_activity_id: int
     folder_id: int | None
@@ -2429,9 +2428,6 @@ def mark_messages_read_by_customer(
 
 def _mark_conversation_unread_from_customer(db: Session, *, meta: ConversationMeta) -> None:
     changed = False
-    current_unread = int(getattr(meta, "unread_messages_count", 0) or 0)
-    meta.unread_messages_count = current_unread + 1
-    changed = True
     if not meta.is_unread:
         meta.is_unread = True
         changed = True
@@ -3922,10 +3918,6 @@ def load_chat_threads(
         status = meta.status if meta else "new"
         # Show unread highlight when there are unread messages OR manual reminder mark.
         is_unread = (bool(meta.is_unread) or bool(meta.manual_unread_mark)) if meta else True
-        unread_messages_count = int(getattr(meta, "unread_messages_count", 0) or 0) if meta else 0
-        # Backward-compatible fallback for old rows where counter is not set.
-        if unread_messages_count <= 0 and is_unread:
-            unread_messages_count = 1
         is_blocked = bool(meta.is_blocked) if meta else False
         phone_verified = bool(meta.phone_verified) if meta else False
         ticket_no = meta.ticket_no if meta else None
@@ -3967,7 +3959,6 @@ def load_chat_threads(
                 last_message_preview=preview,
                 has_delivery_errors=has_delivery_errors,
                 is_unread=is_unread,
-                unread_messages_count=unread_messages_count,
                 is_blocked=is_blocked,
                 last_activity_id=last_activity_id,
                 folder_id=primary_folder_id,
@@ -5209,8 +5200,6 @@ def mark_thread_unread(
     if bool(meta.manual_unread_mark):
         return True
     meta.manual_unread_mark = True
-    if int(getattr(meta, "unread_messages_count", 0) or 0) <= 0:
-        meta.unread_messages_count = 1
     db.add(meta)
     db.commit()
     return True
@@ -5260,7 +5249,6 @@ def mark_thread_read(
         meta.status = "read"
         meta.is_unread = False
         meta.manual_unread_mark = False
-        meta.unread_messages_count = 0
         db.add(meta)
         db.commit()
 

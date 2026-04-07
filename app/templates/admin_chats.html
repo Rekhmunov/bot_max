@@ -3572,8 +3572,7 @@
         const counts = new Map();
         threadsPayload.forEach((thread) => {
           if (!thread || typeof thread !== "object") return;
-          const unreadMessages = Math.max(0, Number(thread.unread_messages_count || 0));
-          if (unreadMessages <= 0) return;
+          if (!Boolean(thread.is_unread)) return;
           const folderIdsRaw = Array.isArray(thread.folder_ids) ? thread.folder_ids : [];
           const uniqueFolderIds = new Set();
           folderIdsRaw.forEach((value) => {
@@ -3583,7 +3582,7 @@
             }
           });
           uniqueFolderIds.forEach((folderId) => {
-            counts.set(folderId, Number(counts.get(folderId) || 0) + unreadMessages);
+            counts.set(folderId, Number(counts.get(folderId) || 0) + 1);
           });
         });
         const folderNodes = Array.from(document.querySelectorAll("[data-folder-unread-target='1'][data-folder-id]"));
