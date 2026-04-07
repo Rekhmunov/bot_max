@@ -1611,7 +1611,9 @@ def _apply_security_headers(response):
     response.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
     if settings.force_https:
         response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
-    csp = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    # Chat/quick-reply previews use URL.createObjectURL(file) => blob: URLs.
+    # Allow blob: in img-src so client-side previews render before upload.
+    csp = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
     response.headers.setdefault("Content-Security-Policy", csp)
     return response
 

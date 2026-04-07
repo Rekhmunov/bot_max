@@ -425,6 +425,9 @@ def run() -> None:
         cookies = login.cookies
         admin_page = client.get("/admin", cookies=cookies)
         assert admin_page.status_code == 200
+        csp_header = str(admin_page.headers.get("Content-Security-Policy") or "")
+        assert "img-src" in csp_header
+        assert "blob:" in csp_header
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
 
         start_template = (
