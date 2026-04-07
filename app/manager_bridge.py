@@ -4523,6 +4523,10 @@ def list_chat_message_media_urls(
 
 def get_message_media_urls(item: ChatMessage) -> list[str]:
     """Read message media from normalized links with legacy fallback."""
+    legacy_urls = _parse_image_urls_json(
+        getattr(item, "image_urls_json", None),
+        fallback_image_url=getattr(item, "image_url", None),
+    )
     message_id = int(getattr(item, "id", 0) or 0)
     if message_id > 0:
         try:
@@ -4534,13 +4538,19 @@ def get_message_media_urls(item: ChatMessage) -> list[str]:
                     chat_message_id=message_id,
                 )
                 if linked_urls:
+                    linked_set = {str(url).strip() for url in linked_urls if str(url).strip()}
+                    legacy_set = {str(url).strip() for url in legacy_urls if str(url).strip()}
+                    # UI must prefer full message payload when normalized links are partial/stale.
+                    # This keeps operator history accurate (e.g. 2 sent photos must stay 2 in bubble).
+                    if legacy_urls and (
+                        len(linked_set) != len(legacy_set)
+                        or linked_set != legacy_set
+                    ):
+                        return legacy_urls
                     return linked_urls
         except Exception:
             pass
-    return _parse_image_urls_json(
-        getattr(item, "image_urls_json", None),
-        fallback_image_url=getattr(item, "image_url", None),
-    )
+    return legacy_urls
 
 
 def get_quick_reply_media_paths(db: Session, *, quick_reply_id: int) -> list[str]:
