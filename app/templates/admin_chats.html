@@ -2270,6 +2270,11 @@
         if (!wrap) return;
         wrap.scrollTop = wrap.scrollHeight;
       };
+      const isNearBottom = (wrap, thresholdPx = 48) => {
+        if (!(wrap instanceof HTMLElement)) return false;
+        const distanceToBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight;
+        return distanceToBottom <= Math.max(0, Number(thresholdPx || 0));
+      };
       const hasOperationQueryFlag = () => {
         try {
           const url = new URL(window.location.href);
@@ -2490,6 +2495,13 @@
         stopKeyboardSync();
         setTimeout(setKeyboardInset, 20);
       });
+      const messagesWrapForAutoFollow = document.querySelector(".messages-wrap");
+      let shouldFollowBottom = isNearBottom(messagesWrapForAutoFollow, 96);
+      if (messagesWrapForAutoFollow instanceof HTMLElement) {
+        messagesWrapForAutoFollow.addEventListener("scroll", () => {
+          shouldFollowBottom = isNearBottom(messagesWrapForAutoFollow, 96);
+        }, { passive: true });
+      }
 
       messageInput.addEventListener("input", syncSendVisibility);
       photoInput.addEventListener("change", () => {
@@ -2538,7 +2550,7 @@
       });
       setKeyboardInset();
       const restoredScrollPosition = restoreMessagesScrollState();
-      if (!restoredScrollPosition && !hasOperationQueryFlag()) {
+      if (!restoredScrollPosition && !hasOperationQueryFlag() && shouldFollowBottom) {
         scrollMessagesToBottom();
         setTimeout(scrollMessagesToBottom, 90);
       }
@@ -3781,9 +3793,17 @@
                   node.classList.remove("is-new");
                 }, 380);
               });
-              // Do not issue an extra smooth scroll after soft-refresh:
-              // it can cause a visible "bounce" at the bottom.
-              void hasAnimated;
+              const wrap = document.querySelector(".messages-wrap");
+              if (
+                hasAnimated
+                && shouldFollowBottom
+                && wrap instanceof HTMLElement
+                && isNearBottom(wrap, 220)
+              ) {
+                // Keep user anchored to latest messages when they intentionally stay at bottom.
+                // Use direct scrollTop to avoid visible smooth-scroll bouncing near footer.
+                wrap.scrollTop = wrap.scrollHeight;
+              }
             } else {
               window.location.reload();
             }
