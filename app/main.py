@@ -3587,7 +3587,7 @@ async def admin_chats_send_message(
         return RedirectResponse(url=redirect_url, status_code=302)
 
     if text_value.startswith("/") and not image_paths:
-        sent_ok = await send_admin_quick_reply(
+        sent_ok, quick_error = await send_admin_quick_reply(
             db=db,
             conversation_id=conversation_id,
             command_text=text_value,
@@ -3596,6 +3596,8 @@ async def admin_chats_send_message(
         )
         suffix = "1" if sent_ok else "0"
         redirect_url = f"/admin/chats?conversation_id={conversation_id}&quick={suffix}"
+        if not sent_ok and quick_error:
+            redirect_url += f"&quick_error={_encode_chat_error(quick_error)}"
         if q.strip():
             redirect_url += f"&q={quote_plus(q.strip())}"
         if view_value == "chat":
@@ -3603,8 +3605,9 @@ async def admin_chats_send_message(
         return RedirectResponse(url=redirect_url, status_code=302)
 
     schedule_at_value = await _resolve_schedule_at_value(request, schedule_at)
+    send_error_reason = ""
     try:
-        sent_ok = await send_admin_chat_message(
+        sent_ok, send_error_reason = await send_admin_chat_message(
             db=db,
             conversation_id=conversation_id,
             text=text_value,
@@ -3622,6 +3625,8 @@ async def admin_chats_send_message(
     suffix = "1" if sent_ok else "0"
     flag_name = "scheduled" if is_scheduled else "sent"
     redirect_url = f"/admin/chats?conversation_id={conversation_id}&{flag_name}={suffix}"
+    if not sent_ok and send_error_reason:
+        redirect_url += f"&send_error={_encode_chat_error(send_error_reason)}"
     if q.strip():
         redirect_url += f"&q={quote_plus(q.strip())}"
     if view_value == "chat":
@@ -3637,7 +3642,7 @@ async def admin_chats_send_quick_reply(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     workspace_id = DEFAULT_WORKSPACE_ID
-    sent_ok = await send_admin_quick_reply(
+    sent_ok, quick_error = await send_admin_quick_reply(
         db=db,
         conversation_id=conversation_id,
         command_text=command,
@@ -3645,8 +3650,9 @@ async def admin_chats_send_quick_reply(
         owner_user_id=0,
     )
     suffix = "1" if sent_ok else "0"
+    quick_qs = f"&quick_error={_encode_chat_error(quick_error)}" if (not sent_ok and quick_error) else ""
     return RedirectResponse(
-        url=f"/admin/chats?conversation_id={conversation_id}&quick={suffix}",
+        url=f"/admin/chats?conversation_id={conversation_id}&quick={suffix}{quick_qs}",
         status_code=302,
     )
 
@@ -4012,6 +4018,13 @@ def _manager_mini_url(
             url += "&"
         url += extra.lstrip("&")
     return url
+
+
+def _encode_chat_error(reason: str | None) -> str:
+    text = str(reason or "").strip()
+    if not text:
+        return ""
+    return quote_plus(text[:400])
 
 
 def _admin_chats_ui() -> dict[str, str | bool]:
@@ -6868,7 +6881,7 @@ async def app_chats_send_message(
 
     if text_value.startswith("/") and not image_paths:
         quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
-        sent_ok = await send_admin_quick_reply(
+        sent_ok, quick_error = await send_admin_quick_reply(
             db=db,
             conversation_id=conversation_id,
             command_text=text_value,
@@ -6877,6 +6890,8 @@ async def app_chats_send_message(
         )
         suffix = "1" if sent_ok else "0"
         redirect_url = f"/app/chats?conversation_id={conversation_id}&quick={suffix}"
+        if not sent_ok and quick_error:
+            redirect_url += f"&quick_error={_encode_chat_error(quick_error)}"
         if q.strip():
             redirect_url += f"&q={quote_plus(q.strip())}"
         if view_value == "chat":
@@ -6886,7 +6901,7 @@ async def app_chats_send_message(
     schedule_at_value = await _resolve_schedule_at_value(request, schedule_at)
     sent_ok = False
     try:
-        sent_ok = await send_admin_chat_message(
+        sent_ok, send_error_reason = await send_admin_chat_message(
             db=db,
             conversation_id=conversation_id,
             text=text_value,
@@ -6902,6 +6917,8 @@ async def app_chats_send_message(
     suffix = "1" if sent_ok else "0"
     flag_name = "scheduled" if is_scheduled else "sent"
     redirect_url = f"/app/chats?conversation_id={conversation_id}&{flag_name}={suffix}"
+    if not sent_ok and send_error_reason:
+        redirect_url += f"&send_error={_encode_chat_error(send_error_reason)}"
     if q.strip():
         redirect_url += f"&q={quote_plus(q.strip())}"
     if view_value == "chat":
@@ -6923,7 +6940,7 @@ async def app_chats_send_quick_reply(
         workspace_id=workspace_id,
     )
     quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
-    sent_ok = await send_admin_quick_reply(
+    sent_ok, quick_error = await send_admin_quick_reply(
         db=db,
         conversation_id=conversation_id,
         command_text=command,
@@ -6936,7 +6953,11 @@ async def app_chats_send_quick_reply(
         is_scoped=is_superadmin_scoped,
     )
     return RedirectResponse(
-        url=f"/app/chats?conversation_id={conversation_id}&quick={suffix}{workspace_qs}",
+        url=(
+            f"/app/chats?conversation_id={conversation_id}&quick={suffix}"
+            + (f"&quick_error={_encode_chat_error(quick_error)}" if (not sent_ok and quick_error) else "")
+            + f"{workspace_qs}"
+        ),
         status_code=302,
     )
 
@@ -7231,16 +7252,30 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
     op_error = None
     if sent_flag == "1":
         op_message = "Сообщение отправлено"
+    send_error_reason = str(request.query_params.get("send_error") or "").strip()
+    quick_error_reason = str(request.query_params.get("quick_error") or "").strip()
     if sent_flag == "0":
-        op_error = "Не удалось отправить сообщение"
+        op_error = (
+            f"Ошибка отправки сообщения: {send_error_reason}"
+            if send_error_reason
+            else "Ошибка отправки сообщения"
+        )
     if scheduled_flag == "1":
         op_message = "Сообщение запланировано"
     if scheduled_flag == "0":
-        op_error = "Не удалось запланировать сообщение"
+        op_error = (
+            f"Ошибка отправки сообщения: {send_error_reason}"
+            if send_error_reason
+            else "Не удалось запланировать сообщение"
+        )
     if quick_flag == "1":
         op_message = "Быстрый ответ отправлен"
     if quick_flag == "0":
-        op_error = "Не удалось отправить быстрый ответ"
+        op_error = (
+            f"Ошибка отправки сообщения: {quick_error_reason}"
+            if quick_error_reason
+            else "Не удалось отправить быстрый ответ"
+        )
     if edited_flag == "1":
         op_message = "Сообщение изменено"
     if edited_flag == "0":
@@ -7285,6 +7320,10 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
         op_message = "Пользователь разблокирован"
     if request.query_params.get("unblocked") == "0":
         op_error = "Не удалось разблокировать пользователя"
+    error_reason = str(request.query_params.get("error_reason") or "").strip()
+    if error_reason and op_error:
+        normalized_error = op_error.rstrip(".")
+        op_error = f"{normalized_error}: {error_reason}"
     return op_message, op_error
 
 
@@ -8053,7 +8092,7 @@ async def manager_mini_send_message(
 
     if text_value.startswith("/") and not image_paths:
         quick_reply_owner_id = _chat_scope_quick_reply_owner_id(manager_claims=claims)
-        sent_ok = await send_admin_quick_reply(
+        sent_ok, quick_error = await send_admin_quick_reply(
             db=db,
             conversation_id=conversation_id,
             command_text=text_value,
@@ -8061,6 +8100,9 @@ async def manager_mini_send_message(
             owner_user_id=quick_reply_owner_id,
         )
         suffix = "1" if sent_ok else "0"
+        extra = f"quick={suffix}"
+        if not sent_ok and quick_error:
+            extra += f"&quick_error={_encode_chat_error(quick_error)}"
         return RedirectResponse(
             url=_manager_mini_url(
                 token=token,
@@ -8068,15 +8110,16 @@ async def manager_mini_send_message(
                 q=q,
                 view=view_value,
                 folder_id=folder_id,
-                extra=f"quick={suffix}",
+                extra=extra,
             ),
             status_code=302,
         )
 
     schedule_at_value = await _resolve_schedule_at_value(request, schedule_at)
     sent_ok = False
+    send_error_reason = ""
     try:
-        sent_ok = await send_admin_chat_message(
+        sent_ok, send_error_reason = await send_admin_chat_message(
             db=db,
             conversation_id=conversation_id,
             text=text_value,
@@ -8091,6 +8134,9 @@ async def manager_mini_send_message(
     is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"
     flag_name = "scheduled" if is_scheduled else "sent"
+    extra = f"{flag_name}={suffix}"
+    if not sent_ok and send_error_reason:
+        extra += f"&send_error={_encode_chat_error(send_error_reason)}"
     return RedirectResponse(
         url=_manager_mini_url(
             token=token,
@@ -8098,7 +8144,7 @@ async def manager_mini_send_message(
             q=q,
             view=view_value,
             folder_id=folder_id,
-            extra=f"{flag_name}={suffix}",
+            extra=extra,
         ),
         status_code=302,
     )

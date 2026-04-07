@@ -3334,10 +3334,10 @@ async def send_quick_reply_to_customer(
     sender_prefix: str | None = None,
     source: str = "manager",
     workspace_id: int = DEFAULT_WORKSPACE_ID,
-) -> bool:
+) -> tuple[bool, str]:
     command = command_text.strip().lstrip("/").strip().lower()
     if not command:
-        return False
+        return False, "Не найден быстрый ответ"
 
     quick_reply = (
         db.query(QuickReply)
@@ -3350,7 +3350,7 @@ async def send_quick_reply_to_customer(
         .first()
     )
     if not quick_reply:
-        return False
+        return False, "Не найден быстрый ответ"
 
     media_items = (
         db.query(QuickReplyMedia)
@@ -3389,7 +3389,17 @@ async def send_quick_reply_to_customer(
             source=source,
         )
         if not ok:
-            return False
+            latest = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.conversation_id == int(conversation_id),
+                    ChatMessage.direction == "bot",
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            reason = str(getattr(latest, "delivery_error", "") or "").strip() or "Неизвестная ошибка отправки"
+            return False, reason
     elif rendered_text:
         ok = await enqueue_and_process_send_text(
             db,
@@ -3401,9 +3411,19 @@ async def send_quick_reply_to_customer(
             text_format="markdown",
         )
         if not ok:
-            return False
+            latest = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.conversation_id == int(conversation_id),
+                    ChatMessage.direction == "bot",
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            reason = str(getattr(latest, "delivery_error", "") or "").strip() or "Неизвестная ошибка отправки"
+            return False, reason
 
-    return True
+    return True, ""
 
 
 def list_active_quick_replies(
@@ -3431,10 +3451,10 @@ async def send_admin_quick_reply(
     command_text: str,
     workspace_id: int | None = None,
     owner_user_id: int = 0,
-) -> bool:
+) -> tuple[bool, str]:
     conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
     if conversation is None:
-        return False
+        return False, "Диалог не найден"
     return await send_quick_reply_to_customer(
         db=db,
         conversation_id=conversation_id,
@@ -4963,10 +4983,10 @@ async def send_admin_chat_message(
     image_paths: list[str] | None = None,
     workspace_id: int | None = None,
     schedule_at_iso: str = "",
-) -> bool:
+) -> tuple[bool, str]:
     conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
     if conversation is None:
-        return False
+        return False, "Диалог не найден"
     scheduled_for = _parse_schedule_at_iso(schedule_at_iso)
     sent_any = False
 
@@ -5000,7 +5020,19 @@ async def send_admin_chat_message(
             )
             if ok:
                 sent_any = True
-        return sent_any
+        if sent_any:
+            return True, ""
+        latest = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.conversation_id == int(conversation_id),
+                ChatMessage.direction == "bot",
+            )
+            .order_by(ChatMessage.id.desc())
+            .first()
+        )
+        reason = str(getattr(latest, "delivery_error", "") or "").strip() or "Неизвестная ошибка отправки"
+        return False, reason
 
     if text:
         if scheduled_for:
@@ -5025,8 +5057,20 @@ async def send_admin_chat_message(
             )
         if ok:
             sent_any = True
+        else:
+            latest = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.conversation_id == int(conversation_id),
+                    ChatMessage.direction == "bot",
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            reason = str(getattr(latest, "delivery_error", "") or "").strip() or "Неизвестная ошибка отправки"
+            return False, reason
 
-    return sent_any
+    return sent_any, ""
 
 
 async def update_chat_message_text(
