@@ -1579,15 +1579,24 @@
         }
       };
 
+      let canSyncNativeFiles = canUseDataTransfer();
       const syncNativeFiles = () => {
-        if (!canUseDataTransfer()) return;
-        const dt = new DataTransfer();
-        selectedEntries.forEach((entry) => {
-          if (entry.kind === "new" && entry.file instanceof File) {
-            dt.items.add(entry.file);
-          }
-        });
-        filesInput.files = dt.files;
+        if (!canSyncNativeFiles) return false;
+        try {
+          const dt = new DataTransfer();
+          selectedEntries.forEach((entry) => {
+            if (entry.kind === "new" && entry.file instanceof File) {
+              dt.items.add(entry.file);
+            }
+          });
+          filesInput.files = dt.files;
+          return true;
+        } catch (_) {
+          // Some browsers/webviews expose DataTransfer but reject assigning input.files.
+          // Keep preview/reorder working instead of breaking the whole UI.
+          canSyncNativeFiles = false;
+          return false;
+        }
       };
 
       const rebuildFileListAndPreview = () => {
@@ -1662,10 +1671,10 @@
           mediaSortGrid.appendChild(chip);
         });
 
-        syncNativeFiles();
         updateOrderInput();
         updateRemovedExistingInput();
         mediaSortWrap.hidden = selectedEntries.length === 0;
+        syncNativeFiles();
       };
 
       filesInput.addEventListener("change", () => {
