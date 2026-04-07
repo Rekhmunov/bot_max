@@ -7450,14 +7450,17 @@ def _threads_signature(threads: list[object]) -> str:
     return hashlib.sha256(signature_source.encode("utf-8")).hexdigest()[:16]
 
 
-def _messages_signature(messages: list[ChatMessage]) -> str:
+def _messages_signature(messages: list[object]) -> str:
     signature_source = "|".join(
         (
             f"{int(getattr(item, 'id', 0) or 0)}:"
             f"{str(getattr(item, 'delivery_state', '') or '')}:"
             f"{1 if bool(getattr(item, 'is_read_by_customer', False)) else 0}:"
             f"{(getattr(item, 'read_at').isoformat() if isinstance(getattr(item, 'read_at', None), datetime) else '')}:"
-            f"{(getattr(item, 'delivery_next_retry_at').isoformat() if isinstance(getattr(item, 'delivery_next_retry_at', None), datetime) else '')}"
+            f"{(getattr(item, 'delivery_next_retry_at').isoformat() if isinstance(getattr(item, 'delivery_next_retry_at', None), datetime) else str(getattr(item, 'delivery_next_retry_at', '') or ''))}:"
+            f"{','.join(str(url).strip() for url in (getattr(item, 'image_urls', []) or []) if str(url).strip())}:"
+            f"{str(getattr(item, 'image_url', '') or '')}:"
+            f"{str(getattr(item, 'text', '') or '')}"
         )
         for item in messages
     )
@@ -7680,11 +7683,18 @@ async def _render_chat_workspace(
         if mark_read_requested and not opened_unread_same:
             mark_thread_read(db, active_thread.conversation_id, workspace_id=workspace_id)
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
+    message_summaries = [_message_summary_dict(item) for item in messages]
+    # Ensure media links are available to templates and polling signatures.
+    # Without this, operator-side history can miss image-only/group media updates.
+    if messages:
+        for msg in messages:
+            if not hasattr(msg, "image_urls"):
+                setattr(msg, "image_urls", get_message_media_urls(msg))
     mobile_chat_view = view.strip().lower() == "chat"
     threads_signature = _threads_signature(threads)
     chat_state = {
         "active_conversation_id": (active_thread.conversation_id if active_thread else 0),
-        "active_last_message_id": (messages[-1].id if messages else 0),
+        "active_last_message_id": (message_summaries[-1]["id"] if message_summaries else 0),
         "active_messages_signature": _messages_signature(messages),
         "threads_signature": threads_signature,
         "threads_count": len(threads),
@@ -7698,7 +7708,7 @@ async def _render_chat_workspace(
         "request": request,
         "threads": threads,
         "active_thread": active_thread,
-        "messages": messages,
+        "messages": message_summaries,
         "now_utc": datetime.utcnow(),
         "query": q,
         "folder_filter": folder_id,

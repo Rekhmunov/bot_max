@@ -1668,16 +1668,8 @@
                 {% endif %}
                 {% if msg.direction == "bot" and (msg.text or message_images) %}
                   {% set state = (msg.delivery_state or "sent")|lower %}
-                  {% set scheduled_at = (msg.delivery_next_retry_at if msg.delivery_next_retry_at is defined else none) %}
-                  {% set has_scheduled_marker = (msg.is_scheduled_message if msg.is_scheduled_message is defined else false) %}
-                  {% set is_scheduled_pending = (
-                    state == "queued"
-                    and scheduled_at
-                    and (
-                      has_scheduled_marker
-                      or (now_utc and scheduled_at > now_utc)
-                    )
-                  ) %}
+                  {% set scheduled_at = (msg.delivery_next_retry_at or "") %}
+                  {% set is_scheduled_pending = (msg.is_scheduled_pending if msg.is_scheduled_pending is defined else false) %}
                   <div class="bubble-tail">
                     {% if is_scheduled_pending and scheduled_at %}
                       <span
@@ -1686,7 +1678,7 @@
                         aria-label="Отложенная отправка"
                         data-scheduled-at="{{ scheduled_at }}"
                       >
-                        Отправится {{ scheduled_at|to_local("%d.%m.%Y %H:%M") }}
+                        Отправится {{ scheduled_at }}
                       </span>
                     {% else %}
                       {% if state == "failed" %}

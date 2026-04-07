@@ -1864,6 +1864,26 @@ async def process_outbox_queue(
         return 0
     processed = 0
     for item in items:
+        # Atomic claim to avoid duplicate sends when immediate dispatch and
+        # background queue overlap for the same outbox row.
+        claimed = (
+            db.query(OutboxMessage)
+            .filter(
+                OutboxMessage.id == int(item.id),
+                OutboxMessage.state.in_(["queued", "failed"]),
+            )
+            .update(
+                {
+                    OutboxMessage.state: "sending",
+                    OutboxMessage.last_attempt_at: _as_naive_utc(_utc_now()),
+                },
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+        if int(claimed or 0) <= 0:
+            continue
+        db.refresh(item)
         client = _workspace_client(db, workspace_id=item.workspace_id)
         await _dispatch_outbox(db, client=client, item=item)
         processed += 1

@@ -171,6 +171,40 @@ def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cooki
     assert isinstance(payload, dict) and str(payload.get("url") or "").strip()
 
 
+def _run_targeted_chat_history_media_visibility_regression(client: TestClient, *, cookies) -> None:
+    with SessionLocal() as db:
+        conversation = Conversation(
+            workspace_id=1,
+            chat_id=f"chat_hist_reg_{uuid4().hex[:8]}",
+            customer_account_id=f"buyer_hist_reg_{uuid4().hex[:8]}",
+            manager_added=False,
+            is_active=True,
+        )
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+        conversation_id = int(conversation.id)
+        msg = ChatMessage(
+            workspace_id=1,
+            conversation_id=conversation_id,
+            direction="bot",
+            source="bot_system",
+            text="Текст с фото",
+            image_url="/static/uploads/history-first.jpg",
+            image_urls_json='["/static/uploads/history-first.jpg","/static/uploads/history-second.jpg"]',
+            delivery_state="sent",
+            delivery_error="",
+            delivery_retry_count=0,
+        )
+        db.add(msg)
+        db.commit()
+    page = client.get(f"/admin/chats?conversation_id={conversation_id}", cookies=cookies, follow_redirects=False)
+    assert page.status_code == 200
+    assert "Текст с фото" in page.text
+    assert "/static/uploads/history-first.jpg" in page.text
+    assert "/static/uploads/history-second.jpg" in page.text
+
+
 def _iso_with_timezone(raw_iso: str) -> str:
     value = (raw_iso or "").strip()
     if not value:
@@ -440,6 +474,7 @@ def run() -> None:
         assert "img-src" in csp_header
         assert "blob:" in csp_header
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
+        _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
 
         start_template = (
             "Здравствуйте! **Сейчас позову менеджера**.\n"
