@@ -84,6 +84,7 @@ from app.manager_bridge import (
     get_quick_reply_media_paths,
     ensure_media_asset_for_path,
     sync_quick_reply_media_asset_links,
+    remove_quick_reply_media_asset_link,
     remove_chat_message,
     retry_failed_outbox_message,
     replace_conversation_folder_links,
