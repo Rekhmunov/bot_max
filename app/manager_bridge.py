@@ -2926,6 +2926,19 @@ def _parse_manager_callback_action(
     return None
 
 
+def _is_start_intent_event(event: MaxWebhookEvent) -> bool:
+    update_type = str(event.update_type or "").strip().lower()
+    if update_type in {"bot_started", "bot_start"}:
+        return True
+    callback_payload = str(event.callback_payload or "").strip().lower()
+    if callback_payload == "customer:start_fallback":
+        return True
+    text_value = str(event.text or "").strip().lower()
+    if text_value in {"/start", "start", "bot_started", "bot_start"}:
+        return True
+    return False
+
+
 async def _send_contact_request_prompt(
     db: Session,
     conversation_id: int,
@@ -3315,8 +3328,7 @@ async def handle_customer_event(
         )
 
     update_type = (event.update_type or "").strip().lower()
-    is_fallback_start_callback = (str(event.callback_payload or "").strip().lower() == "customer:start_fallback")
-    is_bot_started = update_type in {"bot_started", "bot_start"} or is_fallback_start_callback
+    is_bot_started = _is_start_intent_event(event)
     is_message_event = update_type in {"", "message_created", "message_callback", "new_message"}
 
     if bool(meta.is_blocked):
@@ -3351,7 +3363,17 @@ async def handle_customer_event(
         )
 
     # Message before Start (custom behavior for message_created before start)
-    if not meta.start_prompt_sent and is_message_event and not is_bot_started and not event.contact_phone:
+    # Do not intercept explicit /start text commands here: they should enter
+    # the normal start flow and not loop back to prestart.
+    text_value_normalized = str(event.text or "").strip().lower()
+    is_manual_start_command = text_value_normalized in {"/start", "start", "bot_start", "bot_started"}
+    if (
+        not meta.start_prompt_sent
+        and is_message_event
+        and not is_bot_started
+        and not event.contact_phone
+        and not is_manual_start_command
+    ):
         prestart_text = get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id)
         if prestart_text:
             await _send_start_fallback_prompt(

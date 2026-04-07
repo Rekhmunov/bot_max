@@ -671,6 +671,32 @@ def run() -> None:
         )
         assert webhook_customer_start_fallback.status_code == 200
         assert webhook_customer_start_fallback.json().get("flow") == "start_prompt"
+        # Regression: text /start after prestart must be treated as explicit Start
+        # (no repeated prestart loop).
+        fallback_text_start_chat_id = f"chat_fb_txt_{uuid4().hex[:8]}"
+        fallback_text_start_sender_id = f"buyer_fb_txt_{uuid4().hex[:8]}"
+        webhook_customer_prestart_text_start = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_created",
+                "chat_id": fallback_text_start_chat_id,
+                "sender_id": fallback_text_start_sender_id,
+                "text": "Привет",
+            },
+        )
+        assert webhook_customer_prestart_text_start.status_code == 200
+        assert webhook_customer_prestart_text_start.json().get("flow") == "prestart"
+        webhook_customer_text_start = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_created",
+                "chat_id": fallback_text_start_chat_id,
+                "sender_id": fallback_text_start_sender_id,
+                "text": "/start",
+            },
+        )
+        assert webhook_customer_text_start.status_code == 200
+        assert webhook_customer_text_start.json().get("flow") == "start_prompt"
         with SessionLocal() as db:
             started_conv = (
                 db.query(Conversation)
