@@ -390,6 +390,32 @@
       line-height: 1.25;
       max-height: 2.5em;
     }
+    .thread-preview-with-origin {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      max-width: 100%;
+    }
+    .origin-max-badge {
+      width: 16px;
+      height: 16px;
+      border-radius: 999px;
+      background: #1976ff;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex: 0 0 auto;
+      box-shadow: 0 1px 3px rgba(25, 118, 255, 0.3);
+    }
+    .thread-preview-text {
+      min-width: 0;
+      display: inline;
+    }
     .dot-new,
     .dot-error {
       width: 10px;
@@ -1613,7 +1639,16 @@
                     {% endif %}
                   </div>
                   <div class="thread-meta">customer_account_id: {{ thread.customer_account_id or "—" }}</div>
-                  <div class="thread-preview">{{ thread.last_message_preview or "—" }}</div>
+                  <div class="thread-preview">
+                    {% if thread.last_message_origin == "max" %}
+                      <span class="thread-preview-with-origin">
+                        <span class="origin-max-badge" aria-label="Сообщение из MAX" title="Сообщение из MAX">M</span>
+                        <span class="thread-preview-text">{{ thread.last_message_preview or "—" }}</span>
+                      </span>
+                    {% else %}
+                      {{ thread.last_message_preview or "—" }}
+                    {% endif %}
+                  </div>
                 </a>
               {% endfor %}
             </div>
@@ -1658,7 +1693,16 @@
                   {% endif %}
                 </div>
                 <div class="thread-meta">customer_account_id: {{ thread.customer_account_id or "—" }}</div>
-                <div class="thread-preview">{{ thread.last_message_preview or "—" }}</div>
+                <div class="thread-preview">
+                  {% if thread.last_message_origin == "max" %}
+                    <span class="thread-preview-with-origin">
+                      <span class="origin-max-badge" aria-label="Сообщение из MAX" title="Сообщение из MAX">M</span>
+                      <span class="thread-preview-text">{{ thread.last_message_preview or "—" }}</span>
+                    </span>
+                  {% else %}
+                    {{ thread.last_message_preview or "—" }}
+                  {% endif %}
+                </div>
               </a>
             {% endfor %}
           {% elif not pinned_threads %}

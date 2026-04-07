@@ -607,6 +607,7 @@ class ChatThreadItem:
     status: str
     phone_verified: bool
     last_message_preview: str
+    last_message_is_max_incoming: bool
     has_delivery_errors: bool
     is_unread: bool
     is_blocked: bool
@@ -3911,10 +3912,15 @@ def load_chat_threads(
         username = (profile.username if profile and profile.username else "").strip()
         label = f"{name}{(' @' + username) if username else ''}"
         preview = ""
+        last_message_is_max_incoming = False
         if last_msg:
             preview = (last_msg.text or "").strip()
             if not preview and last_msg.image_url:
                 preview = "[изображение]"
+            last_message_is_max_incoming = (
+                str(getattr(last_msg, "direction", "") or "").strip().lower() == "customer"
+                and str(getattr(last_msg, "source", "") or "").strip().lower() == "customer"
+            )
         status = meta.status if meta else "new"
         # Show unread highlight when there are unread messages OR manual reminder mark.
         is_unread = (bool(meta.is_unread) or bool(meta.manual_unread_mark)) if meta else True
@@ -3957,6 +3963,7 @@ def load_chat_threads(
                 status=status,
                 phone_verified=phone_verified,
                 last_message_preview=preview,
+                last_message_is_max_incoming=last_message_is_max_incoming,
                 has_delivery_errors=has_delivery_errors,
                 is_unread=is_unread,
                 is_blocked=is_blocked,

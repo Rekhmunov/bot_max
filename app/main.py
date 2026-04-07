@@ -7384,6 +7384,9 @@ def _thread_summary_dict(item: object) -> dict[str, object]:
         "is_new": str(getattr(item, "status", "") or "").strip().lower() == "new",
         "has_delivery_errors": bool(getattr(item, "has_delivery_errors", False)),
         "last_message_preview": str(getattr(item, "last_message_preview", "") or ""),
+        "last_message_from_customer_max": bool(
+            getattr(item, "last_message_from_customer_max", False)
+        ),
         "folder_id": getattr(item, "folder_id", None),
         "folder_name": str(getattr(item, "folder_name", "") or ""),
         "folder_ids": [int(v) for v in (getattr(item, "folder_ids", []) or [])],
