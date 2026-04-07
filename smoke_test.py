@@ -947,6 +947,63 @@ def run() -> None:
         assert incoming_photo_url in customer_photo_page.text
         assert 'data-media-open' in customer_photo_page.text
 
+        # Official-style incoming MAX payload: incomingMessageReceived + imageMessage + fileMessageData.downloadUrl
+        incoming_photo_chat_id_max = f"chat_{uuid4().hex[:8]}"
+        incoming_photo_sender_max = f"buyer_{uuid4().hex[:6]}"
+        incoming_photo_url_max = "https://cdn.example.com/customer-photo-max.jpg"
+        webhook_customer_photo_max_style = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "typeWebhook": "incomingMessageReceived",
+                "chatId": incoming_photo_chat_id_max,
+                "idMessage": f"incoming_{uuid4().hex[:10]}",
+                "senderData": {
+                    "chatId": incoming_photo_chat_id_max,
+                    "sender": incoming_photo_sender_max,
+                    "senderName": "Иван Иванов",
+                },
+                "messageData": {
+                    "typeMessage": "imageMessage",
+                    "fileMessageData": {
+                        "downloadUrl": incoming_photo_url_max,
+                        "caption": "подпись к фото",
+                        "fileName": "photo.jpg",
+                    },
+                },
+            },
+        )
+        assert webhook_customer_photo_max_style.status_code == 200
+        with SessionLocal() as db:
+            photo_conv_max = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.workspace_id == 1,
+                    Conversation.chat_id == incoming_photo_chat_id_max,
+                    Conversation.customer_account_id == incoming_photo_sender_max,
+                )
+                .first()
+            )
+            assert photo_conv_max is not None
+            photo_msg_max = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == 1,
+                    ChatMessage.conversation_id == int(photo_conv_max.id),
+                    ChatMessage.direction == "customer",
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            assert photo_msg_max is not None
+            assert incoming_photo_url_max in str(getattr(photo_msg_max, "image_urls_json", "") or "")
+            assert str(getattr(photo_msg_max, "text", "") or "").strip() == ""
+        customer_photo_max_page = client.get(
+            f"/admin/chats?conversation_id={int(photo_conv_max.id)}",
+            follow_redirects=True,
+        )
+        assert customer_photo_max_page.status_code == 200
+        assert incoming_photo_url_max in customer_photo_max_page.text
+
         webhook_manager_tickets = client.post(
             "/webhook/max/ws1key",
             json={

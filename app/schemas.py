@@ -60,6 +60,7 @@ def _normalize_update_type(value: Any) -> str | None:
         "new_message": "message_created",
         "message_created": "message_created",
         "message_callback": "message_callback",
+        "incoming_message_received": "message_created",
         "message_read": "message_read",
         "messages_read": "message_read",
         "read": "message_read",
@@ -126,6 +127,8 @@ class MaxWebhookEvent(BaseModel):
         if (self.update_type or "").strip().lower() == "message_read" and self.read_message_mid:
             return f"read:{self.chat_id}:{self.sender_id}:{self.read_message_mid}"
         if self.message_mid:
+            return f"message:{self.chat_id}:{self.sender_id}:{self.message_mid}"
+        if self.message_mid:
             return f"message:{self.message_mid}"
         return None
 
@@ -173,6 +176,25 @@ class MaxWebhookEvent(BaseModel):
             deep_message = _deep_find_first(payload, {"message"})
             if isinstance(deep_message, dict):
                 message = deep_message
+        # Some MAX integrations provide message payload under messageData/fileMessageData.
+        message_data = (
+            payload.get("messageData")
+            if isinstance(payload.get("messageData"), dict)
+            else (
+                body_root.get("messageData")
+                if isinstance(body_root.get("messageData"), dict)
+                else {}
+            )
+        )
+        sender_data = (
+            payload.get("senderData")
+            if isinstance(payload.get("senderData"), dict)
+            else (
+                body_root.get("senderData")
+                if isinstance(body_root.get("senderData"), dict)
+                else {}
+            )
+        )
         user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
         chat_node = payload.get("chat") if isinstance(payload.get("chat"), dict) else {}
         sender = message.get("sender") if isinstance(message.get("sender"), dict) else {}
@@ -236,6 +258,36 @@ class MaxWebhookEvent(BaseModel):
             if contact_phone:
                 break
 
+        # MAX incoming media format: messageData.typeMessage + messageData.fileMessageData.downloadUrl
+        type_message = str(_pick_first(
+            message_data.get("typeMessage"),
+            message_data.get("type_message"),
+            payload.get("typeMessage"),
+        ) or "").strip().lower()
+        if type_message in {"imagemessage", "image_message"}:
+            file_message_data = (
+                message_data.get("fileMessageData")
+                if isinstance(message_data.get("fileMessageData"), dict)
+                else {}
+            )
+            media_url = _pick_first(
+                file_message_data.get("downloadUrl"),
+                file_message_data.get("download_url"),
+                file_message_data.get("url"),
+                file_message_data.get("fileUrl"),
+                file_message_data.get("file_url"),
+            )
+            if media_url:
+                normalized_media_url = str(media_url).strip()
+                if normalized_media_url and normalized_media_url not in image_urls:
+                    image_urls.append(normalized_media_url)
+            caption_text = _pick_first(
+                file_message_data.get("caption"),
+                message_data.get("caption"),
+            )
+            if caption_text is not None and str(caption_text).strip():
+                text = str(caption_text).strip()
+
         contact_phone = _pick_first(
             contact_phone,
             payload.get("contact_phone"),
@@ -249,6 +301,8 @@ class MaxWebhookEvent(BaseModel):
         chat_id = _pick_first(
             payload.get("chat_id"),
             payload.get("chatId"),
+            sender_data.get("chatId"),
+            sender_data.get("chat_id"),
             message.get("chat_id"),
             message.get("chatId"),
             recipient.get("chat_id"),
@@ -263,6 +317,8 @@ class MaxWebhookEvent(BaseModel):
         sender_id = _pick_first(
             payload.get("sender_id"),
             payload.get("senderId"),
+            sender_data.get("sender"),
+            sender_data.get("chatId"),
             message.get("sender_id"),
             message.get("senderId"),
             message.get("from_user_id"),
@@ -289,10 +345,19 @@ class MaxWebhookEvent(BaseModel):
             message.get("text"),
             body.get("text"),
             body_root.get("text"),
+            (
+                message_data.get("textMessageData", {}).get("textMessage")
+                if isinstance(message_data.get("textMessageData"), dict)
+                else None
+            ),
             _deep_find_first(payload, {"text", "message_text", "messageText"}),
             "",
         )
         message_mid = _pick_first(
+            payload.get("idMessage"),
+            payload.get("id_message"),
+            payload.get("messageId"),
+            payload.get("message_id"),
             message.get("mid"),
             body.get("mid"),
         )
@@ -515,6 +580,7 @@ class MaxWebhookEvent(BaseModel):
             link_mid=str(link_mid) if link_mid is not None else None,
             contact_phone=str(contact_phone) if contact_phone is not None else None,
             sender_first_name=_pick_first(
+                sender_data.get("senderName"),
                 sender.get("first_name"),
                 sender.get("name"),
                 user.get("first_name"),
