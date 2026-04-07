@@ -3706,19 +3706,69 @@
 
       const shouldDeferAutoRefresh = () => {
         const composeForm = document.querySelector(".compose form");
+        const messageInputEl = document.getElementById("message-input");
+        const attachInputEl = document.querySelector(".attach-wrap input[type='file']");
+        const mediaPreviewEl = document.getElementById("compose-media-preview");
         let isComposingMessage = false;
         if (composeForm instanceof HTMLFormElement) {
           const activeEl = document.activeElement;
           const focusInsideCompose = activeEl instanceof HTMLElement && composeForm.contains(activeEl);
-          const input = document.getElementById("message-input");
-          const hasDraftText = input instanceof HTMLInputElement
-            ? String(input.value || "").trim().length > 0
+          const hasDraftText = messageInputEl instanceof HTMLInputElement
+            ? String(messageInputEl.value || "").trim().length > 0
             : false;
-          const hasPendingMedia = document.querySelectorAll("#compose-media-preview .compose-media-chip").length > 0;
+          const hasPendingMedia =
+            (mediaPreviewEl instanceof HTMLElement && mediaPreviewEl.querySelectorAll(".compose-media-chip").length > 0)
+            || (attachInputEl instanceof HTMLInputElement && Number(attachInputEl.files?.length || 0) > 0);
           isComposingMessage = focusInsideCompose || hasDraftText || hasPendingMedia;
         }
-        return hasOpenOverlay() || isReadingHistoryAwayFromBottom() || isComposingMessage;
+        return hasOpenOverlay() || isReadingHistoryAwayFromBottom() || isComposingMessage || isComposeInteractionLocked();
       };
+
+      let composeInteractionLockUntil = 0;
+      const lockComposeInteraction = (durationMs = 12000) => {
+        composeInteractionLockUntil = Math.max(
+          Number(composeInteractionLockUntil || 0),
+          Date.now() + Math.max(500, Number(durationMs || 0)),
+        );
+      };
+      const isComposeInteractionLocked = () => Date.now() < Number(composeInteractionLockUntil || 0);
+
+      (() => {
+        const composeForm = document.querySelector(".compose form");
+        const messageInputEl = document.getElementById("message-input");
+        const attachInputEl = document.querySelector(".attach-wrap input[type='file']");
+        const sendBtnEl = document.getElementById("send-btn");
+        const scheduleBtnEl = document.getElementById("schedule-btn-mobile");
+        if (composeForm instanceof HTMLFormElement) {
+          composeForm.addEventListener("focusin", () => lockComposeInteraction(8000));
+          composeForm.addEventListener("pointerdown", () => lockComposeInteraction(8000), { passive: true });
+        }
+        if (messageInputEl instanceof HTMLInputElement) {
+          messageInputEl.addEventListener("focus", () => lockComposeInteraction(10000));
+          messageInputEl.addEventListener("input", () => lockComposeInteraction(10000));
+          messageInputEl.addEventListener("keydown", () => lockComposeInteraction(10000));
+        }
+        if (attachInputEl instanceof HTMLInputElement) {
+          // File picker can steal focus while native dialog is open.
+          // Keep polling in passive/background mode during this interaction.
+          attachInputEl.addEventListener("pointerdown", () => lockComposeInteraction(20000), { passive: true });
+          attachInputEl.addEventListener("click", () => lockComposeInteraction(20000));
+          attachInputEl.addEventListener("focus", () => lockComposeInteraction(20000));
+          attachInputEl.addEventListener("change", () => lockComposeInteraction(10000));
+        }
+        if (sendBtnEl instanceof HTMLButtonElement) {
+          sendBtnEl.addEventListener("pointerdown", () => lockComposeInteraction(6000), { passive: true });
+        }
+        if (scheduleBtnEl instanceof HTMLButtonElement) {
+          scheduleBtnEl.addEventListener("pointerdown", () => lockComposeInteraction(8000), { passive: true });
+        }
+        document.addEventListener("visibilitychange", () => {
+          // When file picker closes, tab visibility can briefly toggle.
+          if (document.visibilityState === "visible") {
+            lockComposeInteraction(1500);
+          }
+        });
+      })();
 
       const triggerRefresh = async () => {
         if (stopped || !isCurrentPoller()) return;
