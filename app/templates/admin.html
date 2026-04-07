@@ -1008,9 +1008,11 @@
           </div>
         </div>
         <form
+          id="quick-reply-form"
           method="post"
           action="{% if quick_reply_edit_target %}{{ quick_reply_delete_action_prefix or '/admin/quick-replies/' }}{{ quick_reply_edit_target.id }}/update{% else %}{{ quick_reply_create_action or '/admin/quick-replies' }}{% endif %}"
           enctype="multipart/form-data"
+          data-edit-quick-reply-id="{% if quick_reply_edit_target %}{{ quick_reply_edit_target.id }}{% endif %}"
         >
           <label for="command">Команда менеджера (без /)</label>
           <input
@@ -1733,34 +1735,33 @@
         rebuildFileListAndPreview();
       });
 
-      // When editing existing quick reply, preload current media previews
-      // into the sortable strip so preview is always visible before reupload.
-      const editTargetInput = document.querySelector("input[name='edit_quick_reply_id']");
-      if (!selectedEntries.length && editTargetInput instanceof HTMLInputElement && editTargetInput.value) {
-        const existingPreviewNodes = Array.from(
-          document.querySelectorAll(
-            `.quick-replies-table tr td form.inline-edit-form input[value="${editTargetInput.value}"]`
-          )
-        );
-        if (existingPreviewNodes.length) {
-          const row = existingPreviewNodes[0].closest("tr");
-          if (row instanceof HTMLElement) {
-            const rowPreviews = Array.from(row.querySelectorAll("img.preview"));
-            rowPreviews.forEach((imgNode, idx) => {
-              const src = String(imgNode.getAttribute("src") || "").trim();
-              if (!src) return;
-              selectedEntries.push({
-                kind: "existing",
-                file: null,
-                token: `existing:${src}`,
-                previewUrl: src,
-                isObjectUrl: false,
-                path: src,
-                name: `current_${idx + 1}`,
-              });
+      // When editing an existing quick reply, preload its current media previews
+      // into the sortable strip so preview is visible before reupload.
+      const quickReplyForm = document.getElementById("quick-reply-form");
+      const editQuickReplyId = quickReplyForm instanceof HTMLFormElement
+        ? String(quickReplyForm.getAttribute("data-edit-quick-reply-id") || "").trim()
+        : "";
+      if (!selectedEntries.length && editQuickReplyId) {
+        const rowEditInput = Array.from(
+          document.querySelectorAll(".quick-replies-table tr td form.inline-edit-form input[name='edit_quick_reply_id']")
+        ).find((node) => node instanceof HTMLInputElement && String(node.value || "").trim() === editQuickReplyId);
+        const row = rowEditInput ? rowEditInput.closest("tr") : null;
+        if (row instanceof HTMLElement) {
+          const rowPreviews = Array.from(row.querySelectorAll("img.preview"));
+          rowPreviews.forEach((imgNode, idx) => {
+            const src = String(imgNode.getAttribute("src") || "").trim();
+            if (!src) return;
+            selectedEntries.push({
+              kind: "existing",
+              file: null,
+              token: `existing:${src}`,
+              previewUrl: src,
+              isObjectUrl: false,
+              path: src,
+              name: `current_${idx + 1}`,
             });
-            rebuildFileListAndPreview();
-          }
+          });
+          rebuildFileListAndPreview();
         }
       }
     })();
