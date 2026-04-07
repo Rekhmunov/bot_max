@@ -3126,10 +3126,14 @@ def delete_quick_reply(
     if reply:
         _delete_quick_reply_media_files(db, reply_id=reply.id)
         if reply.image_path:
-            relative_static_path = reply.image_path.removeprefix("/static/")
-            img_path = Path("app/static") / relative_static_path
-            if img_path.exists():
-                img_path.unlink()
+            image_path_value = str(reply.image_path or "").strip()
+            # Legacy safety: only delete local static file when path is actually local.
+            if image_path_value.startswith("/static/"):
+                relative_static_path = image_path_value.removeprefix("/static/")
+                if relative_static_path:
+                    img_path = Path("app/static") / relative_static_path
+                    if img_path.exists():
+                        img_path.unlink()
         db.delete(reply)
         db.commit()
     return RedirectResponse(url="/admin", status_code=302)

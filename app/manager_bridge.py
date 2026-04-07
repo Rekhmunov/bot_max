@@ -1570,11 +1570,20 @@ async def _dispatch_outbox(
                         break
                     images.append((file_name, content_bytes))
                 if images:
-                    return await client.send_images(
+                    images_result = await client.send_images(
                         chat_id=target_chat_id,
                         images=images,
                         text=str(payload.get("text")) if payload.get("text") is not None else None,
                     )
+                    if isinstance(images_result, dict) and str(images_result.get("error") or "").strip().lower() == "upload_token_missing":
+                        # Fallback for upload providers returning non-standard token response:
+                        # send by URL attachments to avoid blocking operator flow.
+                        return await _send_message_with_attachment_ready_retry(
+                            chat_id=target_chat_id,
+                            text=str(payload.get("text")) if payload.get("text") is not None else None,
+                            attachments=payload.get("attachments"),
+                        )
+                    return images_result
             return await _send_message_with_attachment_ready_retry(
                 chat_id=target_chat_id,
                 text=str(payload.get("text")) if payload.get("text") is not None else None,
@@ -1614,11 +1623,20 @@ async def _dispatch_outbox(
                         break
                     images.append((file_name, content_bytes))
                 if images:
-                    return await client.send_images(
+                    images_result = await client.send_images(
                         user_id=target_user_id,
                         images=images,
                         text=str(payload.get("text")) if payload.get("text") is not None else None,
                     )
+                    if isinstance(images_result, dict) and str(images_result.get("error") or "").strip().lower() == "upload_token_missing":
+                        # Fallback for upload providers returning non-standard token response:
+                        # send by URL attachments to avoid blocking operator flow.
+                        return await _send_message_with_attachment_ready_retry(
+                            user_id=target_user_id,
+                            text=str(payload.get("text")) if payload.get("text") is not None else None,
+                            attachments=payload.get("attachments"),
+                        )
+                    return images_result
             return await _send_message_with_attachment_ready_retry(
                 user_id=target_user_id,
                 text=str(payload.get("text")) if payload.get("text") is not None else None,
