@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import secrets
 import string
@@ -791,6 +792,18 @@ def _workspace_webhook_url_by_key(webhook_key: str) -> str:
         return "—"
     base = settings.public_base_url.rstrip("/")
     return f"{base}{webhook_path}/{key}"
+
+
+def _read_flow_log(stage: str, **kwargs: object) -> None:
+    try:
+        details = ", ".join(f"{key}={repr(value)}" for key, value in kwargs.items())
+    except Exception:
+        details = ""
+    logger = logging.getLogger(__name__)
+    if details:
+        logger.info("[READ_FLOW] %s: %s", stage, details)
+    else:
+        logger.info("[READ_FLOW] %s", stage)
 
 
 def _user_friendly_bot_connection_error() -> str:
@@ -8284,12 +8297,27 @@ async def max_webhook(
 
     update_type = (event.update_type or "").strip().lower()
     if update_type == "message_read":
+        _read_flow_log(
+            "webhook_message_read_received",
+            update_type=update_type,
+            chat_id=event.chat_id,
+            sender_id=event.sender_id,
+            read_message_mid=event.read_message_mid,
+            event_uid=event_uid,
+        )
         changed = mark_conversation_messages_read_by_customer(
             db,
             workspace_id=workspace_id,
             chat_id=event.chat_id,
             customer_id=event.sender_id,
             read_up_to_mid=event.read_message_mid,
+        )
+        _read_flow_log(
+            "webhook_message_read_applied",
+            chat_id=event.chat_id,
+            sender_id=event.sender_id,
+            read_message_mid=event.read_message_mid,
+            marked_read_count=int(changed),
         )
         return {
             "ok": True,

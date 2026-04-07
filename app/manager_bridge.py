@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import logging
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from typing import Optional
@@ -97,6 +98,8 @@ BLOCKED_NOTICE_COOLDOWN_SECONDS = 30
 DEFAULT_OFFHOURS_MESSAGE = "Сейчас мы вне рабочего времени. Мы ответим в рабочие часы."
 DEFAULT_OFFHOURS_COOLDOWN_SECONDS = 6 * 60 * 60
 DEFAULT_BUSINESS_TIMEZONE = "UTC"
+
+logger = logging.getLogger(__name__)
 
 
 def _workspace_client(db: Session, *, workspace_id: int) -> MaxClient:
@@ -854,10 +857,65 @@ def _render_ticket_line(meta: ConversationMeta, customer: CustomerProfile | None
 
 
 def _extract_sent_mid(send_result: dict) -> str | None:
-    message = send_result.get("message") if isinstance(send_result.get("message"), dict) else {}
-    body = message.get("body") if isinstance(message.get("body"), dict) else {}
-    mid = body.get("mid") or message.get("mid")
-    return str(mid) if mid is not None else None
+    if not isinstance(send_result, dict):
+        return None
+
+    def _normalize_mid(value: object) -> str | None:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        return raw
+
+    key_candidates = (
+        "idMessage",
+        "id_message",
+        "messageId",
+        "message_id",
+        "message_mid",
+        "max_message_mid",
+        "mid",
+    )
+
+    # 1) Prefer top-level explicit keys first.
+    for key in key_candidates:
+        normalized = _normalize_mid(send_result.get(key))
+        if normalized:
+            return normalized
+
+    # 2) Then check common nested containers returned by providers.
+    nested_roots: list[dict] = []
+    for root_key in ("message", "body", "result", "data", "response", "payload"):
+        root_value = send_result.get(root_key)
+        if isinstance(root_value, dict):
+            nested_roots.append(root_value)
+    for root in nested_roots:
+        for key in key_candidates:
+            normalized = _normalize_mid(root.get(key))
+            if normalized:
+                return normalized
+
+    # 3) Finally do a deep walk to support wrappers unknown in advance.
+    stack: list[object] = [send_result]
+    visited: set[int] = set()
+    while stack:
+        node = stack.pop()
+        marker = id(node)
+        if marker in visited:
+            continue
+        visited.add(marker)
+        if isinstance(node, dict):
+            for key in key_candidates:
+                normalized = _normalize_mid(node.get(key))
+                if normalized:
+                    return normalized
+            for value in node.values():
+                if isinstance(value, (dict, list)):
+                    stack.append(value)
+        elif isinstance(node, list):
+            for item in node:
+                if isinstance(item, (dict, list)):
+                    stack.append(item)
+    return None
 
 
 def _utc_now() -> datetime:
@@ -1423,6 +1481,13 @@ def mark_conversation_messages_read_by_customer(
     chat_value = str(chat_id or "").strip()
     customer_value = str(customer_id or "").strip()
     read_mid_value = str(read_up_to_mid or "").strip()
+    logger.info(
+        "[READ_FLOW] Received message_read, idMessage=%r, chatId=%r, customerId=%r, workspace=%s",
+        read_mid_value,
+        chat_value,
+        customer_value,
+        int(workspace_id or 0),
+    )
 
     conversation_id: int | None = None
 
@@ -1446,6 +1511,16 @@ def mark_conversation_messages_read_by_customer(
         )
         if row and row[0]:
             conversation_id = int(row[0])
+            logger.info(
+                "[READ_FLOW] MID matched conversation_id=%s for idMessage=%r",
+                conversation_id,
+                read_mid_value,
+            )
+        else:
+            logger.warning(
+                "[READ_FLOW] No ChatMessage found by idMessage=%r (max_message_mid); checking fallbacks",
+                read_mid_value,
+            )
 
     # Fallback: strict chat + customer match.
     if conversation_id is None and chat_value and customer_value:
@@ -1489,6 +1564,12 @@ def mark_conversation_messages_read_by_customer(
             conversation_id = int(conversation.id)
 
     if conversation_id is None:
+        logger.warning(
+            "[READ_FLOW] Unable to resolve conversation for read event idMessage=%r chatId=%r customerId=%r",
+            read_mid_value,
+            chat_value,
+            customer_value,
+        )
         return 0
 
     updated = mark_messages_read_by_customer(
@@ -1508,6 +1589,12 @@ def mark_conversation_messages_read_by_customer(
             read_up_to_mid=None,
             read_at=read_at,
         )
+    logger.info(
+        "[READ_FLOW] Updated read flags count=%s for conversation_id=%s idMessage=%r",
+        int(updated or 0),
+        int(conversation_id or 0),
+        read_mid_value,
+    )
     return updated
 
 

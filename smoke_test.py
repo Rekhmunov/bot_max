@@ -1701,6 +1701,38 @@ def run() -> None:
         )
         assert send_attempt.status_code in (302, 303)
 
+        # Ensure outbound MID is persisted even when provider returns idMessage at top level.
+        idmessage_probe_value = f"idmsg_{uuid4().hex[:10]}"
+
+        async def _fake_send_text_with_idmessage(*args, **kwargs):
+            return {"success": True, "idMessage": idmessage_probe_value}
+
+        with patch(
+            "app.max_client.MaxClient.send_text",
+            new=AsyncMock(side_effect=_fake_send_text_with_idmessage),
+        ):
+            idmessage_probe_send = client.post(
+                f"/admin/chats/{conversation_id}/send",
+                data={"text": "idmessage_probe"},
+                cookies=cookies,
+                follow_redirects=False,
+            )
+            assert idmessage_probe_send.status_code in (302, 303)
+        with SessionLocal() as db:
+            idmessage_probe_msg = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == 1,
+                    ChatMessage.conversation_id == conversation_id,
+                    ChatMessage.direction == "bot",
+                    ChatMessage.text == "idmessage_probe",
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            assert idmessage_probe_msg is not None
+            assert str(getattr(idmessage_probe_msg, "max_message_mid", "") or "").strip() == idmessage_probe_value
+
         admin_chats_page_after_send = client.get(
             f"/admin/chats?conversation_id={conversation_id}",
             cookies=cookies,
