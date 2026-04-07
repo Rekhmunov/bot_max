@@ -133,6 +133,9 @@ def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cooki
         payload = first.get("payload") if isinstance(first.get("payload"), dict) else {}
         assert isinstance(payload, dict)
         assert any(str(payload.get(key) or "").strip() for key in ("token", "url")) or bool(payload.get("photos"))
+        # For URL fallback, ensure we do not send local /static paths to MAX.
+        if str(payload.get("url") or "").strip():
+            assert str(payload.get("url") or "").strip().startswith(("http://", "https://"))
         sent_attachments.append(attachments)
         return {"success": True, "message": {"body": {"mid": f"mid_{uuid4().hex[:8]}"}}}
 

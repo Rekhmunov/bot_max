@@ -980,6 +980,20 @@ def _resolve_local_static_media_file(value: str | None) -> Path | None:
     return file_path if file_path.exists() else None
 
 
+def _to_external_media_url(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    local = _to_local_static_media_path(raw)
+    if local and local.startswith("/static/"):
+        base = str(app_settings.public_base_url or "").strip().rstrip("/")
+        if base:
+            return f"{base}{local}"
+    return raw
+
+
 def _mime_from_extension(path_value: str | None) -> str:
     ext = Path(str(path_value or "")).suffix.lower()
     if ext in {".jpg", ".jpeg"}:
@@ -1524,7 +1538,7 @@ async def _dispatch_outbox(
                     continue
                 token = str(row_payload.get("token") or "").strip()
                 photos = row_payload.get("photos")
-                url = str(row_payload.get("url") or "").strip()
+                url = _to_external_media_url(row_payload.get("url"))
                 photo_id = row_payload.get("photo_id")
                 image_payload: dict[str, object] = {}
                 if token:
@@ -1567,7 +1581,28 @@ async def _dispatch_outbox(
             single_url = str(getattr(chat_message, "image_url", "") or "").strip()
             if single_url:
                 urls.append(single_url)
-        return [{"type": "image", "payload": {"url": url}} for url in urls]
+        normalized_urls = [_to_external_media_url(url) for url in urls]
+        normalized_urls = [url for url in normalized_urls if url]
+        return [{"type": "image", "payload": {"url": url}} for url in normalized_urls]
+
+    def _is_proto_payload_upload_error(result_value: dict) -> bool:
+        if not isinstance(result_value, dict):
+            return False
+        raw_status = result_value.get("status_code")
+        try:
+            status_code = int(raw_status) if raw_status is not None else None
+        except (TypeError, ValueError):
+            status_code = None
+        if status_code != 400:
+            return False
+        response = result_value.get("response")
+        if not isinstance(response, dict):
+            return False
+        code = str(response.get("code") or "").strip().lower()
+        message = str(response.get("message") or "").strip().lower()
+        if code != "proto.payload":
+            return False
+        return ("failed to upload image" in message) or ("can't deserialize body" in message)
 
     async def _send_message_with_attachment_ready_retry(
         *,
@@ -1633,7 +1668,10 @@ async def _dispatch_outbox(
                         images=images,
                         text=str(payload.get("text")) if payload.get("text") is not None else None,
                     )
-                    if isinstance(images_result, dict) and str(images_result.get("error") or "").strip().lower() == "upload_token_missing":
+                    if isinstance(images_result, dict) and (
+                        str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
+                        or _is_proto_payload_upload_error(images_result)
+                    ):
                         # Fallback for upload providers returning non-standard token response:
                         # send by URL attachments to avoid blocking operator flow.
                         return await _send_message_with_attachment_ready_retry(
@@ -1686,7 +1724,10 @@ async def _dispatch_outbox(
                         images=images,
                         text=str(payload.get("text")) if payload.get("text") is not None else None,
                     )
-                    if isinstance(images_result, dict) and str(images_result.get("error") or "").strip().lower() == "upload_token_missing":
+                    if isinstance(images_result, dict) and (
+                        str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
+                        or _is_proto_payload_upload_error(images_result)
+                    ):
                         # Fallback for upload providers returning non-standard token response:
                         # send by URL attachments to avoid blocking operator flow.
                         return await _send_message_with_attachment_ready_retry(
@@ -1941,7 +1982,8 @@ async def enqueue_and_process_send_media_group(
     urls = [str(item).strip() for item in (photo_urls or []) if str(item).strip()]
     if not urls:
         return False
-    attachments = [{"type": "image", "payload": {"url": value}} for value in urls]
+    attachments = [{"type": "image", "payload": {"url": _to_external_media_url(value)}} for value in urls]
+    attachments = [item for item in attachments if str((item.get("payload") or {}).get("url") or "").strip()]
     now_utc_naive = _as_naive_utc(_utc_now())
     first_image = urls[0]
     msg = _store_chat_message(
@@ -2062,7 +2104,8 @@ async def queue_only_send_media_group(
         delivery_next_retry_at=next_retry_at,
         is_scheduled_message=is_scheduled_message,
     )
-    attachments = [{"type": "image", "payload": {"url": value}} for value in urls]
+    attachments = [{"type": "image", "payload": {"url": _to_external_media_url(value)}} for value in urls]
+    attachments = [item for item in attachments if str((item.get("payload") or {}).get("url") or "").strip()]
     image_payloads: list[tuple[str, bytes]] = []
     for value in urls:
         local_file = _resolve_local_static_media_file(value)
