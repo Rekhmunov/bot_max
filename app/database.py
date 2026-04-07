@@ -114,6 +114,10 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE conversation_meta ADD COLUMN manual_unread_mark INTEGER DEFAULT 0")
                 )
+            if "unread_messages_count" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN unread_messages_count INTEGER DEFAULT 0")
+                )
             if "assigned_manager_id" not in meta_columns:
                 conn.execute(
                     text("ALTER TABLE conversation_meta ADD COLUMN assigned_manager_id VARCHAR(255)")

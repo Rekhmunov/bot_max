@@ -2445,6 +2445,109 @@ def run() -> None:
         assert folder_page_after_unread_text.count("folder-unread-badge") >= 2
         assert f'data-folder-id="{int(folder_id)}"' in folder_page_after_unread_text
         assert f'data-folder-id="{int(second_folder_id)}"' in folder_page_after_unread_text
+        with SessionLocal() as db:
+            base_folder_unread_sum = int(
+                db.query(func.coalesce(func.sum(ConversationMeta.unread_messages_count), 0))
+                .join(
+                    ConversationFolderLink,
+                    (ConversationFolderLink.conversation_id == ConversationMeta.conversation_id)
+                    & (ConversationFolderLink.workspace_id == ConversationMeta.workspace_id),
+                )
+                .filter(
+                    ConversationMeta.workspace_id == 1,
+                    ConversationFolderLink.folder_id == int(folder_id),
+                )
+                .scalar()
+                or 0
+            )
+            base_second_folder_unread_sum = int(
+                db.query(func.coalesce(func.sum(ConversationMeta.unread_messages_count), 0))
+                .join(
+                    ConversationFolderLink,
+                    (ConversationFolderLink.conversation_id == ConversationMeta.conversation_id)
+                    & (ConversationFolderLink.workspace_id == ConversationMeta.workspace_id),
+                )
+                .filter(
+                    ConversationMeta.workspace_id == 1,
+                    ConversationFolderLink.folder_id == int(second_folder_id),
+                )
+                .scalar()
+                or 0
+            )
+        # Add another unread chat in the same folders and ensure folder badges increase.
+        second_unread_chat_id = f"chat_folder_badge_{uuid4().hex[:8]}"
+        second_unread_sender_id = f"buyer_folder_badge_{uuid4().hex[:8]}"
+        with SessionLocal() as db:
+            second_unread_conv = Conversation(
+                workspace_id=1,
+                chat_id=second_unread_chat_id,
+                customer_account_id=second_unread_sender_id,
+                manager_added=False,
+                is_active=True,
+            )
+            db.add(second_unread_conv)
+            db.commit()
+            db.refresh(second_unread_conv)
+            second_unread_conv_id = int(second_unread_conv.id)
+            links = [
+                ConversationFolderLink(
+                    workspace_id=1,
+                    conversation_id=second_unread_conv_id,
+                    folder_id=int(folder_id),
+                ),
+                ConversationFolderLink(
+                    workspace_id=1,
+                    conversation_id=second_unread_conv_id,
+                    folder_id=int(second_folder_id),
+                ),
+            ]
+            for link in links:
+                db.add(link)
+            db.commit()
+        second_unread_payload = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_created",
+                "chat_id": second_unread_chat_id,
+                "sender_id": second_unread_sender_id,
+                "text": "Еще одно непрочитанное сообщение",
+            },
+            follow_redirects=False,
+        )
+        assert second_unread_payload.status_code == 200
+        folder_page_after_second_unread = client.get("/admin/chats", cookies=cookies)
+        assert folder_page_after_second_unread.status_code == 200
+        with SessionLocal() as db:
+            folder_unread_sum_after = int(
+                db.query(func.coalesce(func.sum(ConversationMeta.unread_messages_count), 0))
+                .join(
+                    ConversationFolderLink,
+                    (ConversationFolderLink.conversation_id == ConversationMeta.conversation_id)
+                    & (ConversationFolderLink.workspace_id == ConversationMeta.workspace_id),
+                )
+                .filter(
+                    ConversationMeta.workspace_id == 1,
+                    ConversationFolderLink.folder_id == int(folder_id),
+                )
+                .scalar()
+                or 0
+            )
+            second_folder_unread_sum_after = int(
+                db.query(func.coalesce(func.sum(ConversationMeta.unread_messages_count), 0))
+                .join(
+                    ConversationFolderLink,
+                    (ConversationFolderLink.conversation_id == ConversationMeta.conversation_id)
+                    & (ConversationFolderLink.workspace_id == ConversationMeta.workspace_id),
+                )
+                .filter(
+                    ConversationMeta.workspace_id == 1,
+                    ConversationFolderLink.folder_id == int(second_folder_id),
+                )
+                .scalar()
+                or 0
+            )
+            assert folder_unread_sum_after >= (base_folder_unread_sum + 1)
+            assert second_folder_unread_sum_after >= (base_second_folder_unread_sum + 1)
 
         metrics_page = client.get("/admin/chats", cookies=cookies)
         assert metrics_page.status_code == 200

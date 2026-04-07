@@ -7366,6 +7366,10 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
 
 def _thread_summary_dict(item: object) -> dict[str, object]:
     conversation_id = int(getattr(item, "conversation_id", 0) or 0)
+    try:
+        unread_messages_count = int(getattr(item, "unread_messages_count", 0) or 0)
+    except (TypeError, ValueError):
+        unread_messages_count = 0
     return {
         "conversation_id": conversation_id,
         "chat_id": str(getattr(item, "chat_id", "") or ""),
@@ -7373,6 +7377,7 @@ def _thread_summary_dict(item: object) -> dict[str, object]:
         "ticket_no": getattr(item, "ticket_no", None),
         "customer_label": str(getattr(item, "customer_label", "") or ""),
         "is_unread": bool(getattr(item, "is_unread", False)),
+        "unread_messages_count": unread_messages_count,
         "is_pinned": bool(getattr(item, "is_pinned", False)),
         "pin_order": (
             int(getattr(item, "pin_order"))
@@ -7466,8 +7471,16 @@ def _threads_signature(threads: list[object]) -> str:
 def _folder_unread_counts(threads: list[object]) -> dict[int, int]:
     counts: dict[int, int] = {}
     for item in threads:
-        if not bool(getattr(item, "is_unread", False)):
-            continue
+        try:
+            unread_messages = int(getattr(item, "unread_messages_count", 0) or 0)
+        except (TypeError, ValueError):
+            unread_messages = 0
+        if unread_messages <= 0:
+            # Backward-compatible fallback for payloads without per-thread message count.
+            if bool(getattr(item, "is_unread", False)):
+                unread_messages = 1
+            else:
+                continue
         raw_folder_ids = getattr(item, "folder_ids", []) or []
         folder_ids: set[int] = set()
         for value in raw_folder_ids:
@@ -7478,7 +7491,7 @@ def _folder_unread_counts(threads: list[object]) -> dict[int, int]:
             if folder_id > 0:
                 folder_ids.add(folder_id)
         for folder_id in folder_ids:
-            counts[folder_id] = int(counts.get(folder_id, 0)) + 1
+            counts[folder_id] = int(counts.get(folder_id, 0)) + int(unread_messages)
     return counts
 
 
