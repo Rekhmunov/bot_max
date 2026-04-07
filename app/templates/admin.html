@@ -120,6 +120,16 @@
       line-height: 1;
       flex-shrink: 0;
     }
+    .section-icon-max {
+      padding: 0;
+      overflow: hidden;
+      background: #fff;
+    }
+    .section-icon-max svg {
+      width: 20px;
+      height: 20px;
+      display: block;
+    }
     .card-head-actions {
       display: inline-flex;
       align-items: center;
@@ -760,7 +770,15 @@
       {% if (show_settings_card | default(true)) %}
       <section class="card" data-settings-block="bot-settings">
         <div class="card-head">
-          <h2 class="card-title"><span class="section-icon">⚙️</span>Настройки бота</h2>
+          <h2 class="card-title">
+            <span class="section-icon section-icon-max" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img" focusable="false" aria-hidden="true">
+                <rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="#1976ff"></rect>
+                <text x="12" y="15" text-anchor="middle" font-size="8" font-family="Inter, Arial, sans-serif" font-weight="800" fill="#ffffff">MAX</text>
+              </svg>
+            </span>
+            Настройки бота MAX
+          </h2>
           <div class="card-head-actions">
             <span class="card-head-kicker">Конфигурация</span>
           </div>
