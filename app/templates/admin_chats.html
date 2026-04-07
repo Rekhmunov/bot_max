@@ -2091,7 +2091,7 @@
           syncSendVisibility();
           return;
         }
-          selectedFiles.forEach((file, idx) => {
+        selectedFiles.forEach((file, idx) => {
           const chip = document.createElement("div");
           chip.className = "compose-media-chip";
           const img = document.createElement("img");
@@ -2104,16 +2104,16 @@
           removeBtn.type = "button";
           removeBtn.className = "compose-media-remove";
           removeBtn.textContent = "×";
-            removeBtn.addEventListener("click", () => {
-              selectedFiles = selectedFiles.filter((_, fileIdx) => fileIdx !== idx);
-              if (!canConstructDataTransfer) {
-                photoInput.value = "";
-              } else {
-                syncNativeFiles();
-              }
-              renderPreview();
-            });
-            chip.appendChild(removeBtn);
+          removeBtn.addEventListener("click", () => {
+            selectedFiles = selectedFiles.filter((_, fileIdx) => fileIdx !== idx);
+            if (!canConstructDataTransfer) {
+              photoInput.value = "";
+            } else {
+              syncNativeFiles();
+            }
+            renderPreview();
+          });
+          chip.appendChild(removeBtn);
           mediaPreview.appendChild(chip);
         });
         mediaPreview.classList.add("is-visible");

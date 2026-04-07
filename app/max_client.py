@@ -283,6 +283,53 @@ class MaxClient:
         }
         return mapping.get(ext, "application/octet-stream")
 
+    @staticmethod
+    def _extract_token_from_payload(payload: Any) -> str:
+        """Best-effort token extraction for varying MAX upload responses."""
+        token_keys = ("token", "upload_token", "attachment_token")
+        queue: list[Any] = [payload]
+        visited_ids: set[int] = set()
+
+        while queue:
+            current = queue.pop(0)
+            try:
+                object_id = id(current)
+            except Exception:
+                object_id = 0
+            if object_id and object_id in visited_ids:
+                continue
+            if object_id:
+                visited_ids.add(object_id)
+
+            if isinstance(current, dict):
+                for key in token_keys:
+                    value = current.get(key)
+                    if isinstance(value, str) and value.strip():
+                        return value.strip()
+                for value in current.values():
+                    queue.append(value)
+                continue
+
+            if isinstance(current, list):
+                queue.extend(current)
+                continue
+
+            if isinstance(current, str):
+                raw = current.strip()
+                if not raw:
+                    continue
+                if raw.startswith("{") or raw.startswith("["):
+                    try:
+                        import json
+                        parsed = json.loads(raw)
+                    except Exception:
+                        parsed = None
+                    if parsed is not None:
+                        queue.append(parsed)
+                continue
+
+        return ""
+
     async def upload_image_bytes(
         self,
         *,
@@ -304,11 +351,7 @@ class MaxClient:
         ).strip()
         if not upload_url:
             return {"success": False, "error": "upload_url_missing", "response": upload_info}
-        upload_info_token = str(upload_info.get("token") or "").strip()
-        if not upload_info_token:
-            payload_obj = upload_info.get("payload")
-            if isinstance(payload_obj, dict):
-                upload_info_token = str(payload_obj.get("token") or "").strip()
+        upload_info_token = self._extract_token_from_payload(upload_info)
         mime = self._guess_mime_type(file_name)
         upload_result = await self._post_file(
             upload_url,
@@ -318,12 +361,7 @@ class MaxClient:
         )
         if not isinstance(upload_result, dict):
             return {"success": False, "error": "invalid_upload_result"}
-        token = str(upload_result.get("token") or "").strip()
-        if not token:
-            # Some responses can still include token under nested payload.
-            payload_obj = upload_result.get("payload")
-            if isinstance(payload_obj, dict):
-                token = str(payload_obj.get("token") or "").strip()
+        token = self._extract_token_from_payload(upload_result)
         if not token and upload_info_token:
             token = upload_info_token
         if not token:
