@@ -1518,15 +1518,29 @@ async def _dispatch_outbox(
             for row in attachments_payload:
                 if not isinstance(row, dict):
                     continue
-                if str(row.get("type") or "").strip().lower() != "image_url":
-                    continue
+                row_type = str(row.get("type") or "").strip().lower()
                 row_payload = row.get("payload")
                 if not isinstance(row_payload, dict):
                     continue
+                token = str(row_payload.get("token") or "").strip()
+                photos = row_payload.get("photos")
                 url = str(row_payload.get("url") or "").strip()
-                if not url:
+                photo_id = row_payload.get("photo_id")
+                image_payload: dict[str, object] = {}
+                if token:
+                    image_payload["token"] = token
+                if isinstance(photos, list) and photos:
+                    image_payload["photos"] = photos
+                if url:
+                    image_payload["url"] = url
+                if photo_id is not None and str(photo_id).strip():
+                    image_payload["photo_id"] = photo_id
+                if not image_payload:
                     continue
-                normalized.append({"type": "image_url", "payload": {"url": url}})
+                # Max API expects media as type=image payload.
+                # Normalize legacy image_url payloads into image payload.
+                if row_type in {"image", "image_url", "photo"}:
+                    normalized.append({"type": "image", "payload": image_payload})
             if normalized:
                 return normalized
 
@@ -1553,7 +1567,7 @@ async def _dispatch_outbox(
             single_url = str(getattr(chat_message, "image_url", "") or "").strip()
             if single_url:
                 urls.append(single_url)
-        return [{"type": "image_url", "payload": {"url": url}} for url in urls]
+        return [{"type": "image", "payload": {"url": url}} for url in urls]
 
     async def _send_message_with_attachment_ready_retry(
         *,
@@ -1927,7 +1941,7 @@ async def enqueue_and_process_send_media_group(
     urls = [str(item).strip() for item in (photo_urls or []) if str(item).strip()]
     if not urls:
         return False
-    attachments = [{"type": "image_url", "payload": {"url": value}} for value in urls]
+    attachments = [{"type": "image", "payload": {"url": value}} for value in urls]
     now_utc_naive = _as_naive_utc(_utc_now())
     first_image = urls[0]
     msg = _store_chat_message(
@@ -2048,7 +2062,7 @@ async def queue_only_send_media_group(
         delivery_next_retry_at=next_retry_at,
         is_scheduled_message=is_scheduled_message,
     )
-    attachments = [{"type": "image_url", "payload": {"url": value}} for value in urls]
+    attachments = [{"type": "image", "payload": {"url": value}} for value in urls]
     image_payloads: list[tuple[str, bytes]] = []
     for value in urls:
         local_file = _resolve_local_static_media_file(value)

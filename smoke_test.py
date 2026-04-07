@@ -120,11 +120,19 @@ def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cooki
     sent_attachments: list[list[dict]] = []
 
     async def _fake_send_images(*args, **kwargs):
+        # Force fallback path from byte-upload flow into attachment send_message flow.
         return {"success": False, "error": "upload_token_missing"}
 
     async def _fake_send_message(*args, **kwargs):
         attachments = kwargs.get("attachments")
         assert isinstance(attachments, list) and len(attachments) >= 1
+        first = attachments[0] if attachments else {}
+        # Regression guard: fallback attachments must be valid MAX image attachments.
+        assert isinstance(first, dict)
+        assert str(first.get("type") or "") == "image"
+        payload = first.get("payload") if isinstance(first.get("payload"), dict) else {}
+        assert isinstance(payload, dict)
+        assert any(str(payload.get(key) or "").strip() for key in ("token", "url")) or bool(payload.get("photos"))
         sent_attachments.append(attachments)
         return {"success": True, "message": {"body": {"mid": f"mid_{uuid4().hex[:8]}"}}}
 
@@ -155,7 +163,7 @@ def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cooki
     assert len(sent_attachments) >= 1
     first_batch = sent_attachments[0]
     assert isinstance(first_batch, list)
-    assert str(first_batch[0].get("type") or "") == "image_url"
+    assert str(first_batch[0].get("type") or "") == "image"
     payload = first_batch[0].get("payload") if isinstance(first_batch[0], dict) else {}
     assert isinstance(payload, dict) and str(payload.get("url") or "").strip()
 

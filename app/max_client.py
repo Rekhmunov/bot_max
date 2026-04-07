@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 from urllib.parse import quote_plus
+from urllib.parse import urlsplit
+from urllib.parse import parse_qs
 
 import asyncio
 import httpx
@@ -318,6 +321,29 @@ class MaxClient:
                 raw = current.strip()
                 if not raw:
                     continue
+                # Try extracting token from URLs/query-like strings.
+                try:
+                    parsed = urlsplit(raw)
+                    if parsed.query:
+                        query = parse_qs(parsed.query, keep_blank_values=False)
+                        for key in token_keys:
+                            values = query.get(key)
+                            if values:
+                                token_value = str(values[0] or "").strip()
+                                if token_value:
+                                    return token_value
+                except Exception:
+                    pass
+                # Try extracting token from key=value / key: value raw text.
+                token_pattern = r"(?:^|[?&;,\s\"'])(?:token|upload_token|attachment_token)\s*(?:=|:)\s*\"?([A-Za-z0-9._\-]{10,})"
+                token_match = re.search(token_pattern, raw, flags=re.IGNORECASE)
+                if token_match:
+                    token_value = str(token_match.group(1) or "").strip()
+                    if token_value:
+                        return token_value
+                # Some providers return bare token strings.
+                if re.fullmatch(r"[A-Za-z0-9._\-]{20,}", raw):
+                    return raw
                 if raw.startswith("{") or raw.startswith("["):
                     try:
                         import json
@@ -329,6 +355,54 @@ class MaxClient:
                 continue
 
         return ""
+
+    @staticmethod
+    def _build_image_attachment_payload(upload_result: Any, *, fallback_token: str = "") -> dict[str, Any] | None:
+        """Build attachment payload for image from diverse upload responses."""
+        if isinstance(upload_result, dict):
+            photos_value = upload_result.get("photos")
+            if isinstance(photos_value, list) and photos_value:
+                normalized_photos: list[dict[str, Any]] = []
+                for item in photos_value:
+                    if not isinstance(item, dict):
+                        continue
+                    row: dict[str, Any] = {}
+                    token_value = str(item.get("token") or "").strip()
+                    if token_value:
+                        row["token"] = token_value
+                    url_value = str(item.get("url") or "").strip()
+                    if url_value:
+                        row["url"] = url_value
+                    photo_id_value = item.get("photo_id")
+                    if photo_id_value is not None and str(photo_id_value).strip():
+                        row["photo_id"] = photo_id_value
+                    if row:
+                        normalized_photos.append(row)
+                if normalized_photos:
+                    return {"photos": normalized_photos}
+
+            for nested_key in ("payload", "result", "data", "attachment", "file"):
+                nested_value = upload_result.get(nested_key)
+                if not isinstance(nested_value, dict):
+                    continue
+                nested_payload = MaxClient._build_image_attachment_payload(
+                    nested_value,
+                    fallback_token=fallback_token,
+                )
+                if nested_payload:
+                    return nested_payload
+
+            token_value = MaxClient._extract_token_from_payload(upload_result) or str(fallback_token or "").strip()
+            if token_value:
+                return {"token": token_value}
+
+            url_value = str(upload_result.get("url") or upload_result.get("href") or "").strip()
+            if url_value:
+                return {"url": url_value}
+
+        if str(fallback_token or "").strip():
+            return {"token": str(fallback_token or "").strip()}
+        return None
 
     async def upload_image_bytes(
         self,
@@ -364,16 +438,18 @@ class MaxClient:
         )
         if not isinstance(upload_result, dict):
             return {"success": False, "error": "invalid_upload_result"}
-        token = self._extract_token_from_payload(upload_result)
-        if not token and upload_info_token:
-            token = upload_info_token
-        if not token:
+        attachment_payload = self._build_image_attachment_payload(
+            upload_result,
+            fallback_token=upload_info_token,
+        )
+        if not isinstance(attachment_payload, dict) or not attachment_payload:
             return {"success": False, "error": "upload_token_missing", "response": upload_result}
+        token = self._extract_token_from_payload(attachment_payload)
         return {
             "success": True,
             "attachment": {
                 "type": "image",
-                "payload": {"token": token},
+                "payload": attachment_payload,
             },
             "token": token,
         }
