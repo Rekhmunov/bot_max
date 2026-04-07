@@ -523,6 +523,7 @@ async def maybe_send_offhours_autoreply(
     conversation: Conversation,
     meta: ConversationMeta,
     event: MaxWebhookEvent,
+    client: MaxClient,
     workspace_id: int,
 ) -> bool:
     evaluation = evaluate_workspace_business_hours(db, workspace_id=workspace_id)
@@ -543,16 +544,25 @@ async def maybe_send_offhours_autoreply(
         str(evaluation.get("offhours_message") or DEFAULT_OFFHOURS_MESSAGE),
         evaluation,
     )
-    await queue_only_send_text(
-        db,
-        conversation_id=conversation.id,
-        target_chat_id=event.chat_id,
-        target_user_id=event.sender_id,
+    # Off-hours auto-reply must not alter operator chat timeline/polling behavior.
+    # Send directly to customer in MAX without creating ChatMessage/Outbox records.
+    send_result = await client.send_text(
+        chat_id=event.chat_id,
         text=rendered,
-        source="bot_system",
         text_format="markdown",
     )
-    await process_outbox_queue(db, limit=20)
+    send_ok = bool(send_result.get("success", True) or send_result.get("message"))
+    if not send_ok and str(event.sender_id or "").strip():
+        fallback_result = await client.send_text_to_user(
+            user_id=str(event.sender_id).strip(),
+            text=rendered,
+            text_format="markdown",
+        )
+        send_ok = bool(fallback_result.get("success", True) or fallback_result.get("message"))
+        if send_ok:
+            send_result = fallback_result
+    if not send_ok:
+        return False
     meta.offhours_notice_sent_at = _as_naive_utc(_utc_now())
     db.add(meta)
     db.add(
@@ -3359,6 +3369,7 @@ async def handle_customer_event(
             conversation=conversation,
             meta=meta,
             event=event,
+            client=client,
             workspace_id=workspace_id,
         )
 
