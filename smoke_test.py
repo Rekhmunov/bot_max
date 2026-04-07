@@ -1816,33 +1816,68 @@ def run() -> None:
             assert idmessage_probe_msg is not None
             assert str(getattr(idmessage_probe_msg, "max_message_mid", "") or "").strip() == idmessage_probe_value
 
-        # Multi-image fallback path: proto.payload errors.required should still deliver.
+        # Multi-image compatibility cascade:
+        # 1) token-list attachments for 2+ images
+        # 2) photos-map fallback on proto.payload/errors.required
+        # 3) URL attachments fallback
         sent_multi_attachments: list[list[dict]] = []
 
-        async def _fake_send_images_multi(*args, **kwargs):
-            images = kwargs.get("images")
-            count = len(images) if isinstance(images, list) else 0
-            if count >= 2:
+        async def _fake_upload_image_bytes(*args, **kwargs):
+            file_name = str(kwargs.get("file_name") or "img")
+            stem = file_name.split(".")[0]
+            return {
+                "success": True,
+                "attachment": {"type": "image", "payload": {"token": f"tok_{stem}"}},
+                "token": f"tok_{stem}",
+            }
+
+        send_attempt = {"count": 0}
+
+        async def _fake_send_message_multi(*args, **kwargs):
+            send_attempt["count"] += 1
+            attachments = kwargs.get("attachments")
+            assert isinstance(attachments, list) and len(attachments) >= 1
+            sent_multi_attachments.append(attachments)
+
+            # Attempt 1: expect token-list attachments (one image payload per token).
+            if send_attempt["count"] == 1:
+                assert len(attachments) >= 2
+                for entry in attachments:
+                    assert isinstance(entry, dict)
+                    assert str(entry.get("type") or "").strip() == "image"
+                    payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+                    assert str(payload.get("token") or "").strip()
                 return {
                     "success": False,
                     "status_code": 400,
                     "response": {"code": "proto.payload", "message": "errors.required"},
                     "endpoint": "/messages",
                 }
-            return {"success": True, "message": {"body": {"mid": f"mid_{uuid4().hex[:8]}"}}}
 
-        async def _fake_send_message_multi(*args, **kwargs):
-            attachments = kwargs.get("attachments")
-            assert isinstance(attachments, list) and len(attachments) >= 2
+            # Attempt 2: expect grouped photos-map payload.
+            if send_attempt["count"] == 2:
+                assert len(attachments) == 1
+                entry = attachments[0]
+                assert str(entry.get("type") or "").strip() == "image"
+                payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+                photos = payload.get("photos") if isinstance(payload.get("photos"), dict) else {}
+                assert isinstance(photos, dict) and len(photos) >= 2
+                return {
+                    "success": False,
+                    "status_code": 400,
+                    "response": {"code": "proto.payload", "message": "Failed to upload image."},
+                    "endpoint": "/messages",
+                }
+
+            # Attempt 3: expect URL fallback attachments (flat list).
             for entry in attachments:
                 assert isinstance(entry, dict)
                 assert str(entry.get("type") or "").strip() == "image"
                 payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
                 assert str(payload.get("url") or "").strip().startswith(("http://", "https://"))
-            sent_multi_attachments.append(attachments)
             return {"success": True, "message": {"body": {"mid": f"mid_{uuid4().hex[:8]}"}}}
 
-        with patch("app.max_client.MaxClient.send_images", new=AsyncMock(side_effect=_fake_send_images_multi)), patch(
+        with patch("app.max_client.MaxClient.upload_image_bytes", new=AsyncMock(side_effect=_fake_upload_image_bytes)), patch(
             "app.max_client.MaxClient.send_message",
             new=AsyncMock(side_effect=_fake_send_message_multi),
         ):
@@ -1859,7 +1894,7 @@ def run() -> None:
             assert multi_send.status_code in (302, 303)
             location = str(multi_send.headers.get("location", ""))
             assert "sent=1" in location
-        assert len(sent_multi_attachments) >= 1
+        assert len(sent_multi_attachments) >= 3
 
         admin_chats_page_after_send = client.get(
             f"/admin/chats?conversation_id={conversation_id}",

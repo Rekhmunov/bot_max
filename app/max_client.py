@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import quote_plus
 from urllib.parse import urlsplit
 from urllib.parse import parse_qs
+import logging
 
 import asyncio
 import httpx
@@ -546,32 +547,78 @@ class MaxClient:
                 uploaded_tokens.append(token_value)
         if not attachments:
             return {"success": False, "error": "image_attachments_missing"}
+        # A/B/C compatibility for 2+ images across MAX deployments:
+        # A: token-list attachments (one image per attachment)
+        # B: grouped photos payload map
+        # C: handled by caller fallback to URL attachments on proto.payload errors
         if len(images) >= 2 and len(uploaded_tokens) == len(images):
-            # Official MAX schema supports sending multiple photos as a single
-            # `image` attachment payload with `photos` map of tokens.
-            # Build this canonical shape for 2+ images to avoid proto.payload
-            # validation failures seen with providers requiring grouped photos.
+            token_list_attachments = [
+                {"type": "image", "payload": {"token": token_value}}
+                for token_value in uploaded_tokens
+                if str(token_value or "").strip()
+            ]
             photos_payload: dict[str, dict[str, str]] = {}
             for index, token_value in enumerate(uploaded_tokens):
-                photos_payload[str(index)] = {"token": token_value}
-            attachments = [{"type": "image", "payload": {"photos": photos_payload}}]
+                token_normalized = str(token_value or "").strip()
+                if token_normalized:
+                    photos_payload[str(index)] = {"token": token_normalized}
+            grouped_photos_attachments = (
+                [{"type": "image", "payload": {"photos": photos_payload}}]
+                if photos_payload
+                else []
+            )
+            multi_send_candidates: list[tuple[str, list[dict[str, Any]]]] = []
+            if token_list_attachments:
+                multi_send_candidates.append(("token_list", token_list_attachments))
+            if grouped_photos_attachments:
+                multi_send_candidates.append(("photos_map", grouped_photos_attachments))
+        else:
+            multi_send_candidates = [("single_or_default", attachments)]
+
+        logger = logging.getLogger(__name__)
         wait_seconds = 0.6
         max_attempts = 4
-        for attempt_idx in range(max_attempts):
-            result = await self.send_message(
-                chat_id=chat_id,
-                user_id=user_id,
-                text=(text if text else None),
-                attachments=attachments,
-            )
-            response = result.get("response") if isinstance(result, dict) else {}
-            code = str(response.get("code") or "").strip().lower() if isinstance(response, dict) else ""
-            if code != "attachment.not.ready":
-                return result
-            if attempt_idx >= max_attempts - 1:
-                return result
-            await asyncio.sleep(wait_seconds)
-            wait_seconds = min(wait_seconds * 2.0, 5.0)
+        last_result: dict[str, Any] = {"success": False, "error": "image_send_failed"}
+        for candidate_name, candidate_attachments in multi_send_candidates:
+            wait_seconds = 0.6
+            for attempt_idx in range(max_attempts):
+                result = await self.send_message(
+                    chat_id=chat_id,
+                    user_id=user_id,
+                    text=(text if text else None),
+                    attachments=candidate_attachments,
+                )
+                response = result.get("response") if isinstance(result, dict) else {}
+                code = str(response.get("code") or "").strip().lower() if isinstance(response, dict) else ""
+                logger.info(
+                    "[MAX_SEND_IMAGES] mode=%s attempt=%s ok=%s code=%s status=%s",
+                    candidate_name,
+                    int(attempt_idx + 1),
+                    bool(result.get("success", True) or result.get("message")),
+                    code,
+                    result.get("status_code"),
+                )
+                if code != "attachment.not.ready":
+                    ok = bool(result.get("success", True) or result.get("message"))
+                    if ok:
+                        return result
+                    # Try next candidate for known payload-shape incompatibilities.
+                    if (
+                        isinstance(response, dict)
+                        and str(response.get("code") or "").strip().lower() == "proto.payload"
+                    ):
+                        message = str(response.get("message") or "").strip().lower()
+                        if ("errors.required" in message) or ("deserialize" in message) or ("failed to upload image" in message):
+                            last_result = result
+                            break
+                    return result
+                if attempt_idx >= max_attempts - 1:
+                    last_result = result
+                    break
+                await asyncio.sleep(wait_seconds)
+                wait_seconds = min(wait_seconds * 2.0, 5.0)
+        if isinstance(last_result, dict) and last_result:
+            return last_result
         return {"success": False, "error": "attachment_not_ready_retry_exhausted"}
 
     async def edit_message(
