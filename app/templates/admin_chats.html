@@ -501,7 +501,7 @@
     .chat-toast-stack {
       position: absolute;
       left: 50%;
-      bottom: calc(82px + env(safe-area-inset-bottom));
+      top: calc(12px + env(safe-area-inset-top));
       transform: translateX(-50%);
       width: min(560px, calc(100% - 22px));
       display: grid;
@@ -2029,6 +2029,28 @@
       if (!messageInput || !photoInput || !sendBtn || !scheduleBtnMobile || !scheduleTriggerMenu || !schedulePopup || !scheduleDateInput || !scheduleTimeInput || !scheduleHint || !scheduleSubmitBtn || !scheduledAtInput || !composeForm || !mediaPreview || !uploadStatus) return;
 
       const MAX_FILE_BYTES = 5 * 1024 * 1024;
+      const activeConversationId = {{ active_thread.conversation_id if active_thread else "null" }};
+      const CHAT_SCROLL_STATE_KEY = "__chatMessagesScrollState";
+      const OPERATION_QUERY_KEYS = new Set([
+        "sent",
+        "scheduled",
+        "quick",
+        "edited",
+        "deleted",
+        "retried",
+        "renamed",
+        "unread",
+        "foldered",
+        "foldered_multi",
+        "pinned",
+        "unpinned",
+        "pin_limit",
+        "blocked",
+        "unblocked",
+        "send_error",
+        "quick_error",
+        "error_reason",
+      ]);
       let selectedEntries = [];
       let fileViewUrls = [];
       let isUploadReady = true;
@@ -2173,6 +2195,43 @@
         const wrap = document.querySelector(".messages-wrap");
         if (!wrap) return;
         wrap.scrollTop = wrap.scrollHeight;
+      };
+      const hasOperationQueryFlag = () => {
+        try {
+          const url = new URL(window.location.href);
+          for (const key of OPERATION_QUERY_KEYS) {
+            if (url.searchParams.has(key)) {
+              return true;
+            }
+          }
+        } catch (_) {
+          return false;
+        }
+        return false;
+      };
+      const restoreMessagesScrollState = () => {
+        const wrap = document.querySelector(".messages-wrap");
+        if (!(wrap instanceof HTMLElement)) return false;
+        try {
+          const raw = window.sessionStorage.getItem(CHAT_SCROLL_STATE_KEY);
+          if (!raw) return false;
+          window.sessionStorage.removeItem(CHAT_SCROLL_STATE_KEY);
+          const payload = JSON.parse(raw);
+          const savedAt = Number(payload?.savedAt || 0);
+          if (!savedAt || (Date.now() - savedAt) > 30000) {
+            return false;
+          }
+          const savedConversationId = Number(payload?.conversationId || 0);
+          if (activeConversationId && savedConversationId && savedConversationId !== Number(activeConversationId)) {
+            return false;
+          }
+          const offsetFromBottom = Math.max(0, Number(payload?.offsetFromBottom || 0));
+          const targetTop = Math.max(0, wrap.scrollHeight - wrap.clientHeight - offsetFromBottom);
+          wrap.scrollTop = targetTop;
+          return true;
+        } catch (_) {
+          return false;
+        }
       };
       const setKeyboardInset = () => {
         const vv = window.visualViewport;
@@ -2404,8 +2463,11 @@
         clearPreviews();
       });
       setKeyboardInset();
-      scrollMessagesToBottom();
-      setTimeout(scrollMessagesToBottom, 90);
+      const restoredScrollPosition = restoreMessagesScrollState();
+      if (!restoredScrollPosition && !hasOperationQueryFlag()) {
+        scrollMessagesToBottom();
+        setTimeout(scrollMessagesToBottom, 90);
+      }
       if (window.__chatSoftVisit) {
         const originalSoftVisit = window.__chatSoftVisit;
         window.__chatSoftVisit = async (...args) => {
@@ -2486,6 +2548,28 @@
 
     (() => {
       const SOFT_NAV_ATTR = "data-soft-nav";
+      const CHAT_SCROLL_STATE_KEY = "__chatMessagesScrollState";
+
+      const captureMessagesScrollState = () => {
+        const wrap = document.querySelector(".messages-wrap");
+        if (!(wrap instanceof HTMLElement)) return;
+        try {
+          const currentUrl = new URL(window.location.href);
+          const conversationId = Number(currentUrl.searchParams.get("conversation_id") || 0);
+          const offsetFromBottom = Math.max(0, wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight);
+          window.sessionStorage.setItem(
+            CHAT_SCROLL_STATE_KEY,
+            JSON.stringify({
+              conversationId,
+              offsetFromBottom,
+              savedAt: Date.now(),
+            }),
+          );
+        } catch (_) {
+          // Keep soft-nav resilient if storage or URL parsing is unavailable.
+        }
+      };
+      window.__chatCaptureMessagesScrollState = captureMessagesScrollState;
 
       async function renderFromResponse(response, { replaceHistory = true } = {}) {
         if (!response || !response.ok) {
@@ -2579,6 +2663,9 @@
         if (!form) return;
         event.preventDefault();
         const method = (form.method || "GET").toUpperCase();
+        if (method !== "GET") {
+          captureMessagesScrollState();
+        }
         const actionUrl = form.action || window.location.href;
         const formData = new FormData(form);
 
@@ -2786,6 +2873,9 @@
           unreadBtn.textContent = "Отметить непрочитанным";
           unreadBtn.addEventListener("click", async () => {
             hideCtx();
+            if (typeof window.__chatCaptureMessagesScrollState === "function") {
+              window.__chatCaptureMessagesScrollState();
+            }
             const activeConversationInput = document.querySelector("input[name='conversation_id']");
             const activeConversationId = activeConversationInput instanceof HTMLInputElement
               ? Number(activeConversationInput.value || 0)
@@ -2825,6 +2915,9 @@
         pinBtn.textContent = isPinned ? "Открепить чат" : "Закрепить чат";
         pinBtn.addEventListener("click", async () => {
           hideCtx();
+          if (typeof window.__chatCaptureMessagesScrollState === "function") {
+            window.__chatCaptureMessagesScrollState();
+          }
           const targetPrefix = isPinned ? unpinPrefix : pinPrefix;
           const response = await fetch(`${targetPrefix}${threadId}/${isPinned ? "unpin" : "pin"}${endpointQuerySuffix}`, {
             method: "POST",
@@ -2851,6 +2944,9 @@
       const submitPinnedOrder = async () => {
         const ids = collectPinnedIds();
         if (!ids.length) return;
+        if (typeof window.__chatCaptureMessagesScrollState === "function") {
+          window.__chatCaptureMessagesScrollState();
+        }
         const response = await fetch(`${pinsReorderEndpoint}${endpointQuerySuffix}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2966,6 +3062,9 @@
       });
       folderApplyBtn?.addEventListener("click", async () => {
         if (!selectedThreadId) return;
+        if (typeof window.__chatCaptureMessagesScrollState === "function") {
+          window.__chatCaptureMessagesScrollState();
+        }
         const ids = Array.from(selectedFolderIds.values()).map((v) => Number(v)).filter((v) => v > 0);
         const response = await fetch(`${moveFolderPrefix}${selectedThreadId}/move-folder${endpointQuerySuffix}`, {
           method: "POST",
@@ -2985,6 +3084,9 @@
       pop.querySelector("#folder-create-form").addEventListener("submit", async (e) => {
         e.preventDefault();
         if (!selectedThreadId) return;
+        if (typeof window.__chatCaptureMessagesScrollState === "function") {
+          window.__chatCaptureMessagesScrollState();
+        }
         const input = pop.querySelector("#new-folder-name");
         const name = (input.value || "").trim();
         if (!name) return;
@@ -3266,6 +3368,9 @@
         deleteBtn.addEventListener("click", async () => {
           hideMsgMenu();
           if (!selectedMessageId) return;
+          if (typeof window.__chatCaptureMessagesScrollState === "function") {
+            window.__chatCaptureMessagesScrollState();
+          }
           const formBody = `q=${encodeURIComponent("{{ query }}")}&view=${encodeURIComponent("{{ 'chat' if mobile_chat_view else '' }}")}`;
           const response = await fetch(`${deleteMessagePrefix}${activeConversationId}/messages/${selectedMessageId}/delete${endpointQuerySuffix}`, {
             method: "POST",
