@@ -361,6 +361,20 @@ class MaxClient:
         """Build attachment payload for image from diverse upload responses."""
         if isinstance(upload_result, dict):
             photos_value = upload_result.get("photos")
+            if isinstance(photos_value, dict) and photos_value:
+                normalized_photos_map: dict[str, dict[str, Any]] = {}
+                next_index = 0
+                for raw_key, raw_item in photos_value.items():
+                    if not isinstance(raw_item, dict):
+                        continue
+                    token_value = str(raw_item.get("token") or "").strip()
+                    if not token_value:
+                        continue
+                    key_value = str(raw_key or "").strip() or str(next_index)
+                    normalized_photos_map[key_value] = {"token": token_value}
+                    next_index += 1
+                if normalized_photos_map:
+                    return {"photos": normalized_photos_map}
             if isinstance(photos_value, list) and photos_value:
                 normalized_photos: list[dict[str, Any]] = []
                 for item in photos_value:
@@ -516,6 +530,7 @@ class MaxClient:
         if not images:
             return {"success": False, "error": "images_required"}
         attachments: list[dict[str, Any]] = []
+        uploaded_tokens: list[str] = []
         for file_name, content in images:
             uploaded = await self.upload_image_bytes(
                 file_name=(file_name or "image.jpg"),
@@ -526,8 +541,20 @@ class MaxClient:
             attachment = uploaded.get("attachment")
             if isinstance(attachment, dict):
                 attachments.append(attachment)
+            token_value = str(uploaded.get("token") or "").strip()
+            if token_value:
+                uploaded_tokens.append(token_value)
         if not attachments:
             return {"success": False, "error": "image_attachments_missing"}
+        if len(images) >= 2 and len(uploaded_tokens) == len(images):
+            # Official MAX schema supports sending multiple photos as a single
+            # `image` attachment payload with `photos` map of tokens.
+            # Build this canonical shape for 2+ images to avoid proto.payload
+            # validation failures seen with providers requiring grouped photos.
+            photos_payload: dict[str, dict[str, str]] = {}
+            for index, token_value in enumerate(uploaded_tokens):
+                photos_payload[str(index)] = {"token": token_value}
+            attachments = [{"type": "image", "payload": {"photos": photos_payload}}]
         wait_seconds = 0.6
         max_attempts = 4
         for attempt_idx in range(max_attempts):
