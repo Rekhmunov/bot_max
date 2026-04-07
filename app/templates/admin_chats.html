@@ -842,6 +842,30 @@
       stroke-linecap: round;
       stroke-linejoin: round;
     }
+    .new-messages-indicator {
+      position: absolute;
+      right: 12px;
+      bottom: calc(84px + env(safe-area-inset-bottom));
+      z-index: 20;
+      border: 0;
+      border-radius: 999px;
+      min-width: 36px;
+      height: 36px;
+      padding: 0 10px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 800;
+      font-size: 13px;
+      line-height: 1;
+      box-shadow: 0 3px 10px rgba(25, 118, 255, 0.25);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    .new-messages-indicator.is-visible {
+      display: inline-flex;
+    }
     .slash-menu {
       display: none;
       border: 1px solid var(--line);
@@ -1775,6 +1799,14 @@
             <div id="slash-menu" class="slash-menu"></div>
           </form>
         </section>
+        <button
+          type="button"
+          id="new-messages-indicator"
+          class="new-messages-indicator"
+          aria-live="polite"
+          aria-label="Новые сообщения"
+          title="Новые сообщения"
+        ></button>
       {% else %}
         <div class="empty">Выберите чат слева</div>
       {% endif %}
@@ -3445,6 +3477,7 @@
     (() => {
       const updatesEndpoint = "{{ updates_endpoint }}";
       if (!updatesEndpoint) return;
+      const newMessagesIndicator = document.getElementById("new-messages-indicator");
       const pollerStateKey = "__chatPollingState";
       const previousPoller = window[pollerStateKey];
       if (
@@ -3490,6 +3523,39 @@
           .map((node) => Number(node.getAttribute("data-message-id") || 0))
           .filter((id) => id > 0)
       );
+      let deferredLastMessageId = 0;
+      let deferredIncomingCount = 0;
+
+      const pendingIncomingCount = () => {
+        if (deferredIncomingCount > 0) {
+          return deferredIncomingCount;
+        }
+        if (deferredLastMessageId <= 0 || deferredLastMessageId <= currentLastMessageId) {
+          return 0;
+        }
+        return deferredLastMessageId - currentLastMessageId;
+      };
+
+      const renderNewMessagesIndicator = () => {
+        if (!(newMessagesIndicator instanceof HTMLButtonElement)) return;
+        const count = pendingIncomingCount();
+        if (count <= 0) {
+          newMessagesIndicator.classList.remove("is-visible");
+          newMessagesIndicator.textContent = "";
+          newMessagesIndicator.setAttribute("aria-label", "Новые сообщения");
+          return;
+        }
+        const text = count > 99 ? "99+" : String(count);
+        newMessagesIndicator.textContent = text;
+        newMessagesIndicator.classList.add("is-visible");
+        newMessagesIndicator.setAttribute("aria-label", `Новые сообщения: ${text}`);
+      };
+
+      const resetDeferredMessages = () => {
+        deferredLastMessageId = 0;
+        deferredIncomingCount = 0;
+        renderNewMessagesIndicator();
+      };
 
       const buildUpdatesUrl = () => {
         const qs = new URLSearchParams();
@@ -3586,8 +3652,23 @@
             if (shouldDeferAutoRefresh()) {
               // Do not interrupt right-click/context actions and
               // do not force-jump to bottom while user reads history.
+              if (nextLast > currentLastMessageId) {
+                deferredLastMessageId = Math.max(deferredLastMessageId, nextLast);
+                if (Array.isArray(payload.messages)) {
+                  const incoming = payload.messages.reduce((acc, row) => {
+                    if (!row || typeof row !== "object") return acc;
+                    const id = Number(row.id || 0);
+                    if (id <= currentLastMessageId) return acc;
+                    const direction = String(row.direction || "").toLowerCase();
+                    return direction === "customer" ? (acc + 1) : acc;
+                  }, 0);
+                  deferredIncomingCount = Math.max(deferredIncomingCount, incoming);
+                }
+                renderNewMessagesIndicator();
+              }
               return;
             }
+            resetDeferredMessages();
             if (nextLast > currentLastMessageId) {
               currentLastMessageId = nextLast;
             }
@@ -3643,6 +3724,27 @@
       const triggerRefreshSafe = () => {
         triggerRefresh().catch(() => {});
       };
+      if (newMessagesIndicator instanceof HTMLButtonElement) {
+        newMessagesIndicator.addEventListener("click", async () => {
+          if (newMessagesIndicator.disabled) return;
+          newMessagesIndicator.disabled = true;
+          try {
+            const wrap = document.querySelector(".messages-wrap");
+            if (wrap instanceof HTMLElement) {
+              wrap.scrollTo({ top: wrap.scrollHeight, behavior: "smooth" });
+            }
+            resetDeferredMessages();
+            if (window.__chatSoftVisit) {
+              stopPolling();
+              await window.__chatSoftVisit(window.location.href, { replaceHistory: true });
+              return;
+            }
+            window.location.reload();
+          } catch (_) {
+            window.location.reload();
+          }
+        });
+      }
       scheduleNext(900);
       window.addEventListener("beforeunload", () => {
         stopPolling();
