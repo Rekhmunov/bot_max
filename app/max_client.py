@@ -347,8 +347,11 @@ class MaxClient:
             upload_info.get("url")
             or upload_info.get("upload_url")
             or upload_info.get("link")
+            or upload_info.get("href")
             or ""
         ).strip()
+        if not upload_url:
+            upload_url = self._extract_upload_url_from_payload(upload_info)
         if not upload_url:
             return {"success": False, "error": "upload_url_missing", "response": upload_info}
         upload_info_token = self._extract_token_from_payload(upload_info)
@@ -374,6 +377,55 @@ class MaxClient:
             },
             "token": token,
         }
+
+    @staticmethod
+    def _extract_upload_url_from_payload(payload: Any) -> str:
+        """Best-effort upload URL extraction for varying /uploads responses."""
+        url_keys = ("url", "upload_url", "link", "href")
+        queue: list[Any] = [payload]
+        visited_ids: set[int] = set()
+
+        while queue:
+            current = queue.pop(0)
+            try:
+                object_id = id(current)
+            except Exception:
+                object_id = 0
+            if object_id and object_id in visited_ids:
+                continue
+            if object_id:
+                visited_ids.add(object_id)
+
+            if isinstance(current, dict):
+                for key in url_keys:
+                    value = current.get(key)
+                    if isinstance(value, str):
+                        raw = value.strip()
+                        if raw.startswith("http://") or raw.startswith("https://"):
+                            return raw
+                for value in current.values():
+                    queue.append(value)
+                continue
+
+            if isinstance(current, list):
+                queue.extend(current)
+                continue
+
+            if isinstance(current, str):
+                raw = current.strip()
+                if not raw:
+                    continue
+                if raw.startswith("http://") or raw.startswith("https://"):
+                    return raw
+                if raw.startswith("{") or raw.startswith("["):
+                    try:
+                        import json
+                        parsed = json.loads(raw)
+                    except Exception:
+                        parsed = None
+                    if parsed is not None:
+                        queue.append(parsed)
+        return ""
 
     async def send_images(
         self,

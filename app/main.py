@@ -1855,6 +1855,12 @@ def _delete_quick_reply_media_files(db: Session, *, reply_id: int) -> None:
         )
         delete_by_public_url(str(media.media_path or "").strip())
     db.query(QuickReplyMedia).filter(QuickReplyMedia.quick_reply_id == reply_id).delete(synchronize_session=False)
+    # Keep normalized quick-reply media links consistent after hard delete.
+    sync_quick_reply_media_asset_links(
+        db,
+        quick_reply_id=int(reply_id),
+        workspace_id=DEFAULT_WORKSPACE_ID,
+    )
     db.commit()
 
 
