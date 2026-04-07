@@ -3411,6 +3411,41 @@
         timer = window.setTimeout(triggerRefreshSafe, Math.max(500, Number(delayMs || currentPollMs)));
       };
 
+      const hasOpenOverlay = () => {
+        const selectors = [
+          "#list-actions-menu",
+          "#header-context-menu",
+          ".context-menu",
+          ".msg-context-menu",
+          ".folder-pop",
+          "#schedule-pop",
+          "#folder-create-pop",
+          "#media-lightbox",
+        ];
+        const nodes = selectors.flatMap((selector) => Array.from(document.querySelectorAll(selector)));
+        return nodes.some((node) => {
+          if (!(node instanceof HTMLElement)) return false;
+          const style = window.getComputedStyle(node);
+          if (style.display === "none" || style.visibility === "hidden") return false;
+          // Invisible helper menus can have empty content.
+          if (node.classList.contains("context-menu") || node.classList.contains("msg-context-menu")) {
+            return node.childElementCount > 0;
+          }
+          return true;
+        });
+      };
+
+      const isReadingHistoryAwayFromBottom = () => {
+        const wrap = document.querySelector(".messages-wrap");
+        if (!(wrap instanceof HTMLElement)) return false;
+        const distanceToBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight;
+        return distanceToBottom > 120;
+      };
+
+      const shouldDeferAutoRefresh = () => {
+        return hasOpenOverlay() || isReadingHistoryAwayFromBottom();
+      };
+
       const triggerRefresh = async () => {
         if (stopped || !isCurrentPoller()) return;
         if (inFlight) {
@@ -3442,17 +3477,21 @@
           const hasMessageChanges = Boolean(payload.messages_changed);
           const hasThreadsChanges = Boolean(payload.threads_changed);
 
-          if (nextLast > currentLastMessageId) {
-            currentLastMessageId = nextLast;
-          }
-          if (nextSig) {
-            currentThreadsSignature = nextSig;
-          }
-          if (nextMessagesSig) {
-            currentMessagesSignature = nextMessagesSig;
-          }
-
           if (hasMessageChanges || hasThreadsChanges) {
+            if (shouldDeferAutoRefresh()) {
+              // Do not interrupt right-click/context actions and
+              // do not force-jump to bottom while user reads history.
+              return;
+            }
+            if (nextLast > currentLastMessageId) {
+              currentLastMessageId = nextLast;
+            }
+            if (nextSig) {
+              currentThreadsSignature = nextSig;
+            }
+            if (nextMessagesSig) {
+              currentMessagesSignature = nextMessagesSig;
+            }
             if (window.__chatSoftVisit) {
               stopPolling();
               await window.__chatSoftVisit(window.location.href, { replaceHistory: true });
@@ -3476,6 +3515,16 @@
               }
             } else {
               window.location.reload();
+            }
+          } else {
+            if (nextLast > currentLastMessageId) {
+              currentLastMessageId = nextLast;
+            }
+            if (nextSig) {
+              currentThreadsSignature = nextSig;
+            }
+            if (nextMessagesSig) {
+              currentMessagesSignature = nextMessagesSig;
             }
           }
         } catch (_) {
