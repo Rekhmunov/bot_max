@@ -3705,7 +3705,19 @@
       };
 
       const shouldDeferAutoRefresh = () => {
-        return hasOpenOverlay() || isReadingHistoryAwayFromBottom();
+        const composeForm = document.querySelector(".compose form");
+        let isComposingMessage = false;
+        if (composeForm instanceof HTMLFormElement) {
+          const activeEl = document.activeElement;
+          const focusInsideCompose = activeEl instanceof HTMLElement && composeForm.contains(activeEl);
+          const input = document.getElementById("message-input");
+          const hasDraftText = input instanceof HTMLInputElement
+            ? String(input.value || "").trim().length > 0
+            : false;
+          const hasPendingMedia = document.querySelectorAll("#compose-media-preview .compose-media-chip").length > 0;
+          isComposingMessage = focusInsideCompose || hasDraftText || hasPendingMedia;
+        }
+        return hasOpenOverlay() || isReadingHistoryAwayFromBottom() || isComposingMessage;
       };
 
       const triggerRefresh = async () => {
@@ -3739,6 +3751,19 @@
           const hasMessageChanges = Boolean(payload.messages_changed);
           const hasThreadsChanges = Boolean(payload.threads_changed);
           updateFolderUnreadBadges(payload.threads);
+          const hasOnlyThreadsChanges = hasThreadsChanges && !hasMessageChanges;
+
+          if (hasOnlyThreadsChanges) {
+            // Avoid full soft-rerender when only sidebar/thread metadata changed.
+            // This prevents compose input focus loss and bottom-area jitter.
+            if (nextSig) {
+              currentThreadsSignature = nextSig;
+            }
+            if (nextMessagesSig) {
+              currentMessagesSignature = nextMessagesSig;
+            }
+            return;
+          }
 
           if (hasMessageChanges || hasThreadsChanges) {
             if (shouldDeferAutoRefresh()) {
