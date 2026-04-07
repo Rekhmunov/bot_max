@@ -3693,12 +3693,9 @@
                   node.classList.remove("is-new");
                 }, 380);
               });
-              if (hasAnimated) {
-                const wrap = document.querySelector(".messages-wrap");
-                if (wrap) {
-                  wrap.scrollTo({ top: wrap.scrollHeight, behavior: "smooth" });
-                }
-              }
+              // Do not issue an extra smooth scroll after soft-refresh:
+              // it can cause a visible "bounce" at the bottom.
+              void hasAnimated;
             } else {
               window.location.reload();
             }
@@ -3729,10 +3726,6 @@
           if (newMessagesIndicator.disabled) return;
           newMessagesIndicator.disabled = true;
           try {
-            const wrap = document.querySelector(".messages-wrap");
-            if (wrap instanceof HTMLElement) {
-              wrap.scrollTo({ top: wrap.scrollHeight, behavior: "smooth" });
-            }
             resetDeferredMessages();
             if (window.__chatSoftVisit) {
               stopPolling();

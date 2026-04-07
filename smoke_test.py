@@ -884,6 +884,69 @@ def run() -> None:
             or callback_payload.get("ignored") == "duplicate_event"
         ), callback_payload
 
+        # Incoming customer image payload with photos[] should be parsed and rendered.
+        incoming_photo_chat_id = f"chat_{uuid4().hex[:8]}"
+        incoming_photo_sender = f"buyer_{uuid4().hex[:6]}"
+        incoming_photo_url = "https://cdn.example.com/customer-photo.jpg"
+        webhook_customer_photo = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_created",
+                "chat_id": incoming_photo_chat_id,
+                "sender_id": incoming_photo_sender,
+                "message": {
+                    "sender": {"user_id": incoming_photo_sender},
+                    "recipient": {"chat_id": incoming_photo_chat_id, "chat_type": "dialog"},
+                    "body": {
+                        "text": "",
+                        "attachments": [
+                            {
+                                "type": "image",
+                                "payload": {
+                                    "photos": [
+                                        {
+                                            "url": incoming_photo_url,
+                                        }
+                                    ]
+                                },
+                            }
+                        ],
+                    },
+                },
+            },
+        )
+        assert webhook_customer_photo.status_code == 200
+        with SessionLocal() as db:
+            photo_conv = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.workspace_id == 1,
+                    Conversation.chat_id == incoming_photo_chat_id,
+                    Conversation.customer_account_id == incoming_photo_sender,
+                )
+                .first()
+            )
+            assert photo_conv is not None
+            photo_msg = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == 1,
+                    ChatMessage.conversation_id == int(photo_conv.id),
+                    ChatMessage.direction == "customer",
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            assert photo_msg is not None
+            assert incoming_photo_url in str(getattr(photo_msg, "image_urls_json", "") or "")
+        customer_photo_page = client.get(
+            f"/admin/chats?conversation_id={int(photo_conv.id)}",
+            follow_redirects=True,
+        )
+        assert customer_photo_page.status_code == 200
+        assert incoming_photo_url in customer_photo_page.text
+        assert 'data-media-open' in customer_photo_page.text
+
         webhook_manager_tickets = client.post(
             "/webhook/max/ws1key",
             json={

@@ -182,6 +182,10 @@ class MaxWebhookEvent(BaseModel):
         link_message = link.get("message") if isinstance(link.get("message"), dict) else {}
 
         attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
+        if not attachments:
+            root_attachments = _deep_find_first(payload, {"attachments"})
+            if isinstance(root_attachments, list):
+                attachments = root_attachments
         image_urls: list[str] = []
         contact_phone = None
         for item in attachments:
@@ -190,6 +194,7 @@ class MaxWebhookEvent(BaseModel):
             attachment_type = str(item.get("type") or "").strip().lower()
             if attachment_type in {"image", "photo", "image_url"}:
                 payload_item = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+                image_candidates: list[str] = []
                 image_url = _pick_first(
                     payload_item.get("url"),
                     payload_item.get("src"),
@@ -197,7 +202,27 @@ class MaxWebhookEvent(BaseModel):
                     item.get("url"),
                 )
                 if image_url:
-                    image_urls.append(str(image_url))
+                    image_candidates.append(str(image_url))
+                photos_value = payload_item.get("photos")
+                if isinstance(photos_value, list):
+                    for photo_item in photos_value:
+                        if not isinstance(photo_item, dict):
+                            continue
+                        photo_url = _pick_first(
+                            photo_item.get("url"),
+                            photo_item.get("src"),
+                            photo_item.get("link"),
+                        )
+                        if photo_url:
+                            image_candidates.append(str(photo_url))
+                if image_candidates:
+                    for candidate in image_candidates:
+                        normalized_candidate = str(candidate or "").strip()
+                        if not normalized_candidate:
+                            continue
+                        if normalized_candidate in image_urls:
+                            continue
+                        image_urls.append(normalized_candidate)
             if item.get("type") != "contact":
                 continue
             payload_item = item.get("payload") if isinstance(item.get("payload"), dict) else {}
