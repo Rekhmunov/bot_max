@@ -910,6 +910,68 @@ def run() -> None:
             or callback_payload.get("ignored") == "duplicate_event"
         ), callback_payload
 
+        # Regression: plain incoming text must not accidentally pick image attachments
+        # from unrelated nested payload blocks (no broken image placeholders in chat).
+        text_only_chat_id = f"chat_{uuid4().hex[:8]}"
+        text_only_sender = f"buyer_{uuid4().hex[:6]}"
+        text_only_value = "Просто текст без фото"
+        webhook_customer_text_without_photo = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_created",
+                "chat_id": text_only_chat_id,
+                "sender_id": text_only_sender,
+                "message": {
+                    "sender": {"user_id": text_only_sender},
+                    "recipient": {"chat_id": text_only_chat_id, "chat_type": "dialog"},
+                    "body": {"text": text_only_value},
+                },
+                # This block emulates noisy envelope fields from third-party wrappers.
+                # Parser must ignore it for this text event.
+                "attachments": [
+                    {
+                        "type": "image",
+                        "payload": {"url": "https://cdn.example.com/should-not-be-used.jpg"},
+                    }
+                ],
+            },
+        )
+        assert webhook_customer_text_without_photo.status_code == 200
+        with SessionLocal() as db:
+            text_conv = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.workspace_id == 1,
+                    Conversation.chat_id == text_only_chat_id,
+                    Conversation.customer_account_id == text_only_sender,
+                )
+                .first()
+            )
+            assert text_conv is not None
+            text_msg = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == 1,
+                    ChatMessage.conversation_id == int(text_conv.id),
+                    ChatMessage.direction == "customer",
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            assert text_msg is not None
+            assert str(getattr(text_msg, "text", "") or "").strip() == text_only_value
+            parsed_text_urls = json.loads(str(getattr(text_msg, "image_urls_json", "[]") or "[]"))
+            assert isinstance(parsed_text_urls, list)
+            assert len(parsed_text_urls) == 0
+            assert not str(getattr(text_msg, "image_url", "") or "").strip()
+        text_only_page = client.get(
+            f"/admin/chats?conversation_id={int(text_conv.id)}",
+            follow_redirects=True,
+        )
+        assert text_only_page.status_code == 200
+        assert text_only_value in text_only_page.text
+        assert "should-not-be-used.jpg" not in text_only_page.text
+
         # Incoming customer image payload with photos[] should be parsed and rendered.
         incoming_photo_chat_id = f"chat_{uuid4().hex[:8]}"
         incoming_photo_sender = f"buyer_{uuid4().hex[:6]}"

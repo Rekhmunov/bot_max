@@ -203,11 +203,24 @@ class MaxWebhookEvent(BaseModel):
         link = message.get("link") if isinstance(message.get("link"), dict) else {}
         link_message = link.get("message") if isinstance(link.get("message"), dict) else {}
 
-        attachments = body.get("attachments") if isinstance(body.get("attachments"), list) else []
-        if not attachments:
-            root_attachments = _deep_find_first(payload, {"attachments"})
-            if isinstance(root_attachments, list):
-                attachments = root_attachments
+        attachments: list[Any] = []
+        attachment_candidates = [
+            body.get("attachments") if isinstance(body.get("attachments"), list) else None,
+            message.get("attachments") if isinstance(message.get("attachments"), list) else None,
+            message_data.get("attachments") if isinstance(message_data.get("attachments"), list) else None,
+        ]
+        has_structured_message_block = bool(message) or bool(body) or bool(message_data)
+        if not has_structured_message_block:
+            attachment_candidates.extend(
+                [
+                    payload.get("attachments") if isinstance(payload.get("attachments"), list) else None,
+                    body_root.get("attachments") if isinstance(body_root.get("attachments"), list) else None,
+                ]
+            )
+        for candidate in attachment_candidates:
+            if isinstance(candidate, list) and candidate:
+                attachments = candidate
+                break
         image_urls: list[str] = []
         contact_phone = None
         for item in attachments:
