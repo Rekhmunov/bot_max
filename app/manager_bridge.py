@@ -962,6 +962,16 @@ def _to_local_static_media_path(value: str | None) -> str | None:
     return normalize_storage_public_url(value)
 
 
+def _normalize_media_public_url(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    local = _to_local_static_media_path(raw)
+    if local:
+        return local
+    return raw
+
+
 def _resolve_local_static_media_file(value: str | None) -> Path | None:
     media_path = _to_local_static_media_path(value)
     if not media_path:
@@ -3351,11 +3361,15 @@ async def send_quick_reply_to_customer(
     media_urls: list[str] = []
     if media_items:
         for media in media_items:
-            media_url = f"{app_settings.public_base_url.rstrip('/')}{media.media_path}"
+            media_url = _normalize_media_public_url(media.media_path)
+            if not media_url:
+                continue
             media_urls.append(media_url)
     elif quick_reply.image_path:
         # Backward-compatibility for legacy quick replies with single image_path.
-        media_urls.append(f"{app_settings.public_base_url.rstrip('/')}{quick_reply.image_path}")
+        legacy_path = _normalize_media_public_url(quick_reply.image_path)
+        if legacy_path:
+            media_urls.append(legacy_path)
 
     if quick_reply.text:
         rendered_text = (
@@ -4961,7 +4975,7 @@ async def send_admin_chat_message(
     # If message contains media, send one grouped message with optional text
     # (Telegram-style UX). Plain text-only path stays unchanged.
     if normalized_image_paths:
-        image_urls = [f"{app_settings.public_base_url.rstrip('/')}{path}" for path in normalized_image_paths]
+        image_urls = [str(path).strip() for path in normalized_image_paths if str(path).strip()]
         if scheduled_for:
             await queue_only_send_media_group(
                 db,

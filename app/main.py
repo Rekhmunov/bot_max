@@ -2936,6 +2936,7 @@ async def _update_quick_reply_data(
     text: str,
     photos: list[UploadFile],
     media_order: str,
+    remove_media_paths: str = "",
     workspace_id: int,
     actor_user_id: int | None,
     owner_user_id: int = 0,
@@ -2969,6 +2970,11 @@ async def _update_quick_reply_data(
         raise HTTPException(status_code=400, detail=f"Команда /{normalized} уже существует")
 
     new_files = [item for item in photos if item and item.filename]
+    removed_paths = {
+        token.strip()
+        for token in str(remove_media_paths or "").split(",")
+        if token and token.strip()
+    }
     for upload in new_files:
         if upload.size is not None and int(upload.size) > _QUICK_REPLY_PHOTO_MAX_BYTES:
             raise HTTPException(status_code=413, detail="Фото в быстром ответе не должно превышать 1 МБ.")
@@ -2978,16 +2984,61 @@ async def _update_quick_reply_data(
     db.add(reply)
     db.commit()
     db.refresh(reply)
+    if removed_paths:
+        for media in _quick_reply_media_rows(db, reply.id):
+            media_path_value = str(media.media_path or "").strip()
+            if not media_path_value or media_path_value not in removed_paths:
+                continue
+            remove_quick_reply_media_asset_link(
+                db,
+                quick_reply_id=int(reply.id),
+                media_path=media_path_value,
+            )
+            delete_by_public_url(media_path_value)
+            db.delete(media)
+        db.commit()
+
+    sort_tokens = [token.strip() for token in (media_order or "").split(",") if token.strip()]
     if new_files:
-        _delete_quick_reply_media_files(db, reply_id=reply.id)
-        sort_tokens = [token.strip() for token in (media_order or "").split(",") if token.strip()]
         await _save_quick_reply_media_files(
             db=db,
             reply=reply,
             files=new_files,
             sort_order_tokens=sort_tokens,
         )
-        _normalize_quick_reply_media_order(db, reply.id)
+    # Keep existing media order synchronized even when files are not re-uploaded.
+    if sort_tokens:
+        rows = _quick_reply_media_rows(db, reply.id)
+        token_to_media: dict[str, QuickReplyMedia] = {}
+        for media in rows:
+            media_path_value = str(media.media_path or "").strip()
+            if media_path_value:
+                token_to_media[f"existing:{media_path_value}"] = media
+        next_idx = 0
+        changed = False
+        used_ids: set[int] = set()
+        for token in sort_tokens:
+            media = token_to_media.get(token)
+            if media is None:
+                continue
+            used_ids.add(int(media.id))
+            if int(media.sort_order or 0) != next_idx:
+                media.sort_order = next_idx
+                db.add(media)
+                changed = True
+            next_idx += 1
+        # Append any not-mentioned rows preserving current order after explicitly ordered items.
+        for media in rows:
+            if int(media.id) in used_ids:
+                continue
+            if int(media.sort_order or 0) != next_idx:
+                media.sort_order = next_idx
+                db.add(media)
+                changed = True
+            next_idx += 1
+        if changed:
+            db.commit()
+    _normalize_quick_reply_media_order(db, reply.id)
 
     db.add(
         AuditLog(
@@ -3012,6 +3063,7 @@ async def admin_update_quick_reply(
     text: str = Form(""),
     photos: list[UploadFile] = File(default=[]),
     media_order: str = Form(""),
+    remove_media_paths: str = Form(""),
     _admin: str = Depends(get_current_admin),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -3033,6 +3085,7 @@ async def admin_update_quick_reply(
             text=text,
             photos=photos,
             media_order=media_order,
+            remove_media_paths=remove_media_paths,
             workspace_id=workspace_id,
             actor_user_id=None,
             owner_user_id=0,
@@ -4795,6 +4848,11 @@ async def app_create_quick_reply(
         files=[item for item in photos if item and item.filename],
         sort_order_tokens=sort_tokens,
     )
+    sync_quick_reply_media_asset_links(
+        db,
+        quick_reply_id=int(reply.id),
+        workspace_id=int(reply.workspace_id or workspace_id),
+    )
     _normalize_quick_reply_media_order(db, reply.id)
     return RedirectResponse(url="/app/settings", status_code=302)
 
@@ -4808,6 +4866,7 @@ async def app_update_quick_reply(
     text: str = Form(""),
     photos: list[UploadFile] = File(default=[]),
     media_order: str = Form(""),
+    remove_media_paths: str = Form(""),
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -4830,6 +4889,7 @@ async def app_update_quick_reply(
             text=text,
             photos=photos,
             media_order=media_order,
+            remove_media_paths=remove_media_paths,
             workspace_id=workspace_id,
             actor_user_id=current_user.id,
             owner_user_id=quick_reply_owner_id,
