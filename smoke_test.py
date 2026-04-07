@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 from sqlalchemy import func
+from unittest.mock import AsyncMock, patch
 
 from app.auth import create_manager_mini_token, create_service_session
 from app.database import SessionLocal, init_db
@@ -27,6 +28,136 @@ from app.models import (
     WebhookEvent,
     Workspace,
 )
+
+
+def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cookies) -> None:
+    # Prepare conversation and quick replies for delete/send regressions.
+    with SessionLocal() as db:
+        conversation = Conversation(
+            workspace_id=1,
+            chat_id=f"chat_media_reg_{uuid4().hex[:8]}",
+            customer_account_id=f"buyer_media_reg_{uuid4().hex[:8]}",
+            manager_added=False,
+            is_active=True,
+        )
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+        conversation_id = int(conversation.id)
+
+        admin_reply = QuickReply(
+            workspace_id=1,
+            owner_user_id=0,
+            command=f"adm_{uuid4().hex[:6]}",
+            title="Admin delete regression",
+            text="t",
+            image_path="https://cdn.example.com/not-local.jpg",
+            is_active=True,
+        )
+        app_owner = ServiceUser(
+            workspace_id=1,
+            role="owner",
+            username=f"owner_qr_{uuid4().hex[:8]}@example.com",
+            password_hash="x",
+            max_account_id="",
+            is_active=True,
+        )
+        db.add(admin_reply)
+        db.add(app_owner)
+        db.commit()
+        db.refresh(admin_reply)
+        db.refresh(app_owner)
+
+        app_reply = QuickReply(
+            workspace_id=1,
+            # In app settings, owner/admin quick replies are stored as global owner_user_id=0.
+            owner_user_id=0,
+            command=f"app_{uuid4().hex[:6]}",
+            title="App delete regression",
+            text="t",
+            image_path="https://cdn.example.com/not-local-app.jpg",
+            is_active=True,
+        )
+        db.add(app_reply)
+        db.commit()
+        db.refresh(app_reply)
+        admin_reply_id = int(admin_reply.id)
+        app_reply_id = int(app_reply.id)
+        owner_user_id = int(app_owner.id)
+
+    # Admin quick-reply delete must not crash on non-local image_path.
+    admin_delete = client.post(
+        f"/admin/quick-replies/{admin_reply_id}/delete",
+        cookies=cookies,
+        follow_redirects=False,
+    )
+    assert admin_delete.status_code in (302, 303)
+    with SessionLocal() as db:
+        assert db.query(QuickReply).filter(QuickReply.id == admin_reply_id).first() is None
+
+    # App quick-reply delete must not crash on non-local image_path.
+    owner_session_token = ""
+    with SessionLocal() as db:
+        owner_session_token = create_service_session(
+            db,
+            user_id=owner_user_id,
+            ip_address="127.0.0.1",
+            user_agent="smoke/app-delete-qr",
+        )
+    app_delete_cookies = {"tenant_session": owner_session_token}
+    app_delete = client.post(
+        f"/app/quick-replies/{app_reply_id}/delete",
+        cookies=app_delete_cookies,
+        headers={"origin": "http://testserver"},
+        follow_redirects=False,
+    )
+    assert app_delete.status_code in (302, 303)
+    with SessionLocal() as db:
+        assert db.query(QuickReply).filter(QuickReply.id == app_reply_id).first() is None
+
+    # Regression: upload_token_missing must fallback to image_url attachments
+    # and not fail with proto.payload/errors.required.
+    sent_attachments: list[list[dict]] = []
+
+    async def _fake_send_images(*args, **kwargs):
+        return {"success": False, "error": "upload_token_missing"}
+
+    async def _fake_send_message(*args, **kwargs):
+        attachments = kwargs.get("attachments")
+        assert isinstance(attachments, list) and len(attachments) >= 1
+        sent_attachments.append(attachments)
+        return {"success": True, "message": {"body": {"mid": f"mid_{uuid4().hex[:8]}"}}}
+
+    with patch("app.max_client.MaxClient.send_images", new=AsyncMock(side_effect=_fake_send_images)), patch(
+        "app.max_client.MaxClient.send_message",
+        new=AsyncMock(side_effect=_fake_send_message),
+    ):
+        tiny_png = (
+            b"\x89PNG\r\n\x1a\n"
+            b"\x00\x00\x00\rIHDR"
+            b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00"
+            b"\x90wS\xde"
+            b"\x00\x00\x00\x0cIDATx\x9cc`\x00\x00\x00\x02\x00\x01"
+            b"\xe2!\xbc3"
+            b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        send_with_photo = client.post(
+            f"/admin/chats/{conversation_id}/send",
+            data={"text": "photo fallback check"},
+            files={"photos": ("smoke.png", tiny_png, "image/png")},
+            cookies=cookies,
+            follow_redirects=False,
+        )
+        assert send_with_photo.status_code in (302, 303)
+        location = str(send_with_photo.headers.get("location", ""))
+        assert "sent=1" in location or "quick=1" in location
+
+    assert len(sent_attachments) >= 1
+    first_batch = sent_attachments[0]
+    assert isinstance(first_batch, list)
+    assert str(first_batch[0].get("type") or "") == "image_url"
+    payload = first_batch[0].get("payload") if isinstance(first_batch[0], dict) else {}
+    assert isinstance(payload, dict) and str(payload.get("url") or "").strip()
 
 
 def _iso_with_timezone(raw_iso: str) -> str:
@@ -294,6 +425,7 @@ def run() -> None:
         cookies = login.cookies
         admin_page = client.get("/admin", cookies=cookies)
         assert admin_page.status_code == 200
+        _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
 
         start_template = (
             "Здравствуйте! **Сейчас позову менеджера**.\n"

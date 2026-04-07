@@ -1511,6 +1511,50 @@ async def _dispatch_outbox(
     target_user_id = (item.target_user_id or "").strip() or None
     target_chat_id = (item.target_chat_id or "").strip()
 
+    def _resolve_fallback_attachments() -> list[dict]:
+        attachments_payload = payload.get("attachments")
+        if isinstance(attachments_payload, list) and attachments_payload:
+            normalized: list[dict] = []
+            for row in attachments_payload:
+                if not isinstance(row, dict):
+                    continue
+                if str(row.get("type") or "").strip().lower() != "image_url":
+                    continue
+                row_payload = row.get("payload")
+                if not isinstance(row_payload, dict):
+                    continue
+                url = str(row_payload.get("url") or "").strip()
+                if not url:
+                    continue
+                normalized.append({"type": "image_url", "payload": {"url": url}})
+            if normalized:
+                return normalized
+
+        message_id = int(item.chat_message_id or 0)
+        if message_id <= 0:
+            return []
+        chat_message = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
+        if chat_message is None:
+            return []
+
+        urls: list[str] = []
+        raw_urls_json = str(getattr(chat_message, "image_urls_json", "") or "").strip()
+        if raw_urls_json:
+            try:
+                decoded = json.loads(raw_urls_json)
+            except Exception:
+                decoded = []
+            if isinstance(decoded, list):
+                for value in decoded:
+                    url = str(value or "").strip()
+                    if url:
+                        urls.append(url)
+        if not urls:
+            single_url = str(getattr(chat_message, "image_url", "") or "").strip()
+            if single_url:
+                urls.append(single_url)
+        return [{"type": "image_url", "payload": {"url": url}} for url in urls]
+
     async def _send_message_with_attachment_ready_retry(
         *,
         chat_id: str | None = None,
@@ -1581,13 +1625,13 @@ async def _dispatch_outbox(
                         return await _send_message_with_attachment_ready_retry(
                             chat_id=target_chat_id,
                             text=str(payload.get("text")) if payload.get("text") is not None else None,
-                            attachments=payload.get("attachments"),
+                            attachments=_resolve_fallback_attachments(),
                         )
                     return images_result
             return await _send_message_with_attachment_ready_retry(
                 chat_id=target_chat_id,
                 text=str(payload.get("text")) if payload.get("text") is not None else None,
-                attachments=payload.get("attachments"),
+                attachments=_resolve_fallback_attachments(),
             )
         return {"success": False, "error": "unsupported_operation", "operation": item.operation}
 
@@ -1634,13 +1678,13 @@ async def _dispatch_outbox(
                         return await _send_message_with_attachment_ready_retry(
                             user_id=target_user_id,
                             text=str(payload.get("text")) if payload.get("text") is not None else None,
-                            attachments=payload.get("attachments"),
+                            attachments=_resolve_fallback_attachments(),
                         )
                     return images_result
             return await _send_message_with_attachment_ready_retry(
                 user_id=target_user_id,
                 text=str(payload.get("text")) if payload.get("text") is not None else None,
-                attachments=payload.get("attachments"),
+                attachments=_resolve_fallback_attachments(),
             )
         return {"success": False, "error": "unsupported_operation", "operation": item.operation}
 
@@ -1883,6 +1927,7 @@ async def enqueue_and_process_send_media_group(
     urls = [str(item).strip() for item in (photo_urls or []) if str(item).strip()]
     if not urls:
         return False
+    attachments = [{"type": "image_url", "payload": {"url": value}} for value in urls]
     now_utc_naive = _as_naive_utc(_utc_now())
     first_image = urls[0]
     msg = _store_chat_message(
@@ -1920,9 +1965,12 @@ async def enqueue_and_process_send_media_group(
             {
                 "text": (text or "").strip() or None,
                 "images": [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads],
+                # Keep URL attachments even on byte-upload path so fallback
+                # after upload_token_missing can resend without payload loss.
+                "attachments": attachments,
             }
             if image_payloads
-            else {"text": (text or "").strip() or None, "attachments": [{"type": "image_url", "payload": {"url": value}} for value in urls]}
+            else {"text": (text or "").strip() or None, "attachments": attachments}
         ),
     )
     client = _workspace_client(db, workspace_id=item.workspace_id)
@@ -2023,6 +2071,8 @@ async def queue_only_send_media_group(
             {
                 "text": (text or "").strip() or None,
                 "images": [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads],
+                # Preserve URL attachments for retry/fallback path.
+                "attachments": attachments,
             }
             if image_payloads
             else {"text": (text or "").strip() or None, "attachments": attachments}
