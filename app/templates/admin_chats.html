@@ -2270,11 +2270,6 @@
         if (!wrap) return;
         wrap.scrollTop = wrap.scrollHeight;
       };
-      const isNearBottom = (wrap, thresholdPx = 48) => {
-        if (!(wrap instanceof HTMLElement)) return false;
-        const distanceToBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight;
-        return distanceToBottom <= Math.max(0, Number(thresholdPx || 0));
-      };
       const hasOperationQueryFlag = () => {
         try {
           const url = new URL(window.location.href);
@@ -2495,14 +2490,6 @@
         stopKeyboardSync();
         setTimeout(setKeyboardInset, 20);
       });
-      const messagesWrapForAutoFollow = document.querySelector(".messages-wrap");
-      let shouldFollowBottom = isNearBottom(messagesWrapForAutoFollow, 96);
-      if (messagesWrapForAutoFollow instanceof HTMLElement) {
-        messagesWrapForAutoFollow.addEventListener("scroll", () => {
-          shouldFollowBottom = isNearBottom(messagesWrapForAutoFollow, 96);
-        }, { passive: true });
-      }
-
       messageInput.addEventListener("input", syncSendVisibility);
       photoInput.addEventListener("change", () => {
         const incoming = Array.from(photoInput.files || []);
@@ -2550,9 +2537,10 @@
       });
       setKeyboardInset();
       const restoredScrollPosition = restoreMessagesScrollState();
-      if (!restoredScrollPosition && !hasOperationQueryFlag() && shouldFollowBottom) {
+      // Autoscroll is fully disabled by request.
+      // Initial open lands at bottom on first load; on soft-updates we preserve position only.
+      if (!restoredScrollPosition && !hasOperationQueryFlag()) {
         scrollMessagesToBottom();
-        setTimeout(scrollMessagesToBottom, 90);
       }
       if (window.__chatSoftVisit) {
         const originalSoftVisit = window.__chatSoftVisit;
@@ -2636,13 +2624,15 @@
       const SOFT_NAV_ATTR = "data-soft-nav";
       const CHAT_SCROLL_STATE_KEY = "__chatMessagesScrollState";
 
-      const captureMessagesScrollState = () => {
+      const captureMessagesScrollState = ({ forceBottom = false } = {}) => {
         const wrap = document.querySelector(".messages-wrap");
         if (!(wrap instanceof HTMLElement)) return;
         try {
           const currentUrl = new URL(window.location.href);
           const conversationId = Number(currentUrl.searchParams.get("conversation_id") || 0);
-          const offsetFromBottom = Math.max(0, wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight);
+          const offsetFromBottom = forceBottom
+            ? 0
+            : Math.max(0, wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight);
           window.sessionStorage.setItem(
             CHAT_SCROLL_STATE_KEY,
             JSON.stringify({
@@ -3779,6 +3769,9 @@
               currentMessagesSignature = nextMessagesSig;
             }
             if (window.__chatSoftVisit) {
+              if (typeof window.__chatCaptureMessagesScrollState === "function") {
+                window.__chatCaptureMessagesScrollState();
+              }
               stopPolling();
               await window.__chatSoftVisit(window.location.href, { replaceHistory: true });
               const bubbleNodes = Array.from(document.querySelectorAll(".bubble[data-message-id]"));
@@ -3793,17 +3786,7 @@
                   node.classList.remove("is-new");
                 }, 380);
               });
-              const wrap = document.querySelector(".messages-wrap");
-              if (
-                hasAnimated
-                && shouldFollowBottom
-                && wrap instanceof HTMLElement
-                && isNearBottom(wrap, 220)
-              ) {
-                // Keep user anchored to latest messages when they intentionally stay at bottom.
-                // Use direct scrollTop to avoid visible smooth-scroll bouncing near footer.
-                wrap.scrollTop = wrap.scrollHeight;
-              }
+              void hasAnimated;
             } else {
               window.location.reload();
             }
@@ -3836,6 +3819,10 @@
           try {
             resetDeferredMessages();
             if (window.__chatSoftVisit) {
+              if (typeof window.__chatCaptureMessagesScrollState === "function") {
+                // Explicit user action: jump to latest messages at bottom.
+                window.__chatCaptureMessagesScrollState({ forceBottom: true });
+              }
               stopPolling();
               await window.__chatSoftVisit(window.location.href, { replaceHistory: true });
               return;
