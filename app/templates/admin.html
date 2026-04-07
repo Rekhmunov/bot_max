@@ -1546,176 +1546,193 @@
       const mediaSortWrap = document.getElementById("media-sort-wrap");
       const mediaSortGrid = document.getElementById("media-sort-grid");
       const mediaOrderInput = document.getElementById("media_order");
-      const QUICK_REPLY_MAX_FILE_BYTES = 1 * 1024 * 1024;
       const removeExistingMediaInput = document.getElementById("remove_media_paths");
+      const QUICK_REPLY_MAX_FILE_BYTES = 1 * 1024 * 1024;
       if (
-        filesInput instanceof HTMLInputElement &&
-        mediaSortWrap instanceof HTMLElement &&
-        mediaSortGrid instanceof HTMLElement &&
-        mediaOrderInput instanceof HTMLInputElement &&
-        removeExistingMediaInput instanceof HTMLInputElement
+        !(filesInput instanceof HTMLInputElement) ||
+        !(mediaSortWrap instanceof HTMLElement) ||
+        !(mediaSortGrid instanceof HTMLElement) ||
+        !(mediaOrderInput instanceof HTMLInputElement)
       ) {
-        const canUseDataTransfer = () => {
-          try {
-            return typeof DataTransfer !== "undefined" && Boolean(new DataTransfer());
-          } catch (_) {
-            return false;
-          }
-        };
-        let selectedEntries = [];
-        let removedExistingPaths = [];
-        let draggedToken = "";
+        return;
+      }
 
-        const isImageFile = (file) => {
-          return (
-            file &&
-            typeof file.type === "string" &&
-            file.type.toLowerCase().startsWith("image/")
-          );
-        };
+      const canUseDataTransfer = () => {
+        try {
+          return typeof DataTransfer !== "undefined" && Boolean(new DataTransfer());
+        } catch (_) {
+          return false;
+        }
+      };
 
-        const buildToken = (file, index) => `${index}|${file.name}|${file.size}|${file.lastModified}`;
+      let selectedEntries = [];
+      let removedExistingPaths = [];
+      let draggedToken = "";
 
-        const updateOrderInput = () => {
-          const tokens = selectedEntries.map((item) => item.token);
-          mediaOrderInput.value = tokens.join(",");
-        };
-        const updateRemovedExistingInput = () => {
+      const updateOrderInput = () => {
+        mediaOrderInput.value = selectedEntries.map((item) => item.token).join(",");
+      };
+
+      const updateRemovedExistingInput = () => {
+        if (removeExistingMediaInput instanceof HTMLInputElement) {
           removeExistingMediaInput.value = removedExistingPaths.join(",");
-        };
+        }
+      };
 
-        const rebuildFileListAndPreview = () => {
-          mediaSortGrid.innerHTML = "";
-          let dt = null;
-          if (canUseDataTransfer()) {
-            dt = new DataTransfer();
+      const syncNativeFiles = () => {
+        if (!canUseDataTransfer()) return;
+        const dt = new DataTransfer();
+        selectedEntries.forEach((entry) => {
+          if (entry.kind === "new" && entry.file instanceof File) {
+            dt.items.add(entry.file);
           }
-          selectedEntries.forEach((entry, idx) => {
-            if (dt) dt.items.add(entry.file);
-            const chip = document.createElement("div");
-            chip.className = "media-chip";
-            chip.setAttribute("draggable", "true");
-            chip.dataset.token = entry.token;
-            chip.innerHTML = `<img alt="preview" /><span class="name"></span>`;
-            const img = chip.querySelector("img");
-            const name = chip.querySelector(".name");
-            const removeBtn = document.createElement("button");
-            removeBtn.type = "button";
-            removeBtn.className = "media-chip-remove";
-            removeBtn.textContent = "×";
-            removeBtn.title = "Удалить фото";
-            removeBtn.setAttribute("aria-label", "Удалить фото");
-            if (img instanceof HTMLImageElement) {
-              if (entry.previewUrl) img.src = entry.previewUrl;
-            }
-            if (name instanceof HTMLElement) {
-              name.textContent = `${idx + 1}. ${entry.file.name}`;
-            }
-            removeBtn.addEventListener("click", (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              if (entry.previewUrl) {
-                try { URL.revokeObjectURL(entry.previewUrl); } catch (_) {}
-              }
-              if (entry.kind === "existing") {
-                const existingPath = String(entry.path || "").trim();
-                if (existingPath && !removedExistingPaths.includes(existingPath)) {
-                  removedExistingPaths.push(existingPath);
-                  updateRemovedExistingInput();
-                }
-              }
-              selectedEntries = selectedEntries.filter((item) => item.token !== entry.token);
-              rebuildFileListAndPreview();
-            });
-            chip.appendChild(removeBtn);
-            chip.addEventListener("dragstart", () => {
-              draggedToken = entry.token;
-              chip.classList.add("dragging");
-            });
-            chip.addEventListener("dragend", () => {
-              draggedToken = "";
-              chip.classList.remove("dragging");
-            });
-            chip.addEventListener("dragover", (event) => {
-              event.preventDefault();
-            });
-            chip.addEventListener("drop", (event) => {
-              event.preventDefault();
-              const targetToken = chip.dataset.token || "";
-              if (!draggedToken || !targetToken || draggedToken === targetToken) return;
-              const from = selectedEntries.findIndex((item) => item.token === draggedToken);
-              const to = selectedEntries.findIndex((item) => item.token === targetToken);
-              if (from < 0 || to < 0) return;
-              const [moved] = selectedEntries.splice(from, 1);
-              selectedEntries.splice(to, 0, moved);
-              rebuildFileListAndPreview();
-            });
-            mediaSortGrid.appendChild(chip);
-          });
-          if (dt) {
-            filesInput.files = dt.files;
-          }
-          updateOrderInput();
-          mediaSortWrap.hidden = selectedEntries.length === 0;
-        };
+        });
+        filesInput.files = dt.files;
+      };
 
-        filesInput.addEventListener("change", () => {
-          selectedEntries.forEach((entry) => {
-            if (entry.previewUrl) URL.revokeObjectURL(entry.previewUrl);
-          });
-          selectedEntries = selectedEntries.filter((item) => item.kind === "existing");
-          const files = Array.from(filesInput.files || []);
-          const oversized = files.find((file) => Number(file.size || 0) > QUICK_REPLY_MAX_FILE_BYTES);
-          if (oversized) {
-            alert(`Файл "${oversized.name}" больше 1 МБ. Загрузите файл размером до 1 МБ.`);
-            filesInput.value = "";
+      const rebuildFileListAndPreview = () => {
+        mediaSortGrid.innerHTML = "";
+        selectedEntries.forEach((entry, idx) => {
+          const chip = document.createElement("div");
+          chip.className = "media-chip";
+          chip.setAttribute("draggable", "true");
+          chip.dataset.token = entry.token;
+          chip.innerHTML = `<img alt="preview" /><span class="name"></span>`;
+
+          const img = chip.querySelector("img");
+          if (img instanceof HTMLImageElement) {
+            img.src = String(entry.previewUrl || "");
+          }
+
+          const name = chip.querySelector(".name");
+          if (name instanceof HTMLElement) {
+            const displayName = String(
+              entry.name || (entry.file instanceof File ? entry.file.name : `image_${idx + 1}`)
+            );
+            name.textContent = `${idx + 1}. ${displayName}`;
+          }
+
+          const removeBtn = document.createElement("button");
+          removeBtn.type = "button";
+          removeBtn.className = "media-chip-remove";
+          removeBtn.textContent = "×";
+          removeBtn.title = "Удалить фото";
+          removeBtn.setAttribute("aria-label", "Удалить фото");
+          removeBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (entry.isObjectUrl && entry.previewUrl) {
+              try { URL.revokeObjectURL(entry.previewUrl); } catch (_) {}
+            }
+            if (entry.kind === "existing") {
+              const existingPath = String(entry.path || "").trim();
+              if (existingPath && !removedExistingPaths.includes(existingPath)) {
+                removedExistingPaths.push(existingPath);
+                updateRemovedExistingInput();
+              }
+            }
+            selectedEntries = selectedEntries.filter((item) => item.token !== entry.token);
             rebuildFileListAndPreview();
-            return;
-          }
-          const existingTokens = new Set(selectedEntries.map((entry) => entry.token));
-          files.forEach((file, idx) => {
-            const token = buildToken(file, idx);
-            if (existingTokens.has(token)) return;
-            selectedEntries.push({
-              kind: "new",
-              file,
-              token,
-              previewUrl: isImageFile(file) ? URL.createObjectURL(file) : "",
-            });
           });
-          rebuildFileListAndPreview();
+          chip.appendChild(removeBtn);
+
+          chip.addEventListener("dragstart", () => {
+            draggedToken = String(entry.token || "");
+            chip.classList.add("dragging");
+          });
+          chip.addEventListener("dragend", () => {
+            draggedToken = "";
+            chip.classList.remove("dragging");
+          });
+          chip.addEventListener("dragover", (event) => {
+            event.preventDefault();
+          });
+          chip.addEventListener("drop", (event) => {
+            event.preventDefault();
+            const targetToken = String(chip.dataset.token || "");
+            if (!draggedToken || !targetToken || draggedToken === targetToken) return;
+            const from = selectedEntries.findIndex((item) => item.token === draggedToken);
+            const to = selectedEntries.findIndex((item) => item.token === targetToken);
+            if (from < 0 || to < 0) return;
+            const [moved] = selectedEntries.splice(from, 1);
+            selectedEntries.splice(to, 0, moved);
+            rebuildFileListAndPreview();
+          });
+
+          mediaSortGrid.appendChild(chip);
         });
 
-        // When editing existing quick reply, preload current media previews
-        // into the sortable strip so preview is always visible before reupload.
-        const editTargetInput = document.querySelector("input[name='edit_quick_reply_id']");
-        if (!selectedEntries.length && editTargetInput instanceof HTMLInputElement && editTargetInput.value) {
-          const existingPreviewNodes = Array.from(
-            document.querySelectorAll(
-              `.quick-replies-table tr td form.inline-edit-form input[value="${editTargetInput.value}"]`
-            )
-          );
-          if (existingPreviewNodes.length) {
-            const row = existingPreviewNodes[0].closest("tr");
-            if (row instanceof HTMLElement) {
-              const rowPreviews = Array.from(row.querySelectorAll("img.preview"));
-              if (rowPreviews.length) {
-                mediaSortGrid.innerHTML = "";
-                rowPreviews.forEach((imgNode, idx) => {
-                  const src = String(imgNode.getAttribute("src") || "").trim();
-                  if (!src) return;
-                  selectedEntries.push({
-                    kind: "existing",
-                    file: null,
-                    token: `existing:${idx}:${src}`,
-                    previewUrl: src,
-                    path: src,
-                    name: `current_${idx + 1}`,
-                  });
-                });
-                rebuildFileListAndPreview();
-              }
-            }
+        syncNativeFiles();
+        updateOrderInput();
+        updateRemovedExistingInput();
+        mediaSortWrap.hidden = selectedEntries.length === 0;
+      };
+
+      filesInput.addEventListener("change", () => {
+        const files = Array.from(filesInput.files || []);
+        if (!files.length) {
+          return;
+        }
+
+        const notImage = files.find((file) => !String(file.type || "").toLowerCase().startsWith("image/"));
+        if (notImage) {
+          alert(`Файл "${notImage.name}" не является изображением.`);
+          filesInput.value = "";
+          return;
+        }
+
+        const oversized = files.find((file) => Number(file.size || 0) > QUICK_REPLY_MAX_FILE_BYTES);
+        if (oversized) {
+          alert(`Файл "${oversized.name}" больше 1 МБ. Загрузите файл размером до 1 МБ.`);
+          filesInput.value = "";
+          return;
+        }
+
+        const existingTokens = new Set(selectedEntries.map((entry) => String(entry.token || "")));
+        files.forEach((file, idx) => {
+          const token = `${idx}|${file.name}|${file.size}|${file.lastModified}`;
+          if (existingTokens.has(token)) return;
+          selectedEntries.push({
+            kind: "new",
+            file,
+            token,
+            previewUrl: URL.createObjectURL(file),
+            isObjectUrl: true,
+            name: file.name,
+            path: "",
+          });
+        });
+
+        rebuildFileListAndPreview();
+      });
+
+      // When editing existing quick reply, preload current media previews
+      // into the sortable strip so preview is always visible before reupload.
+      const editTargetInput = document.querySelector("input[name='edit_quick_reply_id']");
+      if (!selectedEntries.length && editTargetInput instanceof HTMLInputElement && editTargetInput.value) {
+        const existingPreviewNodes = Array.from(
+          document.querySelectorAll(
+            `.quick-replies-table tr td form.inline-edit-form input[value="${editTargetInput.value}"]`
+          )
+        );
+        if (existingPreviewNodes.length) {
+          const row = existingPreviewNodes[0].closest("tr");
+          if (row instanceof HTMLElement) {
+            const rowPreviews = Array.from(row.querySelectorAll("img.preview"));
+            rowPreviews.forEach((imgNode, idx) => {
+              const src = String(imgNode.getAttribute("src") || "").trim();
+              if (!src) return;
+              selectedEntries.push({
+                kind: "existing",
+                file: null,
+                token: `existing:${src}`,
+                previewUrl: src,
+                isObjectUrl: false,
+                path: src,
+                name: `current_${idx + 1}`,
+              });
+            });
+            rebuildFileListAndPreview();
           }
         }
       }
