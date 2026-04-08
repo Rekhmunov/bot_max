@@ -551,7 +551,8 @@ class MaxClient:
         # A: token-list attachments (one image per attachment)
         # B: grouped photos payload map
         # C: handled by caller fallback to URL attachments on proto.payload errors
-        if len(images) >= 2 and len(uploaded_tokens) == len(images):
+        is_multi_image = len(images) >= 2
+        if is_multi_image and len(uploaded_tokens) == len(images):
             token_list_attachments = [
                 {"type": "image", "payload": {"token": token_value}}
                 for token_value in uploaded_tokens
@@ -602,13 +603,15 @@ class MaxClient:
                     ok = bool(result.get("success", True) or result.get("message"))
                     if ok:
                         return result
-                    # Try next candidate for known payload-shape incompatibilities.
+                    # For multi-image payloads some MAX deployments respond with
+                    # varying proto.payload messages; treat any proto.payload 400
+                    # as payload-shape incompatibility and try next candidate.
                     if (
                         isinstance(response, dict)
                         and str(response.get("code") or "").strip().lower() == "proto.payload"
                     ):
                         message = str(response.get("message") or "").strip().lower()
-                        if ("errors.required" in message) or ("deserialize" in message) or ("failed to upload image" in message):
+                        if is_multi_image or ("errors.required" in message) or ("deserialize" in message) or ("failed to upload image" in message):
                             last_result = result
                             break
                     return result

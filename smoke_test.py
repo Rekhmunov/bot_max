@@ -10,7 +10,11 @@ from unittest.mock import AsyncMock, patch
 from app.auth import create_manager_mini_token, create_service_session
 from app.database import SessionLocal, init_db
 from app.main import app
-from app.manager_bridge import DEFAULT_TEMPLATES
+from app.manager_bridge import (
+    DEFAULT_TEMPLATES,
+    _claim_outbox_item_for_send,
+    _enqueue_outbox_message,
+)
 from app.services import get_or_create_settings
 from app.models import (
     AuditLog,
@@ -2159,7 +2163,7 @@ def run() -> None:
 
             # Attempt 1: expect token-list attachments (one image payload per token).
             if send_attempt["count"] == 1:
-                assert len(attachments) >= 2
+                assert len(attachments) >= 3
                 for entry in attachments:
                     assert isinstance(entry, dict)
                     assert str(entry.get("type") or "").strip() == "image"
@@ -2179,7 +2183,7 @@ def run() -> None:
                 assert str(entry.get("type") or "").strip() == "image"
                 payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
                 photos = payload.get("photos") if isinstance(payload.get("photos"), dict) else {}
-                assert isinstance(photos, dict) and len(photos) >= 2
+                assert isinstance(photos, dict) and len(photos) >= 3
                 return {
                     "success": False,
                     "status_code": 400,
@@ -2205,6 +2209,7 @@ def run() -> None:
                 files=[
                     ("photos", ("multi_one.png", b"\x89PNG\r\n\x1a\nmulti-one", "image/png")),
                     ("photos", ("multi_two.png", b"\x89PNG\r\n\x1a\nmulti-two", "image/png")),
+                    ("photos", ("multi_three.png", b"\x89PNG\r\n\x1a\nmulti-three", "image/png")),
                 ],
                 cookies=cookies,
                 follow_redirects=False,
@@ -2213,6 +2218,23 @@ def run() -> None:
             location = str(multi_send.headers.get("location", ""))
             assert "sent=1" in location
         assert len(sent_multi_attachments) >= 3
+
+        # Outbox claim should be idempotent to prevent duplicate immediate sends.
+        with SessionLocal() as db:
+            claim_probe = _enqueue_outbox_message(
+                db,
+                conversation_id=conversation_id,
+                chat_message_id=None,
+                target_chat_id="claim_probe_chat",
+                target_user_id="claim_probe_user",
+                operation="send_text",
+                payload={"text": "claim_probe"},
+                workspace_id=1,
+            )
+            first_claim = _claim_outbox_item_for_send(db, outbox_id=int(claim_probe.id))
+            second_claim = _claim_outbox_item_for_send(db, outbox_id=int(claim_probe.id))
+            assert first_claim is not None
+            assert second_claim is None
 
         admin_chats_page_after_send = client.get(
             f"/admin/chats?conversation_id={conversation_id}",

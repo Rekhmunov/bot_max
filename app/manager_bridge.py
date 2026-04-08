@@ -1478,6 +1478,31 @@ def _enqueue_outbox_message(
     return item
 
 
+def _claim_outbox_item_for_send(db: Session, *, outbox_id: int) -> OutboxMessage | None:
+    """
+    Atomically transition queued/failed outbox row to sending for immediate dispatch.
+    This prevents duplicate sends when immediate path and background worker overlap.
+    """
+    claimed = (
+        db.query(OutboxMessage)
+        .filter(
+            OutboxMessage.id == int(outbox_id),
+            OutboxMessage.state.in_(["queued", "failed"]),
+        )
+        .update(
+            {
+                OutboxMessage.state: "sending",
+                OutboxMessage.last_attempt_at: _as_naive_utc(_utc_now()),
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if int(claimed or 0) <= 0:
+        return None
+    return db.query(OutboxMessage).filter(OutboxMessage.id == int(outbox_id)).first()
+
+
 def _update_chat_message_delivery(
     db: Session,
     *,
@@ -1764,7 +1789,37 @@ async def _dispatch_outbox(
         message = str(response.get("message") or "").strip().lower()
         if code != "proto.payload":
             return False
-        return ("failed to upload image" in message) or ("can't deserialize body" in message)
+        return (
+            ("failed to upload image" in message)
+            or ("can't deserialize body" in message)
+            or ("deserialize" in message)
+            or ("required" in message)
+            or ("attachment" in message)
+            or ("photo" in message)
+        )
+
+    def _is_multi_image_proto_payload_error(result_value: dict, *, image_count: int) -> bool:
+        if int(image_count or 0) < 2:
+            return False
+        if _is_multi_image_payload_validation_error(result_value, min_images=image_count):
+            return True
+        if not isinstance(result_value, dict):
+            return False
+        try:
+            status_code = int(result_value.get("status_code"))
+        except (TypeError, ValueError):
+            status_code = None
+        if status_code != 400:
+            return False
+        response = result_value.get("response")
+        if not isinstance(response, dict):
+            return False
+        code = str(response.get("code") or "").strip().lower()
+        if code != "proto.payload":
+            return False
+        # For 2+ images, any proto.payload 400 is treated as payload-shape incompatibility
+        # and should fall back to URL attachments rather than failing hard.
+        return True
 
     def _is_multi_image_proto_required_error(result_value: dict, *, image_count: int) -> bool:
         if image_count < 2:
@@ -1841,7 +1896,7 @@ async def _dispatch_outbox(
                     if isinstance(images_result, dict) and (
                         str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
                         or _is_proto_payload_upload_error(images_result)
-                        or _is_multi_image_payload_validation_error(images_result, min_images=images_count)
+                        or _is_multi_image_proto_payload_error(images_result, image_count=images_count)
                     ):
                         # Fallback for upload providers returning non-standard token response:
                         # send by URL attachments to avoid blocking operator flow.
@@ -1906,7 +1961,7 @@ async def _dispatch_outbox(
                     if isinstance(images_result, dict) and (
                         str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
                         or _is_proto_payload_upload_error(images_result)
-                        or _is_multi_image_payload_validation_error(images_result, min_images=images_count)
+                        or _is_multi_image_proto_payload_error(images_result, image_count=images_count)
                     ):
                         # Fallback for upload providers returning non-standard token response:
                         # send by URL attachments to avoid blocking operator flow.
@@ -2132,8 +2187,11 @@ async def enqueue_and_process_send_text(
         operation="send_text",
         payload={"text": text, "format": text_format},
     )
-    client = _workspace_client(db, workspace_id=item.workspace_id)
-    ok, _, _ = await _dispatch_outbox(db, client=client, item=item)
+    claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
+    if claimed_item is None:
+        return False
+    client = _workspace_client(db, workspace_id=claimed_item.workspace_id)
+    ok, _, _ = await _dispatch_outbox(db, client=client, item=claimed_item)
     return ok
 
 
@@ -2169,8 +2227,11 @@ async def enqueue_and_process_send_photo(
         operation="send_photo",
         payload={"photo_url": photo_url, "caption": caption},
     )
-    client = _workspace_client(db, workspace_id=item.workspace_id)
-    ok, _, _ = await _dispatch_outbox(db, client=client, item=item)
+    claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
+    if claimed_item is None:
+        return False
+    client = _workspace_client(db, workspace_id=claimed_item.workspace_id)
+    ok, _, _ = await _dispatch_outbox(db, client=client, item=claimed_item)
     return ok
 
 
@@ -2234,8 +2295,11 @@ async def enqueue_and_process_send_media_group(
             else {"text": (text or "").strip() or None, "attachments": attachments}
         ),
     )
-    client = _workspace_client(db, workspace_id=item.workspace_id)
-    ok, _, _ = await _dispatch_outbox(db, client=client, item=item)
+    claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
+    if claimed_item is None:
+        return False
+    client = _workspace_client(db, workspace_id=claimed_item.workspace_id)
+    ok, _, _ = await _dispatch_outbox(db, client=client, item=claimed_item)
     return ok
 
 
@@ -2702,8 +2766,11 @@ async def _send_manager_text_with_attachments(
         operation="send_message",
         payload={"text": text, "attachments": attachments or []},
     )
-    client = _workspace_client(db, workspace_id=item.workspace_id)
-    ok, _, _ = await _dispatch_outbox(db, client=client, item=item)
+    claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
+    if claimed_item is None:
+        return False
+    client = _workspace_client(db, workspace_id=claimed_item.workspace_id)
+    ok, _, _ = await _dispatch_outbox(db, client=client, item=claimed_item)
     return ok
 
 
@@ -3043,7 +3110,10 @@ async def _send_contact_request_prompt(
         operation="send_message",
         payload={"text": full_text, "attachments": attachments, "format": "markdown"},
     )
-    ok, _, result = await _dispatch_outbox(db, client=client, item=item)
+    claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
+    if claimed_item is None:
+        return {"success": False, "error": "outbox_claim_failed"}
+    ok, _, result = await _dispatch_outbox(db, client=client, item=claimed_item)
     if ok:
         return result
     return {"success": False, **result}
@@ -3094,7 +3164,10 @@ async def _send_start_fallback_prompt(
         operation="send_message",
         payload={"text": text, "attachments": attachments, "format": "markdown"},
     )
-    ok, _, result = await _dispatch_outbox(db, client=client, item=item)
+    claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
+    if claimed_item is None:
+        return {"success": False, "error": "outbox_claim_failed"}
+    ok, _, result = await _dispatch_outbox(db, client=client, item=claimed_item)
     if ok:
         return result
     return {"success": False, **result}

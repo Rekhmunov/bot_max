@@ -2171,6 +2171,7 @@
       let selectedEntries = [];
       let fileViewUrls = [];
       let isUploadReady = true;
+      let isComposeSubmitting = false;
       let draggedToken = "";
       const canConstructDataTransfer = (() => {
         try {
@@ -2582,11 +2583,18 @@
         renderPreview();
       });
       composeForm.addEventListener("submit", (event) => {
+        if (isComposeSubmitting) {
+          event.preventDefault();
+          return;
+        }
         if (!isUploadReady) {
           event.preventDefault();
           setUploadStatus("Дождитесь подготовки фото к отправке.", "error");
           return;
         }
+        isComposeSubmitting = true;
+        sendBtn.disabled = true;
+        scheduleBtnMobile.disabled = true;
         if (!scheduledAtInput.value) return;
         scheduleHint.textContent = "Запланировано";
       });
