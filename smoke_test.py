@@ -72,6 +72,7 @@ def _run_websocket_stage3_incoming_hint_smoke(client: TestClient, *, cookies) ->
         assert payload.get("type") == "incoming_hint"
         assert int(payload.get("workspace_id") or 0) == 1
         assert int(payload.get("conversation_id") or 0) > 0
+        assert str(payload.get("source") or "") in {"incoming_customer_message", "incoming_message"}
 
 
 def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cookies) -> None:
