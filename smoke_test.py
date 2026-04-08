@@ -890,8 +890,8 @@ def run() -> None:
             )
             assert prestart_msg is not None
             prestart_text = str(getattr(prestart_msg, "text", "") or "")
-            assert "Start / Начать" in prestart_text
-            assert "https://max.ru/id111111111_bot" in prestart_text
+            # Regression: prestart text should stay template-only; start action is a button.
+            assert "https://max.ru/id111111111_bot" not in prestart_text
         webhook_customer_start_fallback = client.post(
             "/webhook/max/ws1key",
             json={
