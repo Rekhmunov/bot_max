@@ -168,9 +168,8 @@ def _run_scroll_near_bottom_snap_smoke(client: TestClient, *, cookies) -> None:
     page = client.get("/admin/chats", cookies=cookies, follow_redirects=False)
     assert page.status_code == 200
     html = page.text
-    assert "const NEAR_BOTTOM_PX = 24;" in html
-    assert "const nearBottom = offsetFromBottom <= NEAR_BOTTOM_PX;" in html
-    assert "const normalizedOffsetFromBottom = nearBottom ? 0 : offsetFromBottom;" in html
+    assert "const stickToBottom = forceBottom || rawOffsetFromBottom <= 260;" in html
+    assert "stabilizeBottomScroll(700);" in html
 
 
 def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cookies) -> None:
@@ -622,6 +621,7 @@ def run() -> None:
         _run_websocket_hint_workspace_rate_gate_smoke(client, cookies=cookies)
         _run_websocket_seq_monotonic_smoke(client, cookies=cookies)
         _run_websocket_resync_event_shape_smoke(client, cookies=cookies)
+        _run_scroll_near_bottom_snap_smoke(client, cookies=cookies)
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
         _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
 
