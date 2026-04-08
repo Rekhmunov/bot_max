@@ -2315,18 +2315,14 @@
         if (!wrap) return;
         wrap.scrollTop = wrap.scrollHeight;
       };
-      const stabilizeBottomScroll = (durationMs = 220) => {
+      const stabilizeBottomScroll = () => {
         const wrap = document.querySelector(".messages-wrap");
         if (!(wrap instanceof HTMLElement)) return;
-        const startedAt = Date.now();
-        const tick = () => {
-          const now = Date.now();
+        // Single-frame bottom snap avoids viewport "pulsing" when layout/visualViewport
+        // also updates during chat open/send/receive cycles.
+        window.requestAnimationFrame(() => {
           wrap.scrollTop = wrap.scrollHeight;
-          if ((now - startedAt) < durationMs) {
-            window.requestAnimationFrame(tick);
-          }
-        };
-        window.requestAnimationFrame(tick);
+        });
       };
       const hasOperationQueryFlag = () => {
         try {
@@ -2361,7 +2357,7 @@
           const stickToBottom = Boolean(payload?.stickToBottom);
           if (stickToBottom) {
             wrap.scrollTop = wrap.scrollHeight;
-            stabilizeBottomScroll(140);
+            snapBottomOnce();
             return true;
           }
           const targetTop = Math.max(0, wrap.scrollHeight - wrap.clientHeight - offsetFromBottom);
@@ -2605,7 +2601,7 @@
       // Initial open lands at bottom on first load; on soft-updates we preserve position only.
       if (!restoredScrollPosition && !hasOperationQueryFlag()) {
         scrollMessagesToBottom();
-        stabilizeBottomScroll(140);
+        snapBottomOnce();
       }
       if (window.__chatSoftVisit) {
         const originalSoftVisit = window.__chatSoftVisit;

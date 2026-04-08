@@ -169,7 +169,8 @@ def _run_scroll_near_bottom_snap_smoke(client: TestClient, *, cookies) -> None:
     assert page.status_code == 200
     html = page.text
     assert "const stickToBottom = forceBottom || rawOffsetFromBottom <= 80;" in html
-    assert "stabilizeBottomScroll(700);" not in html
+    assert "stabilizeBottomScroll(" not in html
+    assert "snapBottomOnce(" in html
 
 
 def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cookies) -> None:
