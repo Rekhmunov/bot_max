@@ -3015,9 +3015,10 @@ async def _send_start_fallback_prompt(
                 "buttons": [
                     [
                         {
-                            "type": "callback",
-                            "text": "Start / Начать",
-                            "payload": "customer:start_fallback",
+                            # MAX-native "message" button sends text as a regular message.
+                            # This makes start flow enter via message_created text="/start".
+                            "type": "message",
+                            "text": "/start",
                         }
                     ]
                 ]

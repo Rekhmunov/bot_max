@@ -911,7 +911,10 @@ def run() -> None:
             keyboard_payload = first_attachment.get("payload") if isinstance(first_attachment.get("payload"), dict) else {}
             buttons = keyboard_payload.get("buttons") if isinstance(keyboard_payload, dict) else []
             first_button = buttons[0][0] if isinstance(buttons, list) and buttons and isinstance(buttons[0], list) and buttons[0] else {}
-            assert str(first_button.get("payload") or "") == "customer:start_fallback"
+            # Start should be triggered by a standard /start-like event flow,
+            # not by custom callback payloads.
+            assert str(first_button.get("type") or "").strip().lower() == "message"
+            assert str(first_button.get("text") or "").strip().lower() == "/start"
         webhook_customer_start_fallback = client.post(
             "/webhook/max/ws1key",
             json={
