@@ -1900,11 +1900,9 @@
     </main>
   </div>
 
-  {% if active_thread and (removed == "1" or removed == "0" or message or error) %}
+  {% if active_thread and (removed == "0" or message or error) %}
     <div class="chat-toast-stack" id="chat-toast-stack">
-      {% if removed == "1" %}
-        <div class="chat-toast ok">Чат удален</div>
-      {% elif removed == "0" %}
+      {% if removed == "0" %}
         <div class="chat-toast err">Не удалось удалить чат</div>
       {% endif %}
       {% if message %}

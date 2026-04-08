@@ -7301,15 +7301,13 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
     op_message = None
     op_error = None
     if sent_flag == "1":
-        op_message = "Сообщение отправлено"
+        # UI request: suppress generic "message sent" toast in chats.
+        pass
     send_error_reason = str(request.query_params.get("send_error") or "").strip()
     quick_error_reason = str(request.query_params.get("quick_error") or "").strip()
     if sent_flag == "0":
-        op_error = (
-            f"Ошибка отправки сообщения: {send_error_reason}"
-            if send_error_reason
-            else "Ошибка отправки сообщения"
-        )
+        # UI request: suppress generic send-error toast in chats.
+        pass
     if scheduled_flag == "1":
         op_message = "Сообщение запланировано"
     if scheduled_flag == "0":
