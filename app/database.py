@@ -448,6 +448,10 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE outbox_messages ADD COLUMN target_user_id VARCHAR(255) DEFAULT ''")
                 )
+            if "idempotency_fingerprint" not in outbox_columns:
+                conn.execute(
+                    text("ALTER TABLE outbox_messages ADD COLUMN idempotency_fingerprint VARCHAR(64) DEFAULT ''")
+                )
 
         if "chat_folders" in table_names:
             folder_columns = {col["name"] for col in inspector.get_columns("chat_folders")}
@@ -741,6 +745,12 @@ def _ensure_lightweight_migrations() -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_conversation_pins_workspace_user_sort "
                 "ON conversation_pins (workspace_id, service_user_id, sort_order)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_outbox_messages_idempotency_fingerprint "
+                "ON outbox_messages (workspace_id, idempotency_fingerprint)"
             )
         )
 

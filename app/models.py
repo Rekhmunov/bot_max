@@ -308,6 +308,8 @@ class OutboxMessage(Base):
     sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[str] = mapped_column(Text, default="")
     external_message_mid: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
+    idempotency_key: Mapped[str] = mapped_column(String(128), default="", index=True)
+    idempotency_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

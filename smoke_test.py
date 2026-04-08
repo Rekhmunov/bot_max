@@ -13,6 +13,7 @@ from app.main import app
 from app.manager_bridge import (
     DEFAULT_TEMPLATES,
     _claim_outbox_item_for_send,
+    _dispatch_outbox,
     _enqueue_outbox_message,
 )
 from app.services import get_or_create_settings
@@ -2221,20 +2222,84 @@ def run() -> None:
 
         # Outbox claim should be idempotent to prevent duplicate immediate sends.
         with SessionLocal() as db:
+            claim_probe_seed = uuid4().hex[:8]
             claim_probe = _enqueue_outbox_message(
                 db,
                 conversation_id=conversation_id,
                 chat_message_id=None,
-                target_chat_id="claim_probe_chat",
-                target_user_id="claim_probe_user",
+                target_chat_id=f"claim_probe_chat_{claim_probe_seed}",
+                target_user_id=f"claim_probe_user_{claim_probe_seed}",
                 operation="send_text",
-                payload={"text": "claim_probe"},
+                payload={"text": f"claim_probe_{claim_probe_seed}"},
                 workspace_id=1,
             )
             first_claim = _claim_outbox_item_for_send(db, outbox_id=int(claim_probe.id))
             second_claim = _claim_outbox_item_for_send(db, outbox_id=int(claim_probe.id))
             assert first_claim is not None
             assert second_claim is None
+
+        # Idempotency fingerprint guard should skip duplicate send_message payload
+        # in a short time window and mark second outbox as sent without API call.
+        with SessionLocal() as db:
+            idem_seed = uuid4().hex[:8]
+            sent_calls = {"count": 0}
+            import asyncio as _asyncio
+
+            async def _fake_send_message_idempotent(*args, **kwargs):
+                sent_calls["count"] += 1
+                return {"success": True, "message": {"body": {"mid": f"mid_{uuid4().hex[:8]}"}}}
+
+            first = _enqueue_outbox_message(
+                db,
+                conversation_id=conversation_id,
+                chat_message_id=None,
+                target_chat_id=f"idem_chat_{idem_seed}",
+                target_user_id=f"idem_user_{idem_seed}",
+                operation="send_message",
+                payload={
+                    "text": f"idem_probe_{idem_seed}",
+                    "attachments": [{"type": "image", "payload": {"url": "https://example.com/img.png"}}],
+                },
+                workspace_id=1,
+            )
+            second = _enqueue_outbox_message(
+                db,
+                conversation_id=conversation_id,
+                chat_message_id=None,
+                target_chat_id=f"idem_chat_{idem_seed}",
+                target_user_id=f"idem_user_{idem_seed}",
+                operation="send_message",
+                payload={
+                    "text": f"idem_probe_{idem_seed}",
+                    "attachments": [{"type": "image", "payload": {"url": "https://example.com/img.png"}}],
+                },
+                workspace_id=1,
+            )
+            # Enqueue is now idempotent for identical payload in short window.
+            assert int(second.id) == int(first.id)
+
+            first_claimed = _claim_outbox_item_for_send(db, outbox_id=int(first.id))
+            second_claimed = _claim_outbox_item_for_send(db, outbox_id=int(second.id))
+            assert first_claimed is not None
+            assert second_claimed is None
+
+            from app.max_client import MaxClient
+            with patch(
+                "app.max_client.MaxClient.send_message",
+                new=AsyncMock(side_effect=_fake_send_message_idempotent),
+            ):
+                ok1, _, _ = _asyncio.run(
+                    _dispatch_outbox(
+                        db,
+                        client=MaxClient(token="smoke_test_token"),
+                        item=first_claimed,
+                    )
+                )
+            assert ok1 is True
+            assert int(sent_calls["count"]) == 1
+            row1 = db.query(OutboxMessage).filter(OutboxMessage.id == int(first.id)).first()
+            assert row1 is not None
+            assert str(getattr(row1, "state", "") or "") == "sent"
 
         admin_chats_page_after_send = client.get(
             f"/admin/chats?conversation_id={conversation_id}",

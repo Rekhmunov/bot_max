@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import logging
@@ -1106,7 +1107,6 @@ def _mime_from_extension(path_value: str | None) -> str:
 
 
 def _compute_sha256(path: Path) -> str:
-    import hashlib
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         while True:
@@ -1459,18 +1459,52 @@ def _enqueue_outbox_message(
         )
     if resolved_workspace_id is None:
         resolved_workspace_id = DEFAULT_WORKSPACE_ID
-    item = OutboxMessage(
-        workspace_id=resolved_workspace_id,
-        conversation_id=conversation_id,
-        chat_message_id=chat_message_id,
-        target_chat_id=target_chat_id,
+    normalized_payload = payload if isinstance(payload, dict) else {}
+    payload_json = json.dumps(normalized_payload, ensure_ascii=False)
+    fingerprint = _outbox_dedupe_fingerprint(
         operation=operation,
-        target_user_id=target_user_id or "",
-        payload_json=json.dumps(payload, ensure_ascii=False),
-        state="queued",
-        retry_count=0,
-        next_retry_at=_as_naive_utc(next_retry_at or _utc_now()),
-        last_error="",
+        target_chat_id=target_chat_id,
+        target_user_id=target_user_id,
+        payload=normalized_payload,
+    )
+    idempotency_attr = "idempotency_key" if hasattr(OutboxMessage, "idempotency_key") else "idempotency_fingerprint"
+    if _recent_outbox_duplicate_exists(
+        db,
+        workspace_id=int(resolved_workspace_id),
+        fingerprint=fingerprint,
+    ):
+        existing = (
+            db.query(OutboxMessage)
+            .filter(
+                OutboxMessage.workspace_id == int(resolved_workspace_id),
+                OutboxMessage.state.in_(["queued", "sending", "sent"]),
+            )
+            .order_by(OutboxMessage.id.desc())
+            .all()
+        )
+        for row in existing:
+            if str(getattr(row, idempotency_attr, "") or "").strip() == fingerprint:
+                return row
+    outbox_kwargs: dict[str, object] = {
+        "workspace_id": resolved_workspace_id,
+        "conversation_id": conversation_id,
+        "chat_message_id": chat_message_id,
+        "target_chat_id": target_chat_id,
+        "operation": operation,
+        "target_user_id": target_user_id or "",
+        "payload_json": payload_json,
+        "state": "queued",
+        "retry_count": 0,
+        "next_retry_at": _as_naive_utc(next_retry_at or _utc_now()),
+        "last_error": "",
+    }
+    if hasattr(OutboxMessage, "idempotency_key"):
+        outbox_kwargs["idempotency_key"] = fingerprint
+        outbox_kwargs["idempotency_expires_at"] = _as_naive_utc(_utc_now() + timedelta(minutes=5))
+    else:
+        outbox_kwargs["idempotency_fingerprint"] = fingerprint
+    item = OutboxMessage(
+        **outbox_kwargs,
     )
     db.add(item)
     db.commit()
@@ -1501,6 +1535,59 @@ def _claim_outbox_item_for_send(db: Session, *, outbox_id: int) -> OutboxMessage
     if int(claimed or 0) <= 0:
         return None
     return db.query(OutboxMessage).filter(OutboxMessage.id == int(outbox_id)).first()
+
+
+def _payload_fingerprint(payload: dict) -> str:
+    normalized = json.dumps(payload or {}, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _outbox_dedupe_fingerprint(
+    *,
+    operation: str,
+    target_chat_id: str,
+    target_user_id: str | None,
+    payload: dict,
+) -> str:
+    base = {
+        "operation": str(operation or "").strip().lower(),
+        "target_chat_id": str(target_chat_id or "").strip(),
+        "target_user_id": str(target_user_id or "").strip(),
+        "payload_fp": _payload_fingerprint(payload),
+    }
+    normalized = json.dumps(base, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(normalized.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def _recent_outbox_duplicate_exists(
+    db: Session,
+    *,
+    workspace_id: int,
+    fingerprint: str,
+    time_window_seconds: int = 180,
+) -> bool:
+    fp = str(fingerprint or "").strip()
+    if not fp:
+        return False
+    window_from = _as_naive_utc(_utc_now() - timedelta(seconds=max(1, int(time_window_seconds or 1))))
+    idempotency_field_name = (
+        "idempotency_key"
+        if hasattr(OutboxMessage, "idempotency_key")
+        else "idempotency_fingerprint"
+    )
+    idempotency_field = getattr(OutboxMessage, idempotency_field_name)
+    existing = (
+        db.query(OutboxMessage.id)
+        .filter(
+            OutboxMessage.workspace_id == int(workspace_id),
+            idempotency_field == fp,
+            OutboxMessage.created_at >= window_from,
+            OutboxMessage.state.in_(["queued", "sending", "sent"]),
+        )
+        .order_by(OutboxMessage.id.desc())
+        .first()
+    )
+    return bool(existing)
 
 
 def _update_chat_message_delivery(
@@ -2010,6 +2097,47 @@ async def _dispatch_outbox(
         result = await _send_by_user()
     else:
         result = {"success": False, "error": "chat_id_or_user_id_required"}
+
+    # Idempotency guard: if an identical send_message payload was recently sent
+    # in this workspace, mark current outbox row as deduplicated-success.
+    if str(getattr(item, "operation", "") or "").strip().lower() == "send_message":
+        fingerprint_attr = (
+            "idempotency_key"
+            if hasattr(OutboxMessage, "idempotency_key")
+            else "idempotency_fingerprint"
+        )
+        current_fingerprint = str(getattr(item, fingerprint_attr, "") or "").strip()
+        if current_fingerprint:
+            duplicate_sent = (
+                db.query(OutboxMessage.id)
+                .filter(
+                    OutboxMessage.workspace_id == int(item.workspace_id or 0),
+                    getattr(OutboxMessage, fingerprint_attr) == current_fingerprint,
+                    OutboxMessage.id != int(item.id or 0),
+                    OutboxMessage.state == "sent",
+                    OutboxMessage.created_at >= _as_naive_utc(_utc_now() - timedelta(minutes=5)),
+                )
+                .order_by(OutboxMessage.id.desc())
+                .first()
+            )
+            if duplicate_sent:
+                item.state = "sent"
+                item.is_permanent_failure = False
+                item.last_attempt_at = _as_naive_utc(_utc_now())
+                item.sent_at = _as_naive_utc(_utc_now())
+                item.last_error = "deduplicated_by_fingerprint"
+                db.add(item)
+                db.commit()
+                _update_chat_message_delivery(
+                    db,
+                    chat_message_id=item.chat_message_id,
+                    state="sent",
+                    error="",
+                    retry_count=item.retry_count,
+                    next_retry_at=item.next_retry_at,
+                    max_mid=item.external_message_mid,
+                )
+                return True, False, {"success": True, "deduplicated": True}
 
     ok = bool(result.get("success", True) or result.get("message"))
     retriable = _is_retriable_error(result)
