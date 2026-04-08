@@ -98,10 +98,40 @@ def _run_websocket_hint_workspace_rate_gate_smoke(client: TestClient, *, cookies
     from app.realtime import chat_realtime_hub
 
     now = 1000.0
-    assert chat_realtime_hub.should_emit_workspace_hint(workspace_id=1, min_interval_ms=120, now_monotonic=now) is True
-    assert chat_realtime_hub.should_emit_workspace_hint(workspace_id=1, min_interval_ms=120, now_monotonic=now + 0.03) is False
-    assert chat_realtime_hub.should_emit_workspace_hint(workspace_id=2, min_interval_ms=120, now_monotonic=now + 0.03) is True
-    assert chat_realtime_hub.should_emit_workspace_hint(workspace_id=1, min_interval_ms=120, now_monotonic=now + 0.2) is True
+    assert chat_realtime_hub.should_emit_workspace_hint_rate_limited(
+        workspace_id=1,
+        window_seconds=1.0,
+        max_events_per_window=2,
+        now_monotonic=now,
+    ) is True
+    assert chat_realtime_hub.should_emit_workspace_hint_rate_limited(
+        workspace_id=1,
+        window_seconds=1.0,
+        max_events_per_window=2,
+        now_monotonic=now + 0.2,
+    ) is True
+    assert chat_realtime_hub.should_emit_workspace_hint_rate_limited(
+        workspace_id=1,
+        window_seconds=1.0,
+        max_events_per_window=2,
+        now_monotonic=now + 0.3,
+    ) is False
+    assert chat_realtime_hub.should_emit_workspace_hint_rate_limited(
+        workspace_id=2,
+        window_seconds=1.0,
+        max_events_per_window=2,
+        now_monotonic=now + 0.3,
+    ) is True
+
+
+def _run_websocket_hint_seq_smoke(client: TestClient, *, cookies) -> None:
+    from app.realtime import chat_realtime_hub
+
+    first = chat_realtime_hub.next_workspace_seq(workspace_id=7001)
+    second = chat_realtime_hub.next_workspace_seq(workspace_id=7001)
+    third_other_ws = chat_realtime_hub.next_workspace_seq(workspace_id=7002)
+    assert int(first) + 1 == int(second)
+    assert int(third_other_ws) == 1
 
 
 def _run_websocket_hint_health_smoke(client: TestClient, *, cookies) -> None:
@@ -558,6 +588,7 @@ def run() -> None:
         _run_websocket_stage2_smoke(client, cookies=cookies, manager_token=create_manager_mini_token("90000", workspace_id=1))
         _run_websocket_hint_health_smoke(client, cookies=cookies)
         _run_websocket_hint_burst_coalescing_smoke(client, cookies=cookies)
+        _run_websocket_hint_workspace_rate_gate_smoke(client, cookies=cookies)
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
         _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
 

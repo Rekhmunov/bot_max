@@ -4108,6 +4108,7 @@
       let wsBackoffMs = 1200;
       let wsHintCooldownUntil = 0;
       const wsHintDedupMap = new Map();
+      let wsLastSeq = 0;
 
       const clearWsTimers = () => {
         if (wsHeartbeatTimer !== null) {
@@ -4247,6 +4248,11 @@
           const eventType = String(payload.type || "").toLowerCase();
           if (eventType === "pong") return;
           if (eventType !== "incoming_hint") return;
+          const seq = Number(payload.seq || 0);
+          if (seq > 0) {
+            if (seq <= wsLastSeq) return;
+            wsLastSeq = seq;
+          }
           consumeWsHint(payload.conversation_id);
         };
         wsSocket.onerror = () => {};

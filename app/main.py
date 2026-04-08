@@ -7605,11 +7605,13 @@ def _ws_incoming_hint_event(
     workspace_id: int,
     conversation_id: int | None,
     source: str = "incoming_message",
+    seq: int = 0,
 ) -> dict[str, object]:
     return {
         "type": "incoming_hint",
         "workspace_id": int(workspace_id or DEFAULT_WORKSPACE_ID),
         "conversation_id": int(conversation_id or 0),
+        "seq": int(seq or 0),
         "source": str(source or "incoming_message"),
         "now_utc": datetime.utcnow().isoformat(),
     }
@@ -7668,10 +7670,17 @@ async def _broadcast_workspace_chat_update(
     try:
         workspace_value = int(workspace_id or DEFAULT_WORKSPACE_ID)
         conversation_value = int(conversation_id or 0)
+        seq_value = int(await chat_realtime_hub.next_workspace_seq(workspace_id=workspace_value))
         if not chat_realtime_hub.should_emit_incoming_hint(
             workspace_id=workspace_value,
             conversation_id=conversation_value,
             min_interval_ms=200,
+        ):
+            return
+        if not chat_realtime_hub.should_emit_workspace_hint_rate_limited(
+            workspace_id=workspace_value,
+            window_seconds=1.0,
+            max_events_per_window=12,
         ):
             return
         await chat_realtime_hub.broadcast_workspace(
@@ -7680,6 +7689,7 @@ async def _broadcast_workspace_chat_update(
                 workspace_id=workspace_value,
                 conversation_id=conversation_value,
                 source=source,
+                seq=seq_value,
             ),
         )
     except Exception:

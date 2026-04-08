@@ -17,6 +17,8 @@ class ChatRealtimeHub:
         self._ws_workspace: dict[int, int] = {}
         self._last_incoming_hint_at: dict[tuple[int, int], float] = {}
         self._workspace_hint_window: dict[int, list[float]] = defaultdict(list)
+        self._workspace_seq: dict[int, int] = defaultdict(int)
+        self._seq_lock = asyncio.Lock()
 
     async def connect(self, *, workspace_id: int, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -102,6 +104,15 @@ class ChatRealtimeHub:
             return False
         bucket.append(now_value)
         return True
+
+    async def next_workspace_seq(self, *, workspace_id: int) -> int:
+        ws_id = int(workspace_id or 0)
+        if ws_id <= 0:
+            return 0
+        async with self._seq_lock:
+            next_value = int(self._workspace_seq.get(ws_id, 0) or 0) + 1
+            self._workspace_seq[ws_id] = next_value
+            return next_value
 
 
 chat_realtime_hub = ChatRealtimeHub()
