@@ -2315,7 +2315,7 @@
         if (!wrap) return;
         wrap.scrollTop = wrap.scrollHeight;
       };
-      const stabilizeBottomScroll = () => {
+      const snapBottomOnce = () => {
         const wrap = document.querySelector(".messages-wrap");
         if (!(wrap instanceof HTMLElement)) return;
         // Single-frame bottom snap avoids viewport "pulsing" when layout/visualViewport
