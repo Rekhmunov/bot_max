@@ -207,6 +207,7 @@ class MediaAsset(Base):
 
 class ChatMessageMedia(Base):
     __tablename__ = "chat_message_media"
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True, default=1)
@@ -265,6 +266,7 @@ class MessageLog(Base):
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True, default=1)

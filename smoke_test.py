@@ -348,6 +348,69 @@ def _run_targeted_chat_history_media_visibility_regression(client: TestClient, *
     assert "/static/uploads/history-second.jpg" in page.text
 
 
+def _run_orphan_chat_media_cleanup_regression(client: TestClient, *, cookies) -> None:
+    with SessionLocal() as db:
+        conversation = Conversation(
+            workspace_id=1,
+            chat_id=f"chat_orphan_reg_{uuid4().hex[:8]}",
+            customer_account_id=f"buyer_orphan_reg_{uuid4().hex[:8]}",
+            manager_added=False,
+            is_active=True,
+        )
+        db.add(conversation)
+        db.commit()
+        db.refresh(conversation)
+        conversation_id = int(conversation.id)
+
+        msg = ChatMessage(
+            workspace_id=1,
+            conversation_id=conversation_id,
+            direction="bot",
+            source="bot_system",
+            text="orphan media cleanup",
+            image_url="",
+            image_urls_json="[]",
+            delivery_state="sent",
+            delivery_error="",
+            delivery_retry_count=0,
+        )
+        db.add(msg)
+        db.commit()
+        db.refresh(msg)
+        msg_id = int(msg.id)
+        db.delete(msg)
+        db.commit()
+
+        from app.manager_bridge import ensure_media_asset_for_path, cleanup_orphan_chat_message_media_links
+        from app.models import ChatMessageMedia, MediaAsset
+
+        media_url = "/static/uploads/orphan-check.png"
+        ensure_media_asset_for_path(db, workspace_id=1, media_path=media_url)
+        asset = db.query(MediaAsset).filter(MediaAsset.public_url == media_url).first()
+        assert asset is not None
+        db.add(
+            ChatMessageMedia(
+                workspace_id=1,
+                chat_message_id=msg_id,
+                media_asset_id=int(asset.id),
+                sort_order=0,
+                role="image",
+            )
+        )
+        db.commit()
+
+        before = db.query(ChatMessageMedia).filter(ChatMessageMedia.chat_message_id == msg_id).count()
+        assert before >= 1
+        removed = cleanup_orphan_chat_message_media_links(db, workspace_id=1, limit=100)
+        assert int(removed) >= 1
+        after = db.query(ChatMessageMedia).filter(ChatMessageMedia.chat_message_id == msg_id).count()
+        assert after == 0
+
+    page = client.get(f"/admin/chats?conversation_id={conversation_id}", cookies=cookies, follow_redirects=False)
+    assert page.status_code == 200
+    assert "orphan media cleanup" not in page.text
+
+
 def _iso_with_timezone(raw_iso: str) -> str:
     value = (raw_iso or "").strip()
     if not value:

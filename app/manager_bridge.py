@@ -4232,6 +4232,7 @@ def delete_conversation(
     )
     for row in chat_media_rows:
         media_paths_to_cleanup.extend(_chat_message_media_paths(row))
+    message_ids_to_remove = [int(row.id) for row in chat_media_rows if int(getattr(row, "id", 0) or 0) > 0]
     db.query(OutboxMessage).filter(
         OutboxMessage.workspace_id == ws_id,
         OutboxMessage.conversation_id == conversation_id,
@@ -4256,6 +4257,11 @@ def delete_conversation(
         ChatMessage.workspace_id == ws_id,
         ChatMessage.conversation_id == conversation_id,
     ).delete()
+    if message_ids_to_remove:
+        db.query(ChatMessageMedia).filter(
+            ChatMessageMedia.workspace_id == ws_id,
+            ChatMessageMedia.chat_message_id.in_(message_ids_to_remove),
+        ).delete(synchronize_session=False)
     db.query(MessageLog).filter(
         MessageLog.workspace_id == ws_id,
         MessageLog.conversation_id == conversation_id,
@@ -4483,6 +4489,78 @@ def _sync_quick_reply_media_asset_links(
         db.commit()
 
 
+def _remove_chat_message_media_links(
+    db: Session,
+    *,
+    chat_message_ids: list[int] | set[int] | tuple[int, ...],
+    workspace_id: int | None = None,
+) -> int:
+    normalized_ids = sorted(
+        {
+            int(value)
+            for value in (chat_message_ids or [])
+            if int(value or 0) > 0
+        }
+    )
+    if not normalized_ids:
+        return 0
+    query = db.query(ChatMessageMedia).filter(ChatMessageMedia.chat_message_id.in_(normalized_ids))
+    if workspace_id is not None:
+        query = query.filter(ChatMessageMedia.workspace_id == int(workspace_id))
+    removed = int(query.delete(synchronize_session=False) or 0)
+    return removed
+
+
+def cleanup_orphan_chat_message_media_links(
+    db: Session,
+    *,
+    workspace_id: int | None = None,
+    limit: int = 500,
+) -> int:
+    orphan_query = (
+        db.query(ChatMessageMedia.id)
+        .outerjoin(ChatMessage, ChatMessage.id == ChatMessageMedia.chat_message_id)
+        .filter(ChatMessage.id.is_(None))
+    )
+    if workspace_id is not None:
+        orphan_query = orphan_query.filter(ChatMessageMedia.workspace_id == int(workspace_id))
+    orphan_ids = [
+        int(row[0])
+        for row in orphan_query
+        .order_by(ChatMessageMedia.id.asc())
+        .limit(max(1, int(limit)))
+        .all()
+        if row and int(row[0] or 0) > 0
+    ]
+    if not orphan_ids:
+        return 0
+    removed = int(
+        db.query(ChatMessageMedia)
+        .filter(ChatMessageMedia.id.in_(orphan_ids))
+        .delete(synchronize_session=False)
+        or 0
+    )
+    if removed:
+        db.commit()
+    return removed
+
+
+def _filter_existing_local_media_urls(urls: list[str]) -> list[str]:
+    filtered: list[str] = []
+    seen: set[str] = set()
+    for value in urls or []:
+        url = str(value or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        local_path = _to_local_static_media_path(url)
+        # Do not expose stale /static URLs to UI; this avoids broken previews.
+        if local_path and local_upload_abspath(local_path) is None:
+            continue
+        filtered.append(url)
+    return filtered
+
+
 def list_chat_message_media_urls(
     db: Session,
     *,
@@ -4523,20 +4601,22 @@ def list_chat_message_media_urls(
 
 def get_message_media_urls(item: ChatMessage) -> list[str]:
     """Read message media from normalized links with legacy fallback."""
-    legacy_urls = _parse_image_urls_json(
+    legacy_urls_raw = _parse_image_urls_json(
         getattr(item, "image_urls_json", None),
         fallback_image_url=getattr(item, "image_url", None),
     )
+    legacy_urls = _filter_existing_local_media_urls(legacy_urls_raw)
     message_id = int(getattr(item, "id", 0) or 0)
     if message_id > 0:
         try:
             from app.database import SessionLocal
 
             with SessionLocal() as local_db:
-                linked_urls = list_chat_message_media_urls(
+                linked_urls_raw = list_chat_message_media_urls(
                     local_db,
                     chat_message_id=message_id,
                 )
+                linked_urls = _filter_existing_local_media_urls(linked_urls_raw)
                 if linked_urls:
                     linked_set = {str(url).strip() for url in linked_urls if str(url).strip()}
                     legacy_set = {str(url).strip() for url in legacy_urls if str(url).strip()}
@@ -5441,6 +5521,11 @@ async def remove_chat_message(
         client = _workspace_client(db, workspace_id=msg.workspace_id)
         await client.delete_message(message_id=msg.max_message_mid)
     media_paths = _chat_message_media_paths(msg)
+    _remove_chat_message_media_links(
+        db,
+        chat_message_ids=[int(chat_message_id)],
+        workspace_id=int(getattr(msg, "workspace_id", 0) or 0) or workspace_id,
+    )
     db.delete(msg)
     db.commit()
     for media_path in media_paths:

@@ -77,6 +77,7 @@ from app.manager_bridge import (
     handle_customer_event,
     handle_manager_message,
     backfill_chat_message_media_assets,
+    cleanup_orphan_chat_message_media_links,
     backfill_quick_reply_media_assets,
     process_outbox_queue,
     run_storage_cleanup_for_all_workspaces,
@@ -2339,6 +2340,7 @@ async def _outbox_worker_loop() -> None:
                     _storage_cleanup_last_run_at = now_utc
                 # P1 backfill runs in small batches during normal worker cycles
                 # to avoid downtime and reduce migration risk.
+                cleanup_orphan_chat_message_media_links(db, limit=500)
                 backfill_chat_message_media_assets(db, limit=250)
                 backfill_quick_reply_media_assets(db, limit=250)
         except Exception:
