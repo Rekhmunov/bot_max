@@ -445,6 +445,28 @@
       font-weight: 700;
       line-height: 1.1;
     }
+    .diag-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      margin-top: 8px;
+    }
+    .diag-item {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 8px 10px;
+      background: #fbfcff;
+    }
+    .diag-item .label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .diag-item .value {
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
     .status-chip {
       display: inline-flex;
       align-items: center;
@@ -693,6 +715,9 @@
         margin-left: 0 !important;
       }
       .manager-status-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .diag-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
       .business-hours-grid {
@@ -1157,6 +1182,46 @@
       <div class="hint">Попыток отправки: <b>{{ delivery_metrics.total_sent_attempts }}</b></div>
       <div class="hint">Среднее число повторов: <b>{{ delivery_metrics.avg_retry_count }}</b></div>
       <div class="hint">Неустранимых ошибок: <b>{{ delivery_metrics.permanent_failures }}</b></div>
+      {% if media_send_diagnostics %}
+      <div class="hint" style="margin-top:10px;">
+        Диагностика медиа/дедупликации за последние
+        <b>{{ media_send_diagnostics.window_minutes }}</b> мин.
+      </div>
+      <div class="diag-grid" style="margin-bottom:8px;">
+        <div class="diag-item">
+          <div class="label">Успех отправок</div>
+          <div class="value">{{ media_send_diagnostics.send_success_rate }}%</div>
+        </div>
+        <div class="diag-item">
+          <div class="label">Fallback (3+ фото)</div>
+          <div class="value">{{ media_send_diagnostics.fallback_markers }}</div>
+        </div>
+        <div class="diag-item">
+          <div class="label">Dedup сработал</div>
+          <div class="value">{{ media_send_diagnostics.deduped_outbox }}</div>
+        </div>
+        <div class="diag-item">
+          <div class="label">Media send (всего)</div>
+          <div class="value">{{ media_send_diagnostics.media_send_total }}</div>
+        </div>
+        <div class="diag-item">
+          <div class="label">Media send (успешно)</div>
+          <div class="value">{{ media_send_diagnostics.media_send_sent }}</div>
+        </div>
+        <div class="diag-item">
+          <div class="label">Media send (ошибки)</div>
+          <div class="value">{{ media_send_diagnostics.media_send_failed }}</div>
+        </div>
+        <div class="diag-item">
+          <div class="label">proto.payload ошибок</div>
+          <div class="value">{{ media_send_diagnostics.proto_payload_errors }}</div>
+        </div>
+        <div class="diag-item">
+          <div class="label">upload_token_missing</div>
+          <div class="value">{{ media_send_diagnostics.upload_token_missing_errors }}</div>
+        </div>
+      </div>
+      {% endif %}
     </section>
     {% endif %}
 

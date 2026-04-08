@@ -652,6 +652,30 @@ class DeliveryStats:
         return round(self.retry_sum / self.total_sent_attempts, 2)
 
 
+@dataclass
+class MediaDiagnosticsStats:
+    window_minutes: int
+    total_outbox: int
+    sent_outbox: int
+    failed_outbox: int
+    deduped_outbox: int
+    send_message_total: int
+    send_message_sent: int
+    send_message_failed: int
+    media_send_total: int
+    media_send_sent: int
+    media_send_failed: int
+    fallback_markers: int
+    proto_payload_errors: int
+    upload_token_missing_errors: int
+
+    @property
+    def send_success_rate(self) -> float:
+        if self.total_outbox <= 0:
+            return 0.0
+        return round((self.sent_outbox / self.total_outbox) * 100.0, 2)
+
+
 def ensure_default_templates(db: Session, *, workspace_id: int = DEFAULT_WORKSPACE_ID) -> None:
     existing = {
         item.template_key: item
@@ -5344,6 +5368,123 @@ def get_delivery_metrics(db: Session, *, workspace_id: int = DEFAULT_WORKSPACE_I
         retry_sum=retry_sum,
         permanent_failures=permanent_failures,
     )
+
+
+def get_media_diagnostics_metrics(
+    db: Session,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+    window_minutes: int = 30,
+) -> MediaDiagnosticsStats:
+    window_value = max(5, min(int(window_minutes or 30), 24 * 60))
+    since = _as_naive_utc(_utc_now() - timedelta(minutes=window_value))
+    recent_rows = (
+        db.query(OutboxMessage)
+        .filter(
+            OutboxMessage.workspace_id == int(workspace_id),
+            OutboxMessage.created_at >= since,
+        )
+        .all()
+    )
+    total_outbox = len(recent_rows)
+    sent_outbox = 0
+    failed_outbox = 0
+    deduped_outbox = 0
+    send_message_total = 0
+    send_message_sent = 0
+    send_message_failed = 0
+    media_send_total = 0
+    media_send_sent = 0
+    media_send_failed = 0
+    fallback_markers = 0
+    proto_payload_errors = 0
+    upload_token_missing_errors = 0
+
+    for row in recent_rows:
+        state = str(getattr(row, "state", "") or "").strip().lower()
+        operation = str(getattr(row, "operation", "") or "").strip().lower()
+        payload_raw = str(getattr(row, "payload_json", "") or "").strip()
+        last_error_raw = str(getattr(row, "last_error", "") or "").strip()
+        last_error_lower = last_error_raw.lower()
+
+        if state == "sent":
+            sent_outbox += 1
+        elif state == "failed":
+            failed_outbox += 1
+
+        if "deduplicated_by_fingerprint" in last_error_lower:
+            deduped_outbox += 1
+        if "proto.payload" in last_error_lower:
+            proto_payload_errors += 1
+        if "upload_token_missing" in last_error_lower:
+            upload_token_missing_errors += 1
+
+        if operation == "send_message":
+            send_message_total += 1
+            if state == "sent":
+                send_message_sent += 1
+            elif state == "failed":
+                send_message_failed += 1
+            if "fallback" in last_error_lower:
+                fallback_markers += 1
+            payload_lower = payload_raw.lower()
+            if (
+                '"images"' in payload_lower
+                or '"attachments"' in payload_lower
+                and '"type": "image"' in payload_lower
+            ):
+                media_send_total += 1
+                if state == "sent":
+                    media_send_sent += 1
+                elif state == "failed":
+                    media_send_failed += 1
+
+    return MediaDiagnosticsStats(
+        window_minutes=window_value,
+        total_outbox=total_outbox,
+        sent_outbox=sent_outbox,
+        failed_outbox=failed_outbox,
+        deduped_outbox=deduped_outbox,
+        send_message_total=send_message_total,
+        send_message_sent=send_message_sent,
+        send_message_failed=send_message_failed,
+        media_send_total=media_send_total,
+        media_send_sent=media_send_sent,
+        media_send_failed=media_send_failed,
+        fallback_markers=fallback_markers,
+        proto_payload_errors=proto_payload_errors,
+        upload_token_missing_errors=upload_token_missing_errors,
+    )
+
+
+def get_media_send_diagnostics(
+    db: Session,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+    window_minutes: int = 30,
+) -> dict[str, int | float]:
+    stats = get_media_diagnostics_metrics(
+        db,
+        workspace_id=workspace_id,
+        window_minutes=window_minutes,
+    )
+    return {
+        "window_minutes": int(stats.window_minutes),
+        "total_outbox": int(stats.total_outbox),
+        "sent_outbox": int(stats.sent_outbox),
+        "failed_outbox": int(stats.failed_outbox),
+        "deduped_outbox": int(stats.deduped_outbox),
+        "send_message_total": int(stats.send_message_total),
+        "send_message_sent": int(stats.send_message_sent),
+        "send_message_failed": int(stats.send_message_failed),
+        "media_send_total": int(stats.media_send_total),
+        "media_send_sent": int(stats.media_send_sent),
+        "media_send_failed": int(stats.media_send_failed),
+        "fallback_markers": int(stats.fallback_markers),
+        "proto_payload_errors": int(stats.proto_payload_errors),
+        "upload_token_missing_errors": int(stats.upload_token_missing_errors),
+        "send_success_rate": float(stats.send_success_rate),
+    }
 
 
 def get_chat_metrics(db: Session, *, workspace_id: int = DEFAULT_WORKSPACE_ID) -> dict[str, int]:

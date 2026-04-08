@@ -2920,6 +2920,9 @@ def run() -> None:
         assert admin_settings_page.status_code == 200
         assert "Статистика доставки сообщений" in admin_settings_page.text
         assert "Успешная доставка" in admin_settings_page.text
+        assert "Диагностика медиа/дедупликации" in admin_settings_page.text
+        assert "Fallback (3+ фото)" in admin_settings_page.text
+        assert "Dedup сработал" in admin_settings_page.text
         assert "Активных чатов:" not in admin_settings_page.text
         assert "Новых (непрочитанных) чатов:" not in admin_settings_page.text
         assert "Чатов с ошибками доставки:" not in admin_settings_page.text

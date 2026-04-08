@@ -63,6 +63,7 @@ from app.manager_bridge import (
     get_conversation_folder_ids,
     get_chat_metrics,
     get_delivery_metrics,
+    get_media_diagnostics_metrics,
     get_template_text,
     list_active_quick_replies,
     list_chat_folders,
@@ -2140,6 +2141,7 @@ def _render_app_settings_page(
     )
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
+    media_send_diagnostics = get_media_diagnostics_metrics(db, workspace_id=workspace_id)
     sub = None
     tenant_metrics = None
     active_alerts: list[TenantAlert] = []
@@ -2216,6 +2218,7 @@ def _render_app_settings_page(
             "webhook_url": webhook_workspace_url,
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
+            "media_send_diagnostics": media_send_diagnostics,
             "subscription": sub,
             "tenant_metrics": tenant_metrics,
             "tenant_alerts": active_alerts,
@@ -2438,6 +2441,7 @@ def admin_page(
         )
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
+    media_send_diagnostics = get_media_diagnostics_metrics(db, workspace_id=workspace_id)
     return templates.TemplateResponse(
         request,
         "admin.html",
@@ -2456,6 +2460,7 @@ def admin_page(
             "webhook_url": webhook_workspace_url,
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
+            "media_send_diagnostics": media_send_diagnostics,
             "subscription": sub,
             "tenant_metrics": tenant_metrics,
             "usage_limits": usage_limits,
@@ -2552,6 +2557,7 @@ async def update_settings(
     tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
     manager_limit_value = max(1, int(sub.manager_limit or 0))
     webhook_workspace_url = _workspace_webhook_url(bot_settings)
+    media_send_diagnostics = get_media_diagnostics_metrics(db, workspace_id=workspace_id)
     if len(manager_ids) > manager_limit_value:
         replies = _load_quick_replies_with_media(db, workspace_id=workspace_id)
         chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
@@ -2571,6 +2577,7 @@ async def update_settings(
                 "webhook_url": webhook_workspace_url,
                 "chat_metrics": chat_metrics,
                 "delivery_metrics": delivery_metrics,
+                "media_send_diagnostics": media_send_diagnostics,
                 "subscription": sub,
                 "tenant_metrics": tenant_metrics,
                 "manager_id_rows": manager_ids,
@@ -2633,6 +2640,7 @@ async def update_settings(
             "webhook_url": webhook_workspace_url,
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
+            "media_send_diagnostics": media_send_diagnostics,
             "subscription": sub,
             "tenant_metrics": tenant_metrics,
             "manager_id_rows": manager_ids,
@@ -2842,6 +2850,7 @@ async def create_quick_reply(
     if not normalized:
         raise HTTPException(status_code=400, detail="Команда не может быть пустой")
 
+    media_send_diagnostics = get_media_diagnostics_metrics(db, workspace_id=workspace_id)
     if (
         db.query(QuickReply)
         .filter(
@@ -2874,6 +2883,7 @@ async def create_quick_reply(
                 "webhook_url": webhook_workspace_url,
                 "chat_metrics": chat_metrics,
                 "delivery_metrics": delivery_metrics,
+                "media_send_diagnostics": media_send_diagnostics,
                 "subscription": sub,
                 "tenant_metrics": tenant_metrics,
                 "manager_status_rows": [],
@@ -2916,6 +2926,7 @@ async def create_quick_reply(
     chat_metrics = get_chat_metrics(db, workspace_id=workspace_id)
     delivery_metrics = get_delivery_metrics(db, workspace_id=workspace_id)
     tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
+    media_send_diagnostics = get_media_diagnostics_metrics(db, workspace_id=workspace_id)
     return templates.TemplateResponse(
         request,
         "admin.html",
@@ -2934,6 +2945,7 @@ async def create_quick_reply(
             "webhook_url": webhook_workspace_url,
             "chat_metrics": chat_metrics,
             "delivery_metrics": delivery_metrics,
+            "media_send_diagnostics": media_send_diagnostics,
             "subscription": sub,
             "tenant_metrics": tenant_metrics,
             "manager_status_rows": [],
