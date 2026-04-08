@@ -1484,6 +1484,13 @@ def _enqueue_outbox_message(
         )
         for row in existing:
             if str(getattr(row, idempotency_attr, "") or "").strip() == fingerprint:
+                logger.info(
+                    "[OUTBOX_ENQUEUE_DEDUP] hit workspace=%s operation=%s fingerprint=%s existing_id=%s",
+                    int(resolved_workspace_id or 0),
+                    str(operation or "").strip().lower(),
+                    fingerprint[:12],
+                    int(getattr(row, "id", 0) or 0),
+                )
                 return row
     outbox_kwargs: dict[str, object] = {
         "workspace_id": resolved_workspace_id,
@@ -1509,6 +1516,14 @@ def _enqueue_outbox_message(
     db.add(item)
     db.commit()
     db.refresh(item)
+    logger.info(
+        "[OUTBOX_ENQUEUE] created id=%s workspace=%s operation=%s chat_message_id=%s fingerprint=%s",
+        int(getattr(item, "id", 0) or 0),
+        int(getattr(item, "workspace_id", 0) or 0),
+        str(getattr(item, "operation", "") or "").strip().lower(),
+        int(getattr(item, "chat_message_id", 0) or 0),
+        fingerprint[:12],
+    )
     return item
 
 
@@ -1533,8 +1548,19 @@ def _claim_outbox_item_for_send(db: Session, *, outbox_id: int) -> OutboxMessage
     )
     db.commit()
     if int(claimed or 0) <= 0:
+        logger.info(
+            "[OUTBOX_CLAIM] skipped id=%s reason=already_claimed_or_processed",
+            int(outbox_id or 0),
+        )
         return None
-    return db.query(OutboxMessage).filter(OutboxMessage.id == int(outbox_id)).first()
+    claimed_row = db.query(OutboxMessage).filter(OutboxMessage.id == int(outbox_id)).first()
+    logger.info(
+        "[OUTBOX_CLAIM] acquired id=%s workspace=%s operation=%s",
+        int(getattr(claimed_row, "id", 0) or 0),
+        int(getattr(claimed_row, "workspace_id", 0) or 0),
+        str(getattr(claimed_row, "operation", "") or "").strip().lower(),
+    )
+    return claimed_row
 
 
 def _payload_fingerprint(payload: dict) -> str:
@@ -1975,6 +2001,12 @@ async def _dispatch_outbox(
                     images.append((file_name, content_bytes))
                 images_count = len(images)
                 if images:
+                    logger.info(
+                        "[MEDIA_SEND] outbox_id=%s mode=byte_upload route=chat images=%s target_chat=%s",
+                        int(getattr(item, "id", 0) or 0),
+                        int(images_count or 0),
+                        str(target_chat_id or "").strip(),
+                    )
                     images_result = await client.send_images(
                         chat_id=target_chat_id,
                         images=images,
@@ -1985,6 +2017,12 @@ async def _dispatch_outbox(
                         or _is_proto_payload_upload_error(images_result)
                         or _is_multi_image_proto_payload_error(images_result, image_count=images_count)
                     ):
+                        logger.info(
+                            "[MEDIA_SEND_FALLBACK] outbox_id=%s route=chat images=%s reason=%s",
+                            int(getattr(item, "id", 0) or 0),
+                            int(images_count or 0),
+                            str(_format_delivery_error(images_result) or "").strip()[:240],
+                        )
                         # Fallback for upload providers returning non-standard token response:
                         # send by URL attachments to avoid blocking operator flow.
                         return await _send_message_with_attachment_ready_retry(
@@ -2040,6 +2078,12 @@ async def _dispatch_outbox(
                     images.append((file_name, content_bytes))
                 images_count = len(images)
                 if images:
+                    logger.info(
+                        "[MEDIA_SEND] outbox_id=%s mode=byte_upload route=user images=%s target_user=%s",
+                        int(getattr(item, "id", 0) or 0),
+                        int(images_count or 0),
+                        str(target_user_id or "").strip(),
+                    )
                     images_result = await client.send_images(
                         user_id=target_user_id,
                         images=images,
@@ -2050,6 +2094,12 @@ async def _dispatch_outbox(
                         or _is_proto_payload_upload_error(images_result)
                         or _is_multi_image_proto_payload_error(images_result, image_count=images_count)
                     ):
+                        logger.info(
+                            "[MEDIA_SEND_FALLBACK] outbox_id=%s route=user images=%s reason=%s",
+                            int(getattr(item, "id", 0) or 0),
+                            int(images_count or 0),
+                            str(_format_delivery_error(images_result) or "").strip()[:240],
+                        )
                         # Fallback for upload providers returning non-standard token response:
                         # send by URL attachments to avoid blocking operator flow.
                         return await _send_message_with_attachment_ready_retry(
@@ -2121,6 +2171,13 @@ async def _dispatch_outbox(
                 .first()
             )
             if duplicate_sent:
+                logger.info(
+                    "[OUTBOX_DISPATCH_DEDUP] id=%s workspace=%s fingerprint=%s duplicate_sent_id=%s",
+                    int(getattr(item, "id", 0) or 0),
+                    int(getattr(item, "workspace_id", 0) or 0),
+                    current_fingerprint[:12],
+                    int(duplicate_sent[0] or 0),
+                )
                 item.state = "sent"
                 item.is_permanent_failure = False
                 item.last_attempt_at = _as_naive_utc(_utc_now())
@@ -2141,6 +2198,15 @@ async def _dispatch_outbox(
 
     ok = bool(result.get("success", True) or result.get("message"))
     retriable = _is_retriable_error(result)
+    logger.info(
+        "[OUTBOX_DISPATCH_RESULT] id=%s workspace=%s operation=%s ok=%s retriable=%s state_before_finalize=%s",
+        int(getattr(item, "id", 0) or 0),
+        int(getattr(item, "workspace_id", 0) or 0),
+        str(getattr(item, "operation", "") or "").strip().lower(),
+        bool(ok),
+        bool(retriable),
+        str(getattr(item, "state", "") or "").strip().lower(),
+    )
     if ok:
         can_send, reason = can_send_message_this_month(db, workspace_id=item.workspace_id)
         if not can_send:
