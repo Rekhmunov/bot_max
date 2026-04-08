@@ -892,6 +892,26 @@ def run() -> None:
             prestart_text = str(getattr(prestart_msg, "text", "") or "")
             # Regression: prestart text should stay template-only; start action is a button.
             assert "https://max.ru/id111111111_bot" not in prestart_text
+            prestart_outbox = (
+                db.query(OutboxMessage)
+                .filter(
+                    OutboxMessage.workspace_id == 1,
+                    OutboxMessage.conversation_id == int(prestart_conv.id),
+                    OutboxMessage.operation == "send_message",
+                )
+                .order_by(OutboxMessage.id.desc())
+                .first()
+            )
+            assert prestart_outbox is not None
+            payload = json.loads(str(getattr(prestart_outbox, "payload_json", "") or "{}"))
+            attachments = payload.get("attachments") if isinstance(payload, dict) else []
+            assert isinstance(attachments, list) and attachments
+            first_attachment = attachments[0] if attachments else {}
+            assert isinstance(first_attachment, dict)
+            keyboard_payload = first_attachment.get("payload") if isinstance(first_attachment.get("payload"), dict) else {}
+            buttons = keyboard_payload.get("buttons") if isinstance(keyboard_payload, dict) else []
+            first_button = buttons[0][0] if isinstance(buttons, list) and buttons and isinstance(buttons[0], list) and buttons[0] else {}
+            assert str(first_button.get("payload") or "") == "customer:start_fallback"
         webhook_customer_start_fallback = client.post(
             "/webhook/max/ws1key",
             json={

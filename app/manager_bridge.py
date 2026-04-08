@@ -2941,7 +2941,7 @@ def _is_start_intent_event(event: MaxWebhookEvent) -> bool:
     if update_type in {"bot_started", "bot_start"}:
         return True
     callback_payload = str(event.callback_payload or "").strip().lower()
-    if callback_payload in {"customer:start_fallback", "/start", "start"}:
+    if callback_payload == "customer:start_fallback":
         return True
     text_value = str(event.text or "").strip().lower()
     if text_value in {"/start", "start", "bot_started", "bot_start"}:
@@ -3017,7 +3017,7 @@ async def _send_start_fallback_prompt(
                         {
                             "type": "callback",
                             "text": "Start / Начать",
-                            "payload": "/start",
+                            "payload": "customer:start_fallback",
                         }
                     ]
                 ]
