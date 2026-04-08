@@ -3611,6 +3611,148 @@
           .map((node) => Number(node.getAttribute("data-message-id") || 0))
           .filter((id) => id > 0)
       );
+      const pageQueryPrefix = "{{ page_query_prefix }}";
+      const buildThreadHref = (conversationId) => {
+        const params = new URLSearchParams();
+        params.set("conversation_id", String(conversationId || 0));
+        if (queryValue) params.set("q", String(queryValue));
+        params.set("view", "chat");
+        params.set("mark_read", "1");
+        if (folderFilter !== null && folderFilter !== undefined) {
+          params.set("folder_id", String(folderFilter));
+        }
+        return `${pageQueryPrefix}${params.toString()}`;
+      };
+      const updateThreadNodeFromPayload = (threadNode, threadPayload) => {
+        if (!(threadNode instanceof HTMLElement) || !threadPayload || typeof threadPayload !== "object") return;
+        const conversationId = Number(threadPayload.conversation_id || 0);
+        const isUnread = Boolean(threadPayload.is_unread);
+        const isPinned = Boolean(threadPayload.is_pinned);
+        const hasDeliveryErrors = Boolean(threadPayload.has_delivery_errors);
+        const isNew = Boolean(threadPayload.is_new);
+        const customerAccountId = String(threadPayload.customer_account_id || "").trim() || "—";
+        const customerLabel = String(threadPayload.customer_label || "").trim() || "—";
+        const ticketNo = Number(threadPayload.ticket_no || 0);
+        const previewText = String(threadPayload.last_message_preview || "").trim() || "—";
+        const showMaxOrigin = Boolean(threadPayload.last_message_from_customer_max);
+
+        threadNode.dataset.threadId = String(conversationId);
+        threadNode.dataset.threadUnread = isUnread ? "1" : "0";
+        threadNode.dataset.threadPinned = isPinned ? "1" : "0";
+        threadNode.dataset.threadFolderIds = Array.isArray(threadPayload.folder_ids)
+          ? threadPayload.folder_ids.map((value) => Number(value || 0)).filter((value) => value > 0).join(",")
+          : "";
+        threadNode.classList.toggle("unread", isUnread);
+        threadNode.classList.toggle("active", Number(activeConversationId || 0) === conversationId);
+        threadNode.classList.toggle("pinned", isPinned);
+        threadNode.setAttribute("href", buildThreadHref(conversationId));
+
+        const threadNameText = threadNode.querySelector(".thread-name-text");
+        if (threadNameText instanceof HTMLElement) {
+          const ticketPrefix = ticketNo > 0 ? `[T-${ticketNo}] ` : "";
+          const pinPrefix = isPinned ? "📌 " : "";
+          threadNameText.textContent = `${pinPrefix}${ticketPrefix}${customerLabel}`;
+        }
+        const nameWrap = threadNode.querySelector(".thread-name-with-origin");
+        if (nameWrap instanceof HTMLElement) {
+          const existingBadge = nameWrap.querySelector(".origin-max-badge");
+          if (showMaxOrigin) {
+            if (!(existingBadge instanceof HTMLElement)) {
+              const badge = document.createElement("span");
+              badge.className = "origin-max-badge";
+              badge.setAttribute("aria-label", "Чат из MAX");
+              badge.setAttribute("title", "Чат из MAX");
+              badge.textContent = "M";
+              nameWrap.insertBefore(badge, nameWrap.firstChild);
+            }
+          } else {
+            existingBadge?.remove();
+          }
+        }
+        const threadMeta = threadNode.querySelector(".thread-meta");
+        if (threadMeta instanceof HTMLElement) {
+          threadMeta.textContent = `customer_account_id: ${customerAccountId}`;
+        }
+        const threadPreview = threadNode.querySelector(".thread-preview");
+        if (threadPreview instanceof HTMLElement) {
+          threadPreview.textContent = previewText;
+        }
+        const folderRow = threadNode.querySelector(".thread-folder-row");
+        if (folderRow instanceof HTMLElement) {
+          folderRow.innerHTML = "";
+          const folderNames = Array.isArray(threadPayload.folder_names)
+            ? threadPayload.folder_names.map((value) => String(value || "").trim()).filter(Boolean)
+            : [];
+          if (folderNames.length) {
+            const wrap = document.createElement("span");
+            wrap.className = "folder-chip-wrap";
+            folderNames.forEach((name) => {
+              const chip = document.createElement("span");
+              chip.className = "folder-chip";
+              chip.textContent = name;
+              wrap.appendChild(chip);
+            });
+            folderRow.appendChild(wrap);
+          }
+        }
+        const headRight = threadNode.querySelector(".thread-head-right");
+        if (headRight instanceof HTMLElement) {
+          const oldErr = headRight.querySelector(".dot-error");
+          const oldNew = headRight.querySelector(".dot-new");
+          oldErr?.remove();
+          oldNew?.remove();
+          if (hasDeliveryErrors || isNew) {
+            const marker = document.createElement("span");
+            marker.className = hasDeliveryErrors ? "dot-error" : "dot-new";
+            marker.setAttribute("title", hasDeliveryErrors ? "Есть ошибки доставки" : "Новый чат");
+            const menuBtn = headRight.querySelector(".thread-menu-btn");
+            if (menuBtn instanceof HTMLElement) {
+              headRight.insertBefore(marker, menuBtn);
+            } else {
+              headRight.appendChild(marker);
+            }
+          }
+        }
+      };
+      const patchExistingThreadNodes = (threadsPayload) => {
+        if (!Array.isArray(threadsPayload)) return false;
+        const existingNodes = Array.from(document.querySelectorAll(".thread[data-thread-id]"));
+        if (!existingNodes.length) return false;
+        const byId = new Map(
+          existingNodes
+            .map((node) => [Number(node.getAttribute("data-thread-id") || 0), node])
+            .filter(([id, node]) => Number(id) > 0 && node instanceof HTMLElement)
+        );
+        const payloadIds = threadsPayload
+          .map((thread) => Number((thread && thread.conversation_id) || 0))
+          .filter((id) => id > 0);
+        const payloadSet = new Set(payloadIds);
+        const existingIds = existingNodes
+          .map((node) => Number(node.getAttribute("data-thread-id") || 0))
+          .filter((id) => id > 0);
+        const existingSet = new Set(existingIds);
+        if (payloadSet.size !== existingSet.size) return false;
+        for (const id of payloadSet) {
+          if (!existingSet.has(id)) return false;
+        }
+        // Keep patch-only mode safe: if pinned-state changed, let soft-rerender rebuild the list blocks.
+        for (const thread of threadsPayload) {
+          if (!thread || typeof thread !== "object") continue;
+          const id = Number(thread.conversation_id || 0);
+          const node = byId.get(id);
+          if (!(node instanceof HTMLElement)) return false;
+          const currentPinned = node.dataset.threadPinned === "1";
+          if (currentPinned !== Boolean(thread.is_pinned)) return false;
+        }
+        threadsPayload.forEach((thread) => {
+          if (!thread || typeof thread !== "object") return;
+          const id = Number(thread.conversation_id || 0);
+          const node = byId.get(id);
+          if (!(node instanceof HTMLElement)) return;
+          updateThreadNodeFromPayload(node, thread);
+        });
+        return true;
+      };
       const updateFolderUnreadBadges = (threadsPayload) => {
         if (!Array.isArray(threadsPayload)) return;
         const counts = new Map();
@@ -3846,15 +3988,18 @@
           const hasOnlyThreadsChanges = hasThreadsChanges && !hasMessageChanges;
 
           if (hasOnlyThreadsChanges) {
-            // Avoid full soft-rerender when only sidebar/thread metadata changed.
-            // This prevents compose input focus loss and bottom-area jitter.
-            if (nextSig) {
-              currentThreadsSignature = nextSig;
+            // Fast path: patch existing thread nodes without page rerender.
+            // If list topology changed (new/deleted chat), fallback to soft-rerender.
+            const patched = patchExistingThreadNodes(payload.threads);
+            if (patched) {
+              if (nextSig) {
+                currentThreadsSignature = nextSig;
+              }
+              if (nextMessagesSig) {
+                currentMessagesSignature = nextMessagesSig;
+              }
+              return;
             }
-            if (nextMessagesSig) {
-              currentMessagesSignature = nextMessagesSig;
-            }
-            return;
           }
 
           if (hasMessageChanges || hasThreadsChanges) {
