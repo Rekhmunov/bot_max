@@ -1089,6 +1089,37 @@ def _manager_rows_limit(db: Session, *, workspace_id: int) -> int:
     return max(1, int(sub.manager_limit or 0))
 
 
+def _safe_media_send_diagnostics(
+    db: Session,
+    *,
+    workspace_id: int,
+) -> dict[str, int | float]:
+    """
+    Keep settings/dashboard pages resilient if a partially migrated DB
+    misses optional idempotency columns used by diagnostics queries.
+    """
+    try:
+        return get_media_diagnostics_metrics(db, workspace_id=workspace_id).__dict__
+    except Exception:
+        return {
+            "window_minutes": 30,
+            "total_outbox": 0,
+            "sent_outbox": 0,
+            "failed_outbox": 0,
+            "deduped_outbox": 0,
+            "send_message_total": 0,
+            "send_message_sent": 0,
+            "send_message_failed": 0,
+            "media_send_total": 0,
+            "media_send_sent": 0,
+            "media_send_failed": 0,
+            "fallback_markers": 0,
+            "proto_payload_errors": 0,
+            "upload_token_missing_errors": 0,
+            "send_success_rate": 0.0,
+        }
+
+
 def _is_system_workspace(workspace_id: int) -> bool:
     return int(workspace_id) == int(DEFAULT_WORKSPACE_ID)
 
@@ -2087,6 +2118,26 @@ def _password_missing_hint(password: str) -> str:
     if not missing:
         return ""
     return "Добавьте: " + ", ".join(missing) + "."
+
+
+def _safe_media_diagnostics(
+    db: Session,
+    *,
+    workspace_id: int,
+    window_minutes: int = 30,
+) -> object:
+    """
+    Keep settings page resilient if diagnostics schema is partially migrated.
+    """
+    try:
+        return get_media_diagnostics_metrics(
+            db,
+            workspace_id=workspace_id,
+            window_minutes=window_minutes,
+        )
+    except Exception:
+        db.rollback()
+        return None
 
 
 def _generate_temp_password() -> str:

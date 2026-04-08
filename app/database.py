@@ -448,9 +448,34 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE outbox_messages ADD COLUMN target_user_id VARCHAR(255) DEFAULT ''")
                 )
+            if "idempotency_key" not in outbox_columns:
+                conn.execute(
+                    text("ALTER TABLE outbox_messages ADD COLUMN idempotency_key VARCHAR(128) DEFAULT ''")
+                )
+            if "idempotency_expires_at" not in outbox_columns:
+                conn.execute(
+                    text("ALTER TABLE outbox_messages ADD COLUMN idempotency_expires_at DATETIME")
+                )
             if "idempotency_fingerprint" not in outbox_columns:
                 conn.execute(
                     text("ALTER TABLE outbox_messages ADD COLUMN idempotency_fingerprint VARCHAR(64) DEFAULT ''")
+                )
+            # Backfill legacy rows so dedupe checks can work immediately after rollout.
+            if "idempotency_key" in outbox_columns:
+                conn.execute(
+                    text(
+                        "UPDATE outbox_messages "
+                        "SET idempotency_key = COALESCE(idempotency_key, '') "
+                        "WHERE idempotency_key IS NULL"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "UPDATE outbox_messages "
+                        "SET idempotency_key = COALESCE(idempotency_fingerprint, '') "
+                        "WHERE (idempotency_key IS NULL OR TRIM(idempotency_key) = '') "
+                        "AND COALESCE(idempotency_fingerprint, '') <> ''"
+                    )
                 )
 
         if "chat_folders" in table_names:
@@ -745,6 +770,12 @@ def _ensure_lightweight_migrations() -> None:
             text(
                 "CREATE INDEX IF NOT EXISTS ix_conversation_pins_workspace_user_sort "
                 "ON conversation_pins (workspace_id, service_user_id, sort_order)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_outbox_messages_idempotency_key "
+                "ON outbox_messages (workspace_id, idempotency_key)"
             )
         )
         conn.execute(

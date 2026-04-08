@@ -1491,8 +1491,13 @@ def _enqueue_outbox_message(
         target_user_id=target_user_id,
         payload=normalized_payload,
     )
-    idempotency_attr = "idempotency_key" if hasattr(OutboxMessage, "idempotency_key") else "idempotency_fingerprint"
-    if _recent_outbox_duplicate_exists(
+    if hasattr(OutboxMessage, "idempotency_fingerprint"):
+        idempotency_attr = "idempotency_fingerprint"
+    elif hasattr(OutboxMessage, "idempotency_key"):
+        idempotency_attr = "idempotency_key"
+    else:
+        idempotency_attr = ""
+    if idempotency_attr and _recent_outbox_duplicate_exists(
         db,
         workspace_id=int(resolved_workspace_id),
         fingerprint=fingerprint,
@@ -1501,13 +1506,13 @@ def _enqueue_outbox_message(
             db.query(OutboxMessage)
             .filter(
                 OutboxMessage.workspace_id == int(resolved_workspace_id),
-                OutboxMessage.state.in_(["queued", "sending", "sent"]),
+                OutboxMessage.state.in_(["queued", "sending"]),
             )
             .order_by(OutboxMessage.id.desc())
             .all()
         )
         for row in existing:
-            if str(getattr(row, idempotency_attr, "") or "").strip() == fingerprint:
+            if idempotency_attr and str(getattr(row, idempotency_attr, "") or "").strip() == fingerprint:
                 logger.info(
                     "[OUTBOX_ENQUEUE_DEDUP] hit workspace=%s operation=%s fingerprint=%s existing_id=%s",
                     int(resolved_workspace_id or 0),
@@ -1529,11 +1534,12 @@ def _enqueue_outbox_message(
         "next_retry_at": _as_naive_utc(next_retry_at or _utc_now()),
         "last_error": "",
     }
+    if hasattr(OutboxMessage, "idempotency_fingerprint"):
+        outbox_kwargs["idempotency_fingerprint"] = fingerprint
     if hasattr(OutboxMessage, "idempotency_key"):
         outbox_kwargs["idempotency_key"] = fingerprint
+    if hasattr(OutboxMessage, "idempotency_expires_at"):
         outbox_kwargs["idempotency_expires_at"] = _as_naive_utc(_utc_now() + timedelta(minutes=5))
-    else:
-        outbox_kwargs["idempotency_fingerprint"] = fingerprint
     item = OutboxMessage(
         **outbox_kwargs,
     )
@@ -1620,19 +1626,19 @@ def _recent_outbox_duplicate_exists(
     if not fp:
         return False
     window_from = _as_naive_utc(_utc_now() - timedelta(seconds=max(1, int(time_window_seconds or 1))))
-    idempotency_field_name = (
-        "idempotency_key"
-        if hasattr(OutboxMessage, "idempotency_key")
-        else "idempotency_fingerprint"
-    )
-    idempotency_field = getattr(OutboxMessage, idempotency_field_name)
+    if hasattr(OutboxMessage, "idempotency_key"):
+        idempotency_field = getattr(OutboxMessage, "idempotency_key")
+    else:
+        # Legacy schema without idempotency columns: fallback to payload hash only.
+        # Keep dedupe conservative and avoid referencing missing ORM attributes.
+        idempotency_field = None
     existing = (
         db.query(OutboxMessage.id)
         .filter(
             OutboxMessage.workspace_id == int(workspace_id),
-            idempotency_field == fp,
+            (idempotency_field == fp) if idempotency_field is not None else (OutboxMessage.payload_json == fp),
             OutboxMessage.created_at >= window_from,
-            OutboxMessage.state.in_(["queued", "sending", "sent"]),
+            OutboxMessage.state.in_(["queued", "sending"]),
         )
         .order_by(OutboxMessage.id.desc())
         .first()
@@ -2189,7 +2195,8 @@ async def _dispatch_outbox(
                     getattr(OutboxMessage, fingerprint_attr) == current_fingerprint,
                     OutboxMessage.id != int(item.id or 0),
                     OutboxMessage.state == "sent",
-                    OutboxMessage.created_at >= _as_naive_utc(_utc_now() - timedelta(minutes=5)),
+                    OutboxMessage.idempotency_expires_at.isnot(None),
+                    OutboxMessage.idempotency_expires_at >= _as_naive_utc(_utc_now()),
                 )
                 .order_by(OutboxMessage.id.desc())
                 .first()
@@ -5485,6 +5492,20 @@ def get_media_send_diagnostics(
         "upload_token_missing_errors": int(stats.upload_token_missing_errors),
         "send_success_rate": float(stats.send_success_rate),
     }
+
+
+def get_media_diagnostics_metrics_snapshot(
+    db: Session,
+    *,
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+    window_minutes: int = 30,
+) -> dict[str, int | float]:
+    # Backward-compatible alias used by settings pages.
+    return get_media_send_diagnostics(
+        db,
+        workspace_id=workspace_id,
+        window_minutes=window_minutes,
+    )
 
 
 def get_chat_metrics(db: Session, *, workspace_id: int = DEFAULT_WORKSPACE_ID) -> dict[str, int]:
