@@ -4110,6 +4110,8 @@
       const wsHintDedupMap = new Map();
       let wsLastSeq = 0;
       let wsResyncCooldownUntil = 0;
+      let wsReconnects = 0;
+      let wsReconnectWindowStartedAt = 0;
 
       const clearWsTimers = () => {
         if (wsHeartbeatTimer !== null) {
@@ -4134,6 +4136,12 @@
           } catch (_) {}
         }
         wsSocket = null;
+      };
+      const resetWsStateAfterStableOpen = () => {
+        wsReconnects = 0;
+        wsReconnectWindowStartedAt = Date.now();
+        wsHintDedupMap.clear();
+        wsHintCooldownUntil = 0;
       };
 
       const safeTriggerRefresh = () => {
@@ -4212,6 +4220,16 @@
       const scheduleWsReconnect = () => {
         if (!wsEnabled || wsStopped || stopped || !isCurrentPoller()) return;
         if (wsReconnectTimer !== null) return;
+        const nowTs = Date.now();
+        if (!wsReconnectWindowStartedAt || (nowTs - wsReconnectWindowStartedAt) > 60000) {
+          wsReconnectWindowStartedAt = nowTs;
+          wsReconnects = 0;
+        }
+        wsReconnects += 1;
+        if (wsReconnects >= 6) {
+          // Too many reconnects in short window: force safe full resync.
+          consumeWsResync();
+        }
         wsReconnectTimer = window.setTimeout(() => {
           wsReconnectTimer = null;
           connectWs();
@@ -4236,6 +4254,7 @@
         wsSocket.onopen = () => {
           wsBackoffMs = 1200;
           clearWsTimers();
+          resetWsStateAfterStableOpen();
           wsHeartbeatTimer = window.setInterval(() => {
             if (!(wsSocket && wsSocket.readyState === WebSocket.OPEN)) return;
             try {

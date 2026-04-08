@@ -155,6 +155,15 @@ def _run_websocket_hint_health_smoke(client: TestClient, *, cookies) -> None:
         assert int(pong.get("workspace_id") or 0) == 1
 
 
+def _run_websocket_resync_event_shape_smoke(client: TestClient, *, cookies) -> None:
+    from app.main import _ws_resync_requested_event
+
+    payload = _ws_resync_requested_event(workspace_id=1, source="rate_limited_hint")
+    assert str(payload.get("type") or "") == "resync_requested"
+    assert int(payload.get("workspace_id") or 0) == 1
+    assert str(payload.get("source") or "") == "rate_limited_hint"
+
+
 def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cookies) -> None:
     # Prepare conversation and quick replies for delete/send regressions.
     with SessionLocal() as db:
