@@ -75,6 +75,55 @@ def _run_websocket_stage3_incoming_hint_smoke(client: TestClient, *, cookies) ->
         assert str(payload.get("source") or "") in {"incoming_customer_message", "incoming_message"}
 
 
+def _run_websocket_hint_burst_coalescing_smoke(client: TestClient, *, cookies) -> None:
+    from app.main import _broadcast_workspace_chat_update
+    from app.realtime import chat_realtime_hub
+
+    with SessionLocal() as db:
+        ws1_settings = get_or_create_settings(db, workspace_id=1)
+        ws1_settings.bot_token = "token_stage5_ws1"
+        ws1_settings.webhook_key = "ws1key"
+        db.add(ws1_settings)
+        db.commit()
+
+    with client.websocket_connect("/admin/chats/ws", cookies=cookies) as ws_admin:
+        # Prime with one hint event.
+        with SessionLocal() as db:
+            import asyncio as _asyncio
+
+            _asyncio.run(
+                _broadcast_workspace_chat_update(
+                    workspace_id=1,
+                    conversation_id=12345,
+                    source="incoming_customer_message",
+                )
+            )
+        first_payload = ws_admin.receive_json()
+        assert first_payload.get("type") == "incoming_hint"
+        assert int(first_payload.get("conversation_id") or 0) == 12345
+
+        # Immediate duplicate for same workspace+conversation should be coalesced.
+        with SessionLocal() as db:
+            import asyncio as _asyncio
+
+            _asyncio.run(
+                _broadcast_workspace_chat_update(
+                    workspace_id=1,
+                    conversation_id=12345,
+                    source="incoming_customer_message",
+                )
+            )
+        # No second event should be delivered right away.
+        ws_admin.sock.settimeout(0.15)
+        try:
+            _ = ws_admin.receive_json()
+            assert False, "expected coalesced duplicate hint to be skipped"
+        except Exception:
+            pass
+        finally:
+            ws_admin.sock.settimeout(None)
+
+
 def _run_websocket_hint_health_smoke(client: TestClient, *, cookies) -> None:
     with client.websocket_connect("/admin/chats/ws", cookies=cookies) as ws_admin:
         ws_admin.send_text("ping")
