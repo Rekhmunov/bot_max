@@ -164,6 +164,15 @@ def _run_websocket_resync_event_shape_smoke(client: TestClient, *, cookies) -> N
     assert str(payload.get("source") or "") == "rate_limited_hint"
 
 
+def _run_scroll_near_bottom_snap_smoke(client: TestClient, *, cookies) -> None:
+    page = client.get("/admin/chats", cookies=cookies, follow_redirects=False)
+    assert page.status_code == 200
+    html = page.text
+    assert "const NEAR_BOTTOM_PX = 24;" in html
+    assert "const nearBottom = offsetFromBottom <= NEAR_BOTTOM_PX;" in html
+    assert "const normalizedOffsetFromBottom = nearBottom ? 0 : offsetFromBottom;" in html
+
+
 def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cookies) -> None:
     # Prepare conversation and quick replies for delete/send regressions.
     with SessionLocal() as db:

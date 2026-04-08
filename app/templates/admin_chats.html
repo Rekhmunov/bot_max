@@ -2345,6 +2345,11 @@
             return false;
           }
           const offsetFromBottom = Math.max(0, Number(payload?.offsetFromBottom || 0));
+          const stickToBottom = Boolean(payload?.stickToBottom);
+          if (stickToBottom) {
+            wrap.scrollTop = wrap.scrollHeight;
+            return true;
+          }
           const targetTop = Math.max(0, wrap.scrollHeight - wrap.clientHeight - offsetFromBottom);
           wrap.scrollTop = targetTop;
           return true;
@@ -2675,14 +2680,19 @@
         try {
           const currentUrl = new URL(window.location.href);
           const conversationId = Number(currentUrl.searchParams.get("conversation_id") || 0);
-          const offsetFromBottom = forceBottom
+          const rawOffsetFromBottom = forceBottom
             ? 0
             : Math.max(0, wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight);
+          // Near-bottom tolerance prevents tiny restore offsets from nudging view
+          // upward by a couple of messages after soft refresh.
+          const stickToBottom = forceBottom || rawOffsetFromBottom <= 120;
+          const offsetFromBottom = stickToBottom ? 0 : rawOffsetFromBottom;
           window.sessionStorage.setItem(
             CHAT_SCROLL_STATE_KEY,
             JSON.stringify({
               conversationId,
               offsetFromBottom,
+              stickToBottom,
               savedAt: Date.now(),
             }),
           );
