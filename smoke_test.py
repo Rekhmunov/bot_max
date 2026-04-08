@@ -72,6 +72,7 @@ def _run_websocket_stage3_incoming_hint_smoke(client: TestClient, *, cookies) ->
         assert payload.get("type") == "incoming_hint"
         assert int(payload.get("workspace_id") or 0) == 1
         assert int(payload.get("conversation_id") or 0) > 0
+        assert int(payload.get("seq") or 0) > 0
         assert str(payload.get("source") or "") in {"incoming_customer_message", "incoming_message"}
 
 
@@ -122,6 +123,17 @@ def _run_websocket_hint_workspace_rate_gate_smoke(client: TestClient, *, cookies
         max_events_per_window=2,
         now_monotonic=now + 0.3,
     ) is True
+
+
+def _run_websocket_seq_monotonic_smoke(client: TestClient, *, cookies) -> None:
+    from app.realtime import chat_realtime_hub
+    import asyncio as _asyncio
+
+    seq1 = int(_asyncio.run(chat_realtime_hub.next_workspace_seq(workspace_id=1)))
+    seq2 = int(_asyncio.run(chat_realtime_hub.next_workspace_seq(workspace_id=1)))
+    seq3 = int(_asyncio.run(chat_realtime_hub.next_workspace_seq(workspace_id=2)))
+    assert seq2 > seq1 >= 1
+    assert seq3 >= 1
 
 
 def _run_websocket_hint_seq_smoke(client: TestClient, *, cookies) -> None:

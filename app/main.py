@@ -7617,6 +7617,19 @@ def _ws_incoming_hint_event(
     }
 
 
+def _ws_resync_requested_event(
+    *,
+    workspace_id: int,
+    source: str = "seq_gap",
+) -> dict[str, object]:
+    return {
+        "type": "resync_requested",
+        "workspace_id": int(workspace_id or DEFAULT_WORKSPACE_ID),
+        "source": str(source or "seq_gap"),
+        "now_utc": datetime.utcnow().isoformat(),
+    }
+
+
 def _extract_conversation_id_from_result(result: object) -> int | None:
     if not isinstance(result, dict):
         return None

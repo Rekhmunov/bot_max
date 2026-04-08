@@ -4109,6 +4109,7 @@
       let wsHintCooldownUntil = 0;
       const wsHintDedupMap = new Map();
       let wsLastSeq = 0;
+      let wsResyncCooldownUntil = 0;
 
       const clearWsTimers = () => {
         if (wsHeartbeatTimer !== null) {
@@ -4182,6 +4183,12 @@
         wsHintCooldownUntil = nowTs + 120;
         safeTriggerRefreshForConversation(conversationId);
       };
+      const consumeWsResync = () => {
+        const nowTs = Date.now();
+        if (nowTs < Number(wsResyncCooldownUntil || 0)) return;
+        wsResyncCooldownUntil = nowTs + 1200;
+        safeTriggerRefresh();
+      };
 
       const buildWsUrl = () => {
         if (!wsEndpoint) return "";
@@ -4247,6 +4254,10 @@
           if (!payload || typeof payload !== "object") return;
           const eventType = String(payload.type || "").toLowerCase();
           if (eventType === "pong") return;
+          if (eventType === "resync_requested") {
+            consumeWsResync();
+            return;
+          }
           if (eventType !== "incoming_hint") return;
           const seq = Number(payload.seq || 0);
           if (seq > 0) {
