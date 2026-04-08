@@ -2949,6 +2949,36 @@ def _is_start_intent_event(event: MaxWebhookEvent) -> bool:
     return False
 
 
+def _workspace_bot_public_link(db: Session, *, workspace_id: int) -> str:
+    settings_row = (
+        db.query(BotSettings)
+        .filter(BotSettings.workspace_id == int(workspace_id or DEFAULT_WORKSPACE_ID))
+        .first()
+    )
+    if settings_row is not None:
+        configured = str(getattr(settings_row, "bot_link", "") or "").strip()
+        if configured.startswith("http://") or configured.startswith("https://"):
+            return configured
+    fallback = str(getattr(app_settings, "max_bot_public_url", "") or "").strip()
+    if fallback.startswith("http://") or fallback.startswith("https://"):
+        return fallback
+    return ""
+
+
+def _with_clickable_start_link(text: str, *, bot_link: str) -> str:
+    base = str(text or "").strip()
+    normalized_link = str(bot_link or "").strip()
+    if not normalized_link:
+        return base
+    lowered = base.lower()
+    if normalized_link.lower() in lowered:
+        return base
+    # Keep the fallback callback button, but add explicit clickable URL in text
+    # for clients where inline callback rendering is not available.
+    suffix = f"\n\nЕсли кнопка не отображается: [Start / Начать]({normalized_link})"
+    return f"{base}{suffix}".strip()
+
+
 async def _send_contact_request_prompt(
     db: Session,
     conversation_id: int,
@@ -3003,11 +3033,14 @@ async def _send_start_fallback_prompt(
     db: Session,
     *,
     conversation_id: int,
+    workspace_id: int,
     client: MaxClient,
     chat_id: str,
     user_id: str | None,
     text: str,
 ) -> dict:
+    bot_link = _workspace_bot_public_link(db, workspace_id=workspace_id)
+    text_with_link = _with_clickable_start_link(text, bot_link=bot_link)
     attachments = [
         {
             "type": "inline_keyboard",
@@ -3029,7 +3062,7 @@ async def _send_start_fallback_prompt(
         conversation_id=conversation_id,
         direction="bot",
         source="bot_system",
-        text=text,
+        text=text_with_link,
         delivery_state="queued",
         delivery_error="",
         delivery_retry_count=0,
@@ -3042,7 +3075,7 @@ async def _send_start_fallback_prompt(
         target_chat_id=chat_id,
         target_user_id=user_id,
         operation="send_message",
-        payload={"text": text, "attachments": attachments, "format": "markdown"},
+        payload={"text": text_with_link, "attachments": attachments, "format": "markdown"},
     )
     ok, _, result = await _dispatch_outbox(db, client=client, item=item)
     if ok:
@@ -3390,6 +3423,7 @@ async def handle_customer_event(
             await _send_start_fallback_prompt(
                 db,
                 conversation_id=conversation.id,
+                workspace_id=workspace_id,
                 client=client,
                 chat_id=event.chat_id,
                 user_id=event.sender_id,

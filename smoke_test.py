@@ -871,6 +871,27 @@ def run() -> None:
         )
         assert webhook_customer_prestart.status_code == 200
         assert webhook_customer_prestart.json().get("flow") == "prestart"
+        with SessionLocal() as db:
+            prestart_conv = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == 1, Conversation.chat_id == fallback_chat_id)
+                .first()
+            )
+            assert prestart_conv is not None
+            prestart_msg = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == 1,
+                    ChatMessage.conversation_id == int(prestart_conv.id),
+                    ChatMessage.direction == "bot",
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            assert prestart_msg is not None
+            prestart_text = str(getattr(prestart_msg, "text", "") or "")
+            assert "Start / Начать" in prestart_text
+            assert "https://max.ru/id111111111_bot" in prestart_text
         webhook_customer_start_fallback = client.post(
             "/webhook/max/ws1key",
             json={
