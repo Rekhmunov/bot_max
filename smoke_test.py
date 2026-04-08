@@ -612,6 +612,7 @@ def run() -> None:
         _run_websocket_hint_burst_coalescing_smoke(client, cookies=cookies)
         _run_websocket_hint_workspace_rate_gate_smoke(client, cookies=cookies)
         _run_websocket_seq_monotonic_smoke(client, cookies=cookies)
+        _run_websocket_resync_event_shape_smoke(client, cookies=cookies)
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
         _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
 
