@@ -7666,11 +7666,19 @@ async def _broadcast_workspace_chat_update(
     source: str = "incoming_message",
 ) -> None:
     try:
+        workspace_value = int(workspace_id or DEFAULT_WORKSPACE_ID)
+        conversation_value = int(conversation_id or 0)
+        if not chat_realtime_hub.should_emit_incoming_hint(
+            workspace_id=workspace_value,
+            conversation_id=conversation_value,
+            min_interval_ms=200,
+        ):
+            return
         await chat_realtime_hub.broadcast_workspace(
-            workspace_id=int(workspace_id or DEFAULT_WORKSPACE_ID),
+            workspace_id=workspace_value,
             event=_ws_incoming_hint_event(
-                workspace_id=int(workspace_id or DEFAULT_WORKSPACE_ID),
-                conversation_id=conversation_id,
+                workspace_id=workspace_value,
+                conversation_id=conversation_value,
                 source=source,
             ),
         )

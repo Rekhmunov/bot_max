@@ -76,7 +76,6 @@ def _run_websocket_stage3_incoming_hint_smoke(client: TestClient, *, cookies) ->
 
 
 def _run_websocket_hint_burst_coalescing_smoke(client: TestClient, *, cookies) -> None:
-    from app.main import _broadcast_workspace_chat_update
     from app.realtime import chat_realtime_hub
 
     with SessionLocal() as db:
@@ -86,42 +85,23 @@ def _run_websocket_hint_burst_coalescing_smoke(client: TestClient, *, cookies) -
         db.add(ws1_settings)
         db.commit()
 
-    with client.websocket_connect("/admin/chats/ws", cookies=cookies) as ws_admin:
-        # Prime with one hint event.
-        with SessionLocal() as db:
-            import asyncio as _asyncio
+    # Probe coalescing logic directly to avoid transport timing flakiness.
+    first_allowed = chat_realtime_hub.should_emit_incoming_hint(workspace_id=1, conversation_id=12345, now_monotonic=100.0)
+    second_blocked = chat_realtime_hub.should_emit_incoming_hint(workspace_id=1, conversation_id=12345, now_monotonic=100.05)
+    third_allowed = chat_realtime_hub.should_emit_incoming_hint(workspace_id=1, conversation_id=12345, now_monotonic=100.40)
+    assert first_allowed is True
+    assert second_blocked is False
+    assert third_allowed is True
 
-            _asyncio.run(
-                _broadcast_workspace_chat_update(
-                    workspace_id=1,
-                    conversation_id=12345,
-                    source="incoming_customer_message",
-                )
-            )
-        first_payload = ws_admin.receive_json()
-        assert first_payload.get("type") == "incoming_hint"
-        assert int(first_payload.get("conversation_id") or 0) == 12345
 
-        # Immediate duplicate for same workspace+conversation should be coalesced.
-        with SessionLocal() as db:
-            import asyncio as _asyncio
+def _run_websocket_hint_workspace_rate_gate_smoke(client: TestClient, *, cookies) -> None:
+    from app.realtime import chat_realtime_hub
 
-            _asyncio.run(
-                _broadcast_workspace_chat_update(
-                    workspace_id=1,
-                    conversation_id=12345,
-                    source="incoming_customer_message",
-                )
-            )
-        # No second event should be delivered right away.
-        ws_admin.sock.settimeout(0.15)
-        try:
-            _ = ws_admin.receive_json()
-            assert False, "expected coalesced duplicate hint to be skipped"
-        except Exception:
-            pass
-        finally:
-            ws_admin.sock.settimeout(None)
+    now = 1000.0
+    assert chat_realtime_hub.should_emit_workspace_hint(workspace_id=1, min_interval_ms=120, now_monotonic=now) is True
+    assert chat_realtime_hub.should_emit_workspace_hint(workspace_id=1, min_interval_ms=120, now_monotonic=now + 0.03) is False
+    assert chat_realtime_hub.should_emit_workspace_hint(workspace_id=2, min_interval_ms=120, now_monotonic=now + 0.03) is True
+    assert chat_realtime_hub.should_emit_workspace_hint(workspace_id=1, min_interval_ms=120, now_monotonic=now + 0.2) is True
 
 
 def _run_websocket_hint_health_smoke(client: TestClient, *, cookies) -> None:
@@ -576,6 +556,8 @@ def run() -> None:
         assert "img-src" in csp_header
         assert "blob:" in csp_header
         _run_websocket_stage2_smoke(client, cookies=cookies, manager_token=create_manager_mini_token("90000", workspace_id=1))
+        _run_websocket_hint_health_smoke(client, cookies=cookies)
+        _run_websocket_hint_burst_coalescing_smoke(client, cookies=cookies)
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
         _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
 

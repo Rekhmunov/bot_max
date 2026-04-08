@@ -16,6 +16,7 @@ class ChatRealtimeHub:
         self._workspace_connections: dict[int, set[WebSocket]] = defaultdict(set)
         self._ws_workspace: dict[int, int] = {}
         self._last_incoming_hint_at: dict[tuple[int, int], float] = {}
+        self._workspace_hint_window: dict[int, list[float]] = defaultdict(list)
 
     async def connect(self, *, workspace_id: int, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -73,6 +74,33 @@ class ChatRealtimeHub:
         if now_value - prev < min_delta:
             return False
         self._last_incoming_hint_at[key] = now_value
+        return True
+
+    def should_emit_workspace_hint_rate_limited(
+        self,
+        *,
+        workspace_id: int,
+        now_monotonic: float | None = None,
+        window_seconds: float = 1.0,
+        max_events_per_window: int = 12,
+    ) -> bool:
+        """
+        Soft workspace-level gate for incoming hint fan-out bursts.
+        Keeps responsiveness while preventing websocket flood spikes.
+        """
+        ws_id = int(workspace_id or 0)
+        if ws_id <= 0:
+            return True
+        now_value = float(now_monotonic if now_monotonic is not None else time.monotonic())
+        window = max(0.2, float(window_seconds or 1.0))
+        limit = max(1, int(max_events_per_window or 1))
+        bucket = self._workspace_hint_window[ws_id]
+        cutoff = now_value - window
+        while bucket and bucket[0] < cutoff:
+            bucket.pop(0)
+        if len(bucket) >= limit:
+            return False
+        bucket.append(now_value)
         return True
 
 
