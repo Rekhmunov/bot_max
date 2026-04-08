@@ -4106,6 +4106,8 @@
       let wsReconnectTimer = null;
       let wsStopped = false;
       let wsBackoffMs = 1200;
+      let wsHintCooldownUntil = 0;
+      const wsHintDedupMap = new Map();
 
       const clearWsTimers = () => {
         if (wsHeartbeatTimer !== null) {
@@ -4158,6 +4160,26 @@
           return;
         }
         triggerRefreshSafe();
+      };
+      const consumeWsHint = (conversationIdRaw) => {
+        const conversationId = Number(conversationIdRaw || 0);
+        const nowTs = Date.now();
+        if (nowTs < Number(wsHintCooldownUntil || 0)) return;
+        const dedupKey = String(conversationId > 0 ? conversationId : 0);
+        const prevTs = Number(wsHintDedupMap.get(dedupKey) || 0);
+        // Coalesce bursty hints from webhook retries / near-simultaneous events.
+        if (prevTs > 0 && (nowTs - prevTs) < 350) return;
+        wsHintDedupMap.set(dedupKey, nowTs);
+        if (wsHintDedupMap.size > 64) {
+          const threshold = nowTs - 10000;
+          for (const [key, ts] of wsHintDedupMap.entries()) {
+            if (Number(ts || 0) < threshold) {
+              wsHintDedupMap.delete(key);
+            }
+          }
+        }
+        wsHintCooldownUntil = nowTs + 120;
+        safeTriggerRefreshForConversation(conversationId);
       };
 
       const buildWsUrl = () => {
@@ -4225,7 +4247,7 @@
           const eventType = String(payload.type || "").toLowerCase();
           if (eventType === "pong") return;
           if (eventType !== "incoming_hint") return;
-          safeTriggerRefreshForConversation(payload.conversation_id);
+          consumeWsHint(payload.conversation_id);
         };
         wsSocket.onerror = () => {};
         wsSocket.onclose = () => {
@@ -4236,6 +4258,8 @@
 
       scheduleNext(900);
       if (wsEnabled) {
+        // When WS is connected, polling becomes low-frequency safety net.
+        currentPollMs = Math.max(currentPollMs, 9000);
         connectWs();
       }
       window.addEventListener("beforeunload", () => {

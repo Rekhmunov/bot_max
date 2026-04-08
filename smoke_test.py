@@ -75,6 +75,14 @@ def _run_websocket_stage3_incoming_hint_smoke(client: TestClient, *, cookies) ->
         assert str(payload.get("source") or "") in {"incoming_customer_message", "incoming_message"}
 
 
+def _run_websocket_hint_health_smoke(client: TestClient, *, cookies) -> None:
+    with client.websocket_connect("/admin/chats/ws", cookies=cookies) as ws_admin:
+        ws_admin.send_text("ping")
+        pong = ws_admin.receive_json()
+        assert str(pong.get("type") or "") == "pong"
+        assert int(pong.get("workspace_id") or 0) == 1
+
+
 def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cookies) -> None:
     # Prepare conversation and quick replies for delete/send regressions.
     with SessionLocal() as db:

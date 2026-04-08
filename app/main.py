@@ -7679,6 +7679,35 @@ async def _broadcast_workspace_chat_update(
         pass
 
 
+def _resolve_conversation_hint_id(
+    db: Session,
+    *,
+    workspace_id: int,
+    chat_id: str,
+    sender_id: str,
+) -> int:
+    """
+    Best-effort conversation resolver for incoming realtime hints.
+    Safe fallback: 0 (global hint) when conversation cannot be matched.
+    """
+    chat_value = str(chat_id or "").strip()
+    sender_value = str(sender_id or "").strip()
+    if not chat_value and not sender_value:
+        return 0
+    query = db.query(Conversation.id).filter(Conversation.workspace_id == int(workspace_id or DEFAULT_WORKSPACE_ID))
+    if chat_value:
+        query = query.filter(Conversation.chat_id == chat_value)
+    if sender_value:
+        query = query.filter(Conversation.customer_account_id == sender_value)
+    row = query.order_by(Conversation.id.desc()).first()
+    if not row:
+        return 0
+    try:
+        return int(row[0] or 0)
+    except Exception:
+        return 0
+
+
 def _resolve_service_user_from_ws(websocket: WebSocket, db: Session) -> ServiceUser | None:
     """
     WS-friendly equivalent of get_current_service_user(request, db).
