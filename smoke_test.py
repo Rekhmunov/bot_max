@@ -138,10 +138,11 @@ def _run_websocket_seq_monotonic_smoke(client: TestClient, *, cookies) -> None:
 
 def _run_websocket_hint_seq_smoke(client: TestClient, *, cookies) -> None:
     from app.realtime import chat_realtime_hub
+    import asyncio as _asyncio
 
-    first = chat_realtime_hub.next_workspace_seq(workspace_id=7001)
-    second = chat_realtime_hub.next_workspace_seq(workspace_id=7001)
-    third_other_ws = chat_realtime_hub.next_workspace_seq(workspace_id=7002)
+    first = int(_asyncio.run(chat_realtime_hub.next_workspace_seq(workspace_id=7001)))
+    second = int(_asyncio.run(chat_realtime_hub.next_workspace_seq(workspace_id=7001)))
+    third_other_ws = int(_asyncio.run(chat_realtime_hub.next_workspace_seq(workspace_id=7002)))
     assert int(first) + 1 == int(second)
     assert int(third_other_ws) == 1
 
@@ -601,6 +602,7 @@ def run() -> None:
         _run_websocket_hint_health_smoke(client, cookies=cookies)
         _run_websocket_hint_burst_coalescing_smoke(client, cookies=cookies)
         _run_websocket_hint_workspace_rate_gate_smoke(client, cookies=cookies)
+        _run_websocket_seq_monotonic_smoke(client, cookies=cookies)
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
         _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
 

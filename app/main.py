@@ -7695,6 +7695,14 @@ async def _broadcast_workspace_chat_update(
             window_seconds=1.0,
             max_events_per_window=12,
         ):
+            # If burst limiter is hit, ask clients to perform a safe polling resync.
+            await chat_realtime_hub.broadcast_workspace(
+                workspace_id=workspace_value,
+                event=_ws_resync_requested_event(
+                    workspace_id=workspace_value,
+                    source="rate_limited_hint",
+                ),
+            )
             return
         await chat_realtime_hub.broadcast_workspace(
             workspace_id=workspace_value,
