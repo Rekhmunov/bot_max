@@ -7615,6 +7615,17 @@ def _ws_incoming_hint_event(
     }
 
 
+def _extract_conversation_id_from_result(result: object) -> int | None:
+    if not isinstance(result, dict):
+        return None
+    raw = result.get("conversation_id")
+    try:
+        value = int(raw) if raw is not None else 0
+    except (TypeError, ValueError):
+        value = 0
+    return value if value > 0 else None
+
+
 def _resolve_ws_admin_username(websocket: WebSocket, db: Session) -> str | None:
     # Legacy admin session from /admin/login.
     session_data = websocket.scope.get("session")

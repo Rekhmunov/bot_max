@@ -4136,6 +4136,29 @@
         if (stopped || !isCurrentPoller()) return;
         triggerRefreshSafe();
       };
+      const safeTriggerRefreshForConversation = (conversationIdRaw) => {
+        if (stopped || !isCurrentPoller()) return;
+        const conversationId = Number(conversationIdRaw || 0);
+        if (conversationId <= 0) {
+          triggerRefreshSafe();
+          return;
+        }
+        if (!activeConversationId || Number(activeConversationId) === conversationId) {
+          triggerRefreshSafe();
+          return;
+        }
+        if (typeof window.__chatSoftVisit === "function") {
+          if (typeof window.__chatCaptureMessagesScrollState === "function") {
+            window.__chatCaptureMessagesScrollState();
+          }
+          stopPolling();
+          window.__chatSoftVisit(window.location.href, { replaceHistory: true }).catch(() => {
+            window.location.reload();
+          });
+          return;
+        }
+        triggerRefreshSafe();
+      };
 
       const buildWsUrl = () => {
         if (!wsEndpoint) return "";
@@ -4202,7 +4225,7 @@
           const eventType = String(payload.type || "").toLowerCase();
           if (eventType === "pong") return;
           if (eventType !== "incoming_hint") return;
-          safeTriggerRefresh();
+          safeTriggerRefreshForConversation(payload.conversation_id);
         };
         wsSocket.onerror = () => {};
         wsSocket.onclose = () => {

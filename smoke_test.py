@@ -47,6 +47,33 @@ def _run_websocket_stage2_smoke(client: TestClient, *, cookies, manager_token: s
         assert int(mini_pong.get("workspace_id") or 0) == 1
 
 
+def _run_websocket_stage3_incoming_hint_smoke(client: TestClient, *, cookies) -> None:
+    with SessionLocal() as db:
+        ws1_settings = get_or_create_settings(db, workspace_id=1)
+        ws1_settings.bot_token = "token_stage3_ws1"
+        ws1_settings.webhook_key = "ws1key"
+        ws1_settings.admin_account_id = "admin_1"
+        db.add(ws1_settings)
+        db.commit()
+    with client.websocket_connect("/admin/chats/ws", cookies=cookies) as ws_admin:
+        incoming = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_created",
+                "message": {
+                    "sender": {"user_id": f"buyer_ws_{uuid4().hex[:6]}", "first_name": "WS Buyer"},
+                    "recipient": {"chat_id": f"chat_ws_{uuid4().hex[:6]}", "chat_type": "dialog"},
+                    "body": {"text": "ws incoming"},
+                },
+            },
+        )
+        assert incoming.status_code == 200
+        payload = ws_admin.receive_json()
+        assert payload.get("type") == "incoming_hint"
+        assert int(payload.get("workspace_id") or 0) == 1
+        assert int(payload.get("conversation_id") or 0) > 0
+
+
 def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cookies) -> None:
     # Prepare conversation and quick replies for delete/send regressions.
     with SessionLocal() as db:
