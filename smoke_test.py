@@ -911,20 +911,22 @@ def run() -> None:
             keyboard_payload = first_attachment.get("payload") if isinstance(first_attachment.get("payload"), dict) else {}
             buttons = keyboard_payload.get("buttons") if isinstance(keyboard_payload, dict) else []
             first_button = buttons[0][0] if isinstance(buttons, list) and buttons and isinstance(buttons[0], list) and buttons[0] else {}
-            assert str(first_button.get("payload") or "") == "customer:start_fallback"
-        webhook_customer_start_fallback = client.post(
+            # Prestart start button must send regular message '/start',
+            # not callback payload-based fallback.
+            assert str(first_button.get("type") or "").strip().lower() == "message"
+            assert str(first_button.get("text") or "").strip().lower() == "/start"
+            assert not str(first_button.get("payload") or "").strip()
+        webhook_customer_start_via_message = client.post(
             "/webhook/max/ws1key",
             json={
-                "update_type": "message_callback",
-                "message": {
-                    "sender": {"user_id": fallback_sender_id},
-                    "recipient": {"chat_id": fallback_chat_id, "chat_type": "dialog"},
-                    "callback": {"payload": "customer:start_fallback"},
-                },
+                "update_type": "message_created",
+                "chat_id": fallback_chat_id,
+                "sender_id": fallback_sender_id,
+                "text": "/start",
             },
         )
-        assert webhook_customer_start_fallback.status_code == 200
-        assert webhook_customer_start_fallback.json().get("flow") == "start_prompt"
+        assert webhook_customer_start_via_message.status_code == 200
+        assert webhook_customer_start_via_message.json().get("flow") == "start_prompt"
         # Regression: text /start after prestart must be treated as explicit Start
         # (no repeated prestart loop).
         fallback_text_start_chat_id = f"chat_fb_txt_{uuid4().hex[:8]}"

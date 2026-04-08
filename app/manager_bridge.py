@@ -1650,6 +1650,43 @@ async def _dispatch_outbox(
     target_user_id = (item.target_user_id or "").strip() or None
     target_chat_id = (item.target_chat_id or "").strip()
 
+    def _resolve_direct_attachments() -> list[dict]:
+        attachments_payload = payload.get("attachments")
+        if not isinstance(attachments_payload, list) or not attachments_payload:
+            return []
+        normalized: list[dict] = []
+        for row in attachments_payload:
+            if not isinstance(row, dict):
+                continue
+            row_type = str(row.get("type") or "").strip().lower()
+            row_payload = row.get("payload")
+            if row_type in {"inline_keyboard", "keyboard"} and isinstance(row_payload, dict):
+                buttons = row_payload.get("buttons")
+                if isinstance(buttons, list) and buttons:
+                    normalized.append({"type": "inline_keyboard", "payload": {"buttons": buttons}})
+                continue
+            # Preserve message-button row for /start-like flows.
+            if row_type == "message":
+                button_text = str(row.get("text") or "").strip()
+                if button_text:
+                    normalized.append({"type": "message", "text": button_text})
+                continue
+            # Keep URL/link buttons if present in outgoing payload.
+            if row_type in {"url", "link"}:
+                button_text = str(row.get("text") or "").strip()
+                button_url = str(row.get("url") or "").strip()
+                if button_text and button_url:
+                    normalized.append({"type": row_type, "text": button_text, "url": button_url})
+                continue
+            # Keep callback buttons if caller intentionally passed them.
+            if row_type == "callback":
+                button_text = str(row.get("text") or "").strip()
+                button_payload = str(row.get("payload") or "").strip()
+                if button_text and button_payload:
+                    normalized.append({"type": "callback", "text": button_text, "payload": button_payload})
+                continue
+        return normalized
+
     def _resolve_fallback_attachments() -> list[dict]:
         attachments_payload = payload.get("attachments")
         if isinstance(attachments_payload, list) and attachments_payload:
@@ -1778,6 +1815,7 @@ async def _dispatch_outbox(
                 caption=str(payload.get("caption")) if payload.get("caption") is not None else None,
             )
         if item.operation == "send_message":
+            direct_attachments = _resolve_direct_attachments()
             images_payload = payload.get("images")
             if isinstance(images_payload, list) and images_payload:
                 images: list[tuple[str, bytes]] = []
@@ -1813,10 +1851,15 @@ async def _dispatch_outbox(
                             attachments=_resolve_fallback_attachments(),
                         )
                     return images_result
+            attachments_to_send = (
+                direct_attachments
+                if direct_attachments
+                else _resolve_fallback_attachments()
+            )
             return await _send_message_with_attachment_ready_retry(
                 chat_id=target_chat_id,
                 text=str(payload.get("text")) if payload.get("text") is not None else None,
-                attachments=_resolve_fallback_attachments(),
+                attachments=attachments_to_send,
             )
         return {"success": False, "error": "unsupported_operation", "operation": item.operation}
 
@@ -1837,6 +1880,7 @@ async def _dispatch_outbox(
                 caption=str(payload.get("caption")) if payload.get("caption") is not None else None,
             )
         if item.operation == "send_message":
+            direct_attachments = _resolve_direct_attachments()
             images_payload = payload.get("images")
             if isinstance(images_payload, list) and images_payload:
                 images: list[tuple[str, bytes]] = []
@@ -1872,10 +1916,15 @@ async def _dispatch_outbox(
                             attachments=_resolve_fallback_attachments(),
                         )
                     return images_result
+            attachments_to_send = (
+                direct_attachments
+                if direct_attachments
+                else _resolve_fallback_attachments()
+            )
             return await _send_message_with_attachment_ready_retry(
                 user_id=target_user_id,
                 text=str(payload.get("text")) if payload.get("text") is not None else None,
-                attachments=_resolve_fallback_attachments(),
+                attachments=attachments_to_send,
             )
         return {"success": False, "error": "unsupported_operation", "operation": item.operation}
 
@@ -2941,6 +2990,7 @@ def _is_start_intent_event(event: MaxWebhookEvent) -> bool:
     if update_type in {"bot_started", "bot_start"}:
         return True
     callback_payload = str(event.callback_payload or "").strip().lower()
+    # Backward compatibility for previously sent callback-based start buttons.
     if callback_payload == "customer:start_fallback":
         return True
     text_value = str(event.text or "").strip().lower()
@@ -3015,9 +3065,9 @@ async def _send_start_fallback_prompt(
                 "buttons": [
                     [
                         {
-                            "type": "callback",
-                            "text": "Start / Начать",
-                            "payload": "customer:start_fallback",
+                            # Primary start path should produce normal message_created text "/start".
+                            "type": "message",
+                            "text": "/start",
                         }
                     ]
                 ]
