@@ -30,6 +30,23 @@ from app.models import (
 )
 
 
+def _run_websocket_stage2_smoke(client: TestClient, *, cookies, manager_token: str) -> None:
+    # Stage-2 realtime availability smoke:
+    # ws endpoints should accept connection for authenticated scopes
+    # and respond to ping with pong without impacting existing chat flows.
+    with client.websocket_connect("/admin/chats/ws", cookies=cookies) as ws_admin:
+        ws_admin.send_text("ping")
+        admin_pong = ws_admin.receive_json()
+        assert admin_pong.get("type") == "pong"
+        assert int(admin_pong.get("workspace_id") or 0) == 1
+
+    with client.websocket_connect(f"/mini/manager/chats/ws?token={quote_plus(manager_token)}") as ws_mini:
+        ws_mini.send_text("ping")
+        mini_pong = ws_mini.receive_json()
+        assert mini_pong.get("type") == "pong"
+        assert int(mini_pong.get("workspace_id") or 0) == 1
+
+
 def _run_targeted_media_and_quick_reply_regressions(client: TestClient, *, cookies) -> None:
     # Prepare conversation and quick replies for delete/send regressions.
     with SessionLocal() as db:
@@ -473,6 +490,7 @@ def run() -> None:
         csp_header = str(admin_page.headers.get("Content-Security-Policy") or "")
         assert "img-src" in csp_header
         assert "blob:" in csp_header
+        _run_websocket_stage2_smoke(client, cookies=cookies, manager_token=create_manager_mini_token("90000", workspace_id=1))
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
         _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
 

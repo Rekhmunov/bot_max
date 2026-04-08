@@ -1498,6 +1498,7 @@
   {% set create_folder_endpoint = ui.create_folder_endpoint if ui is defined and ui.create_folder_endpoint else "/admin/chats/folders" %}
   {% set delete_message_prefix = ui.delete_message_prefix if ui is defined and ui.delete_message_prefix else "/admin/chats/" %}
   {% set updates_endpoint = ui.updates_endpoint if ui is defined and ui.updates_endpoint else "" %}
+  {% set ws_endpoint = ui.ws_endpoint if ui is defined and ui.ws_endpoint else "" %}
   {% set endpoint_query_suffix = ui.endpoint_query_suffix if ui is defined and ui.endpoint_query_suffix else "" %}
   {% set pinned_threads = threads | selectattr("is_pinned") | list %}
   {% set unpinned_threads = threads | rejectattr("is_pinned") | list %}
@@ -4097,8 +4098,126 @@
           }
         });
       }
+      const wsEnabled = {{ "true" if ws_endpoint else "false" }};
+      const wsEndpoint = "{{ ws_endpoint }}";
+      const wsWatchPath = String(window.location.pathname || "");
+      let wsSocket = null;
+      let wsHeartbeatTimer = null;
+      let wsReconnectTimer = null;
+      let wsStopped = false;
+      let wsBackoffMs = 1200;
+
+      const clearWsTimers = () => {
+        if (wsHeartbeatTimer !== null) {
+          window.clearInterval(wsHeartbeatTimer);
+          wsHeartbeatTimer = null;
+        }
+        if (wsReconnectTimer !== null) {
+          window.clearTimeout(wsReconnectTimer);
+          wsReconnectTimer = null;
+        }
+      };
+
+      const closeWs = () => {
+        clearWsTimers();
+        if (wsSocket) {
+          try {
+            wsSocket.onopen = null;
+            wsSocket.onmessage = null;
+            wsSocket.onclose = null;
+            wsSocket.onerror = null;
+            wsSocket.close();
+          } catch (_) {}
+        }
+        wsSocket = null;
+      };
+
+      const safeTriggerRefresh = () => {
+        if (stopped || !isCurrentPoller()) return;
+        triggerRefreshSafe();
+      };
+
+      const buildWsUrl = () => {
+        if (!wsEndpoint) return "";
+        const base = wsEndpoint.startsWith("/")
+          ? `${window.location.origin}${wsEndpoint}`
+          : wsEndpoint;
+        const url = new URL(base, window.location.origin);
+        const scopeSuffix = String(endpoint_query_suffix || "").replace("?", "");
+        if (scopeSuffix) {
+          const scoped = new URLSearchParams(scopeSuffix);
+          scoped.forEach((value, key) => {
+            if (!url.searchParams.has(key)) {
+              url.searchParams.set(key, value);
+            }
+          });
+        }
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        return `${protocol}//${url.host}${url.pathname}${url.search}`;
+      };
+
+      const scheduleWsReconnect = () => {
+        if (!wsEnabled || wsStopped || stopped || !isCurrentPoller()) return;
+        if (wsReconnectTimer !== null) return;
+        wsReconnectTimer = window.setTimeout(() => {
+          wsReconnectTimer = null;
+          connectWs();
+        }, wsBackoffMs);
+        wsBackoffMs = Math.min(12000, Math.round(wsBackoffMs * 1.8));
+      };
+
+      const connectWs = () => {
+        if (!wsEnabled || wsStopped || stopped || !isCurrentPoller()) return;
+        if (String(window.location.pathname || "") !== wsWatchPath) return;
+        if (wsSocket && (wsSocket.readyState === WebSocket.OPEN || wsSocket.readyState === WebSocket.CONNECTING)) {
+          return;
+        }
+        const wsUrl = buildWsUrl();
+        if (!wsUrl) return;
+        try {
+          wsSocket = new WebSocket(wsUrl);
+        } catch (_) {
+          scheduleWsReconnect();
+          return;
+        }
+        wsSocket.onopen = () => {
+          wsBackoffMs = 1200;
+          clearWsTimers();
+          wsHeartbeatTimer = window.setInterval(() => {
+            if (!(wsSocket && wsSocket.readyState === WebSocket.OPEN)) return;
+            try {
+              wsSocket.send("ping");
+            } catch (_) {}
+          }, 18000);
+        };
+        wsSocket.onmessage = (event) => {
+          if (!event || typeof event.data !== "string") return;
+          let payload = null;
+          try {
+            payload = JSON.parse(event.data);
+          } catch (_) {
+            return;
+          }
+          if (!payload || typeof payload !== "object") return;
+          const eventType = String(payload.type || "").toLowerCase();
+          if (eventType === "pong") return;
+          if (eventType !== "incoming_hint") return;
+          safeTriggerRefresh();
+        };
+        wsSocket.onerror = () => {};
+        wsSocket.onclose = () => {
+          closeWs();
+          scheduleWsReconnect();
+        };
+      };
+
       scheduleNext(900);
+      if (wsEnabled) {
+        connectWs();
+      }
       window.addEventListener("beforeunload", () => {
+        wsStopped = true;
+        closeWs();
         stopPolling();
       });
     })();

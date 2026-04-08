@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
@@ -157,6 +157,7 @@ from app.services import (
     get_or_create_settings,
     list_workspace_managers,
 )
+from app.realtime import chat_realtime_hub
 from fastapi.templating import Jinja2Templates
 from app.database import SessionLocal
 
@@ -4063,6 +4064,7 @@ def _admin_chats_ui() -> dict[str, str | bool]:
         "page_path": "/admin/chats",
         "page_query_prefix": "/admin/chats?",
         "updates_endpoint": "/admin/chats/updates",
+        "ws_endpoint": "/admin/chats/ws",
         "access_token": "",
         "create_folder_action": "/admin/chats/folders",
         "show_admin_nav": True,
@@ -4100,6 +4102,7 @@ def _manager_mini_ui(token: str) -> dict[str, str | bool]:
         "page_path": "/mini/manager",
         "page_query_prefix": f"/mini/manager?token={token_value}&",
         "updates_endpoint": "/mini/manager/chats/updates",
+        "ws_endpoint": "/mini/manager/chats/ws",
         "access_token": token,
         "create_folder_action": f"/mini/manager/chats/folders{query_suffix}",
         "show_admin_nav": True,
@@ -4123,6 +4126,12 @@ def _manager_mini_ui(token: str) -> dict[str, str | bool]:
         "create_folder_endpoint": "/mini/manager/chats/folders",
         "delete_message_prefix": "/mini/manager/chats/",
         "endpoint_query_suffix": query_suffix,
+    }
+
+
+def _app_chats_ui() -> dict[str, str | bool]:
+    return {
+        "ws_endpoint": "/app/chats/ws",
     }
 
 
@@ -5037,6 +5046,7 @@ async def app_chats_page(
             "page_path": "/app/chats",
             "page_query_prefix": query_scope_prefix,
             "updates_endpoint": "/app/chats/updates",
+            "ws_endpoint": "/app/chats/ws",
             "create_folder_action": create_folder_action,
             "show_admin_nav": True,
             "settings_href": settings_href,
@@ -7590,6 +7600,109 @@ def _build_chat_updates_payload(
     }
 
 
+def _ws_incoming_hint_event(
+    *,
+    workspace_id: int,
+    conversation_id: int | None,
+    source: str = "incoming_message",
+) -> dict[str, object]:
+    return {
+        "type": "incoming_hint",
+        "workspace_id": int(workspace_id or DEFAULT_WORKSPACE_ID),
+        "conversation_id": int(conversation_id or 0),
+        "source": str(source or "incoming_message"),
+        "now_utc": datetime.utcnow().isoformat(),
+    }
+
+
+def _resolve_ws_admin_username(websocket: WebSocket, db: Session) -> str | None:
+    # Legacy admin session from /admin/login.
+    session_data = websocket.scope.get("session")
+    if isinstance(session_data, dict) and bool(session_data.get("is_admin")):
+        return str(session_data.get("admin_username") or settings.admin_username)
+
+    # Backward-compatible superadmin access via tenant session cookie.
+    token = str(websocket.cookies.get("tenant_session", "")).strip()
+    if not token:
+        return None
+    token_hash = auth_sha256(token)
+    now = datetime.now(UTC).replace(tzinfo=None)
+    session_row = (
+        db.query(UserSession)
+        .filter(
+            UserSession.session_token_hash == token_hash,
+            UserSession.is_revoked.is_(False),
+            UserSession.expires_at > now,
+        )
+        .first()
+    )
+    if session_row is None:
+        return None
+    user = db.query(ServiceUser).filter(ServiceUser.id == session_row.user_id).first()
+    if user is None:
+        return None
+    if not user.is_active or user.is_blocked:
+        return None
+    if user.role != "superadmin":
+        return None
+    return str(user.username or "superadmin")
+
+
+async def _broadcast_workspace_chat_update(
+    *,
+    workspace_id: int,
+    conversation_id: int | None = None,
+    source: str = "incoming_message",
+) -> None:
+    try:
+        await chat_realtime_hub.broadcast_workspace(
+            workspace_id=int(workspace_id or DEFAULT_WORKSPACE_ID),
+            event=_ws_incoming_hint_event(
+                workspace_id=int(workspace_id or DEFAULT_WORKSPACE_ID),
+                conversation_id=conversation_id,
+                source=source,
+            ),
+        )
+    except Exception:
+        # Realtime must never break normal webhook/sync flow.
+        pass
+
+
+def _resolve_service_user_from_ws(websocket: WebSocket, db: Session) -> ServiceUser | None:
+    """
+    WS-friendly equivalent of get_current_service_user(request, db).
+    """
+    try:
+        token = str(websocket.cookies.get("tenant_session", "")).strip()
+        if not token:
+            return None
+        token_hash = auth_sha256(token)
+        session_row = (
+            db.query(UserSession)
+            .filter(
+                UserSession.session_token_hash == token_hash,
+                UserSession.is_revoked.is_(False),
+                UserSession.expires_at > datetime.now(UTC).replace(tzinfo=None),
+            )
+            .first()
+        )
+        if session_row is None:
+            return None
+        user = db.query(ServiceUser).filter(ServiceUser.id == session_row.user_id).first()
+        if user is None or not user.is_active or bool(user.is_blocked):
+            return None
+        if user.workspace_id:
+            workspace = db.query(Workspace).filter(Workspace.id == user.workspace_id).first()
+            if workspace is None or not bool(workspace.is_active) or bool(workspace.is_suspended):
+                return None
+        session_row.last_seen_at = datetime.now(UTC).replace(tzinfo=None)
+        db.add(session_row)
+        db.commit()
+        return user
+    except Exception:
+        return None
+
+
 @app.get("/admin/chats/updates", response_class=JSONResponse)
 def admin_chats_updates(
     conversation_id: int | None = None,
@@ -7693,6 +7806,84 @@ def manager_mini_updates(
         messages_signature=messages_sig,
     )
     return JSONResponse({"ok": True, **payload}, status_code=200)
+
+
+@app.websocket("/admin/chats/ws")
+async def admin_chats_ws(
+    websocket: WebSocket,
+    db: Session = Depends(get_db),
+) -> None:
+    current_admin = _resolve_ws_admin_username(websocket, db)
+    if not current_admin:
+        await websocket.close(code=1008)
+        return
+    workspace_id = DEFAULT_WORKSPACE_ID
+    await chat_realtime_hub.connect(workspace_id=workspace_id, websocket=websocket)
+    try:
+        while True:
+            try:
+                payload = await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+            except RuntimeError:
+                break
+            if str(payload or "").strip().lower() == "ping":
+                await websocket.send_json({"type": "pong", "workspace_id": workspace_id})
+    finally:
+        await chat_realtime_hub.disconnect(websocket)
+
+
+@app.websocket("/app/chats/ws")
+async def app_chats_ws(
+    websocket: WebSocket,
+    workspace_id: int | None = None,
+    db: Session = Depends(get_db),
+) -> None:
+    current_user = _resolve_service_user_from_ws(websocket, db)
+    if current_user is None or current_user.role == "superadmin":
+        await websocket.close(code=1008)
+        return
+    resolved_workspace_id, _scoped_workspace, _is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    await chat_realtime_hub.connect(workspace_id=resolved_workspace_id, websocket=websocket)
+    try:
+        while True:
+            try:
+                payload = await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+            except RuntimeError:
+                break
+            if str(payload or "").strip().lower() == "ping":
+                await websocket.send_json({"type": "pong", "workspace_id": resolved_workspace_id})
+    finally:
+        await chat_realtime_hub.disconnect(websocket)
+
+
+@app.websocket("/mini/manager/chats/ws")
+async def manager_mini_ws(
+    websocket: WebSocket,
+    token: str,
+    db: Session = Depends(get_db),
+) -> None:
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    await chat_realtime_hub.connect(workspace_id=workspace_id, websocket=websocket)
+    try:
+        while True:
+            try:
+                payload = await websocket.receive_text()
+            except WebSocketDisconnect:
+                break
+            except RuntimeError:
+                break
+            if str(payload or "").strip().lower() == "ping":
+                await websocket.send_json({"type": "pong", "workspace_id": workspace_id})
+    finally:
+        await chat_realtime_hub.disconnect(websocket)
 
 
 async def _render_chat_workspace(
@@ -8357,9 +8548,19 @@ async def max_webhook(
             "read_message_mid": str(event.read_message_mid or ""),
         }
 
-    return await handle_customer_event(
+    result = await handle_customer_event(
         db=db,
         client=max_client,
         settings=settings_db,
         event=event,
     )
+    if bool(getattr(event, "is_from_customer", False)):
+        with suppress(Exception):
+            asyncio.create_task(
+                _broadcast_workspace_chat_update(
+                    db=db,
+                    workspace_id=workspace_id,
+                    source="incoming_customer_message",
+                )
+            )
+    return result
