@@ -818,7 +818,7 @@
     }
     .compose-row {
       display: grid;
-      grid-template-columns: auto 1fr auto auto;
+      grid-template-columns: auto auto 1fr auto auto;
       gap: 8px;
       align-items: center;
     }
@@ -842,6 +842,82 @@
       inset: 0;
       opacity: 0;
       cursor: pointer;
+    }
+    .emoji-wrap {
+      position: relative;
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      background: #fff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .emoji-btn {
+      border: 0;
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: transparent;
+      color: #58637d;
+      font-size: 18px;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+    .emoji-btn:hover {
+      background: #f4f7ff;
+    }
+    .emoji-btn.is-active {
+      background: #eaf1ff;
+      color: #2f5eb9;
+    }
+    .emoji-pop {
+      position: absolute;
+      left: 0;
+      bottom: calc(100% + 8px);
+      z-index: 15;
+      width: 240px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      padding: 8px;
+      display: none;
+      gap: 6px;
+      grid-template-columns: repeat(8, minmax(0, 1fr));
+      max-height: 220px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      -webkit-overflow-scrolling: touch;
+    }
+    .emoji-pop.is-visible {
+      display: grid;
+    }
+    .emoji-item {
+      border: 0;
+      background: transparent;
+      border-radius: 8px;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0;
+    }
+    .emoji-item:hover {
+      background: #f3f6ff;
+    }
+    .emoji-item:focus-visible {
+      outline: 2px solid #9ec2ff;
+      outline-offset: 1px;
     }
     .compose input[type="text"] {
       width: 100%;
@@ -1351,6 +1427,11 @@
         bottom: var(--keyboard-offset, 0px);
         padding-bottom: max(10px, env(safe-area-inset-bottom));
       }
+      .emoji-pop {
+        left: -4px;
+        width: min(260px, calc(100vw - 24px));
+        max-height: min(240px, 40vh);
+      }
       .schedule-btn.mobile-visible {
         display: inline-flex;
       }
@@ -1854,6 +1935,23 @@
                 📎
                 <input type="file" name="photos" accept=".png,.jpg,.jpeg,.gif,.webp" multiple />
               </label>
+              <div class="emoji-wrap">
+                <button
+                  type="button"
+                  class="emoji-btn"
+                  id="emoji-btn"
+                  title="Добавить смайлик"
+                  aria-label="Добавить смайлик"
+                  aria-haspopup="listbox"
+                  aria-expanded="false"
+                >😊</button>
+                <div
+                  class="emoji-pop"
+                  id="emoji-pop"
+                  role="listbox"
+                  aria-label="Популярные смайлики"
+                ></div>
+              </div>
               <input
                 id="message-input"
                 type="text"
@@ -2131,6 +2229,8 @@
     (() => {
       const messageInput = document.getElementById("message-input");
       const photoInput = document.querySelector(".attach-wrap input[type='file']");
+      const emojiBtn = document.getElementById("emoji-btn");
+      const emojiPop = document.getElementById("emoji-pop");
       const mediaPreview = document.getElementById("compose-media-preview");
       const uploadStatus = document.getElementById("compose-upload-status");
       const sendBtn = document.getElementById("send-btn");
@@ -2180,6 +2280,14 @@
           return false;
         }
       })();
+      const POPULAR_EMOJI = [
+        "😀", "😄", "😊", "😉", "😍", "😘", "😎", "🤗",
+        "🙂", "🤔", "😇", "😌", "🤝", "👏", "🙏", "💪",
+        "🔥", "✨", "🎉", "❤️", "💙", "💚", "💛", "🧡",
+        "👍", "👎", "👌", "🤝", "🙌", "👋", "🤞", "✌️",
+        "✅", "❗", "⭐", "📌", "📷", "🛒", "💬", "📦",
+      ];
+      const EMOJI_GRID_COLS = 8;
 
       const isTouchLikeViewport = () => (
         window.matchMedia("(max-width: 900px), (hover: none) and (pointer: coarse)").matches
@@ -2448,6 +2556,94 @@
         syncSendVisibility();
       };
 
+      const insertEmojiAtCursor = (emojiValue) => {
+        if (!(messageInput instanceof HTMLInputElement)) return;
+        const emoji = String(emojiValue || "");
+        if (!emoji) return;
+        const value = String(messageInput.value || "");
+        const start = Number.isInteger(messageInput.selectionStart) ? messageInput.selectionStart : value.length;
+        const end = Number.isInteger(messageInput.selectionEnd) ? messageInput.selectionEnd : value.length;
+        messageInput.value = value.slice(0, start) + emoji + value.slice(end);
+        const nextPos = start + emoji.length;
+        messageInput.focus();
+        messageInput.setSelectionRange(nextPos, nextPos);
+        syncSendVisibility();
+      };
+
+      const closeEmojiPopover = () => {
+        if (!(emojiBtn instanceof HTMLButtonElement) || !(emojiPop instanceof HTMLElement)) return;
+        emojiPop.classList.remove("is-visible");
+        emojiBtn.classList.remove("is-active");
+        emojiBtn.setAttribute("aria-expanded", "false");
+      };
+
+      const openEmojiPopover = () => {
+        if (!(emojiBtn instanceof HTMLButtonElement) || !(emojiPop instanceof HTMLElement)) return;
+        if (!emojiPop.childElementCount) {
+          POPULAR_EMOJI.forEach((emojiValue) => {
+            const item = document.createElement("button");
+            item.type = "button";
+            item.className = "emoji-item";
+            item.textContent = emojiValue;
+            item.setAttribute("role", "option");
+            item.setAttribute("aria-label", `Смайлик ${emojiValue}`);
+            item.addEventListener("click", (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              insertEmojiAtCursor(emojiValue);
+              closeEmojiPopover();
+            });
+            emojiPop.appendChild(item);
+          });
+        }
+        emojiPop.classList.add("is-visible");
+        emojiBtn.classList.add("is-active");
+        emojiBtn.setAttribute("aria-expanded", "true");
+      };
+
+      if (emojiBtn instanceof HTMLButtonElement && emojiPop instanceof HTMLElement) {
+        emojiBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const isOpen = emojiPop.classList.contains("is-visible");
+          if (isOpen) {
+            closeEmojiPopover();
+            messageInput.focus();
+            return;
+          }
+          openEmojiPopover();
+          const firstItem = emojiPop.querySelector(".emoji-item");
+          if (firstItem instanceof HTMLButtonElement) {
+            firstItem.focus();
+          }
+        });
+
+        emojiPop.addEventListener("keydown", (event) => {
+          const target = event.target;
+          if (!(target instanceof HTMLButtonElement) || !target.classList.contains("emoji-item")) return;
+          if (event.key === "Escape") {
+            event.preventDefault();
+            closeEmojiPopover();
+            emojiBtn.focus();
+            return;
+          }
+          const items = Array.from(emojiPop.querySelectorAll(".emoji-item"));
+          const idx = items.indexOf(target);
+          if (idx < 0) return;
+          let nextIdx = -1;
+          if (event.key === "ArrowRight") nextIdx = idx + 1;
+          if (event.key === "ArrowLeft") nextIdx = idx - 1;
+          if (event.key === "ArrowDown") nextIdx = idx + EMOJI_GRID_COLS;
+          if (event.key === "ArrowUp") nextIdx = idx - EMOJI_GRID_COLS;
+          if (nextIdx < 0 || nextIdx >= items.length) return;
+          event.preventDefault();
+          const nextEl = items[nextIdx];
+          if (nextEl instanceof HTMLButtonElement) {
+            nextEl.focus();
+          }
+        });
+      }
+
       sendBtn.addEventListener("contextmenu", (event) => {
         if (isTouchLikeViewport()) return;
         event.preventDefault();
@@ -2508,8 +2704,24 @@
         if (event.target === sendBtn) return;
         closeScheduleMenu();
       });
+      document.addEventListener("click", (event) => {
+        if (!(emojiBtn instanceof HTMLButtonElement) || !(emojiPop instanceof HTMLElement)) return;
+        const target = event.target;
+        if (!(target instanceof Element)) {
+          closeEmojiPopover();
+          return;
+        }
+        if (emojiBtn.contains(target) || emojiPop.contains(target)) return;
+        closeEmojiPopover();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          closeEmojiPopover();
+        }
+      });
       window.addEventListener("resize", () => {
         closeScheduleMenu();
+        closeEmojiPopover();
         setKeyboardInset();
         if (document.activeElement === messageInput) {
           startKeyboardSyncBurst(700);
