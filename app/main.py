@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import html
 import hashlib
 import json
 import logging
@@ -7457,16 +7456,6 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
     return op_message, op_error
 
 
-def _decode_html_entities(value: object) -> str:
-    raw = str(value or "")
-    if "&" not in raw:
-        return raw
-    try:
-        return html.unescape(raw)
-    except Exception:
-        return raw
-
-
 def _thread_summary_dict(item: object) -> dict[str, object]:
     conversation_id = int(getattr(item, "conversation_id", 0) or 0)
     return {
@@ -7485,7 +7474,7 @@ def _thread_summary_dict(item: object) -> dict[str, object]:
         "is_blocked": bool(getattr(item, "is_blocked", False)),
         "is_new": str(getattr(item, "status", "") or "").strip().lower() == "new",
         "has_delivery_errors": bool(getattr(item, "has_delivery_errors", False)),
-        "last_message_preview": _decode_html_entities(getattr(item, "last_message_preview", "")),
+        "last_message_preview": str(getattr(item, "last_message_preview", "") or ""),
         "last_message_from_customer_max": bool(
             getattr(item, "last_message_from_customer_max", False)
         ),
@@ -7497,7 +7486,7 @@ def _thread_summary_dict(item: object) -> dict[str, object]:
 
 
 def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
-    text_value = _decode_html_entities(item.text)
+    text_value = str(item.text or "")
     delivery_state_value = str(item.delivery_state or "sent")
     delivery_next_retry_at_raw = getattr(item, "delivery_next_retry_at", None)
     image_urls = get_message_media_urls(item)
