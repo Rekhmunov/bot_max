@@ -563,6 +563,49 @@
     .format-menu button:hover {
       background: var(--primary-soft);
     }
+    .rich-editor-source {
+      position: absolute !important;
+      left: -10000px !important;
+      top: auto !important;
+      width: 1px !important;
+      height: 1px !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    .rich-editor {
+      min-height: 116px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: #fff;
+      color: #1a202f;
+      font-size: 14px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      outline: none;
+    }
+    .rich-editor:focus {
+      border-color: #c7d2e7;
+      box-shadow: 0 0 0 3px rgba(25, 118, 255, 0.12);
+    }
+    .rich-editor.is-empty::before {
+      content: attr(data-placeholder);
+      color: #8b95a7;
+      pointer-events: none;
+    }
+    .rich-editor code {
+      background: #eef2fa;
+      border-radius: 6px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+    .rich-editor a {
+      color: var(--primary);
+      text-decoration: underline;
+      word-break: break-all;
+    }
     code {
       background: #eef2fa;
       padding: 2px 6px;
@@ -882,7 +925,7 @@
           <textarea id="prestart_message" name="prestart_message" required>{{ template_prestart }}</textarea>
 
           <label for="start_message">Сообщение после Start (просим номер)</label>
-          <div class="format-toolbar" data-format-target="start_message">
+          <div class="format-toolbar" data-format-target="start_message_editor">
             <button type="button" class="format-trigger">Форматирование ▾</button>
             <div class="format-menu">
               <button type="button" data-format-action="italic">Курсив</button>
@@ -893,7 +936,23 @@
               <button type="button" data-format-action="link">Ссылка</button>
             </div>
           </div>
-          <textarea id="start_message" name="start_message" required>{{ template_start }}</textarea>
+          <textarea
+            id="start_message"
+            name="start_message"
+            class="rich-editor-source"
+            data-required="1"
+            aria-hidden="true"
+            tabindex="-1"
+          >{{ template_start }}</textarea>
+          <div
+            id="start_message_editor"
+            class="rich-editor"
+            contenteditable="true"
+            data-markdown-source-id="start_message"
+            data-placeholder="Введите сообщение после Start"
+            role="textbox"
+            aria-multiline="true"
+          ></div>
           <label class="settings-row-checkbox">
             <input
               id="request_customer_phone"
@@ -906,7 +965,7 @@
           </label>
 
           <label for="after_phone_message">Сообщение после подтверждения номера</label>
-          <div class="format-toolbar" data-format-target="after_phone_message">
+          <div class="format-toolbar" data-format-target="after_phone_message_editor">
             <button type="button" class="format-trigger">Форматирование ▾</button>
             <div class="format-menu">
               <button type="button" data-format-action="italic">Курсив</button>
@@ -917,7 +976,23 @@
               <button type="button" data-format-action="link">Ссылка</button>
             </div>
           </div>
-          <textarea id="after_phone_message" name="after_phone_message" required>{{ template_after_phone }}</textarea>
+          <textarea
+            id="after_phone_message"
+            name="after_phone_message"
+            class="rich-editor-source"
+            data-required="1"
+            aria-hidden="true"
+            tabindex="-1"
+          >{{ template_after_phone }}</textarea>
+          <div
+            id="after_phone_message_editor"
+            class="rich-editor"
+            contenteditable="true"
+            data-markdown-source-id="after_phone_message"
+            data-placeholder="Введите сообщение после подтверждения номера"
+            role="textbox"
+            aria-multiline="true"
+          ></div>
           {% set manager_ids = manager_id_rows if manager_id_rows is defined else [] %}
           {% set single_manager_id = (manager_ids[0] if manager_ids else "") %}
 
@@ -1854,7 +1929,20 @@
     })();
 
     (() => {
-      const wrapSelection = (textarea, leftToken, rightToken) => {
+      const normalizeHttpUrl = (value) => {
+        const raw = String(value || "").trim();
+        if (!raw) return "";
+        if (/^https?:\/\//i.test(raw)) return raw;
+        return `https://${raw}`;
+      };
+      const escapeHtml = (value) => (
+        String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+      );
+      const wrapSelectionTextArea = (textarea, leftToken, rightToken) => {
         if (!(textarea instanceof HTMLTextAreaElement)) return;
         const value = textarea.value || "";
         const start = textarea.selectionStart ?? 0;
@@ -1867,50 +1955,191 @@
         textarea.focus();
         textarea.setSelectionRange(cursorStart, cursorEnd);
       };
-
-      const applyMarkdownAction = (textarea, action) => {
+      const applyMarkdownActionTextArea = (textarea, action) => {
         if (!(textarea instanceof HTMLTextAreaElement)) return;
-        if (action === "italic") {
-          wrapSelection(textarea, "*", "*");
-          return;
-        }
-        if (action === "bold") {
-          // Max markdown uses single-asterisk bold.
-          wrapSelection(textarea, "*", "*");
-          return;
-        }
-        if (action === "strike") {
-          wrapSelection(textarea, "~~", "~~");
-          return;
-        }
-        if (action === "underline") {
-          wrapSelection(textarea, "++", "++");
-          return;
-        }
-        if (action === "mono") {
-          wrapSelection(textarea, "`", "`");
-          return;
-        }
+        if (action === "italic") return wrapSelectionTextArea(textarea, "*", "*");
+        if (action === "bold") return wrapSelectionTextArea(textarea, "**", "**");
+        if (action === "strike") return wrapSelectionTextArea(textarea, "~~", "~~");
+        if (action === "underline") return wrapSelectionTextArea(textarea, "++", "++");
+        if (action === "mono") return wrapSelectionTextArea(textarea, "`", "`");
         if (action === "link") {
           const currentText = textarea.value || "";
           const start = textarea.selectionStart ?? 0;
           const end = textarea.selectionEnd ?? 0;
           const selected = currentText.slice(start, end) || "текст ссылки";
-          const defaultUrl = "https://";
-          const url = window.prompt("Введите URL ссылки", defaultUrl);
-          if (!url) return;
-          const markdownLink = `[${selected}](${url.trim()})`;
-          const result = currentText.slice(0, start) + markdownLink + currentText.slice(end);
-          textarea.value = result;
+          const entered = window.prompt("Введите URL ссылки", "https://");
+          const normalizedUrl = normalizeHttpUrl(entered);
+          if (!normalizedUrl) return;
+          const markdownLink = `[${selected}](${normalizedUrl})`;
+          textarea.value = currentText.slice(0, start) + markdownLink + currentText.slice(end);
           const newPos = start + markdownLink.length;
           textarea.focus();
           textarea.setSelectionRange(newPos, newPos);
         }
       };
 
+      const richEditors = Array.from(document.querySelectorAll(".rich-editor[data-markdown-source-id]"));
+      const editorBySourceId = new Map();
+      const setEditorEmptyClass = (editor) => {
+        if (!(editor instanceof HTMLElement)) return;
+        const text = String(editor.textContent || "").replace(/\u00a0/g, " ").trim();
+        editor.classList.toggle("is-empty", text.length === 0);
+      };
+      const markdownToEditorHtml = (markdownValue) => {
+        let html = escapeHtml(markdownValue || "");
+        const stash = [];
+        const save = (value) => {
+          const key = `__TOKEN_${stash.length}__`;
+          stash.push(value);
+          return key;
+        };
+        html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, (_m, text, url) => {
+          return save(`<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${text}</a>`);
+        });
+        html = html.replace(/`([^`]+)`/g, (_m, text) => `<code>${text}</code>`);
+        html = html.replace(/\+\+([^+]+)\+\+/g, (_m, text) => `<u>${text}</u>`);
+        html = html.replace(/\*\*([^*]+)\*\*/g, (_m, text) => `<strong>${text}</strong>`);
+        html = html.replace(/~~([^~]+)~~/g, (_m, text) => `<s>${text}</s>`);
+        html = html.replace(/\*([^*\n]+)\*/g, (_m, text) => `<em>${text}</em>`);
+        html = html.replace(/\n/g, "<br>");
+        html = html.replace(/__TOKEN_(\d+)__/g, (_m, idx) => stash[Number(idx)] || "");
+        return html;
+      };
+      const nodesToMarkdown = (nodes) => {
+        let out = "";
+        nodes.forEach((node) => {
+          if (node.nodeType === Node.TEXT_NODE) {
+            out += String(node.textContent || "").replace(/\u00a0/g, " ");
+            return;
+          }
+          if (!(node instanceof HTMLElement)) return;
+          const tag = node.tagName.toLowerCase();
+          const inner = nodesToMarkdown(Array.from(node.childNodes));
+          if (tag === "br") {
+            out += "\n";
+            return;
+          }
+          if (tag === "strong" || tag === "b") {
+            out += `**${inner || "текст"}**`;
+            return;
+          }
+          if (tag === "em" || tag === "i") {
+            out += `*${inner || "текст"}*`;
+            return;
+          }
+          if (tag === "s" || tag === "strike" || tag === "del") {
+            out += `~~${inner || "текст"}~~`;
+            return;
+          }
+          if (tag === "u") {
+            out += `++${inner || "текст"}++`;
+            return;
+          }
+          if (tag === "code") {
+            out += `\`${inner || "текст"}\``;
+            return;
+          }
+          if (tag === "a") {
+            const href = normalizeHttpUrl(node.getAttribute("href") || "");
+            if (href) {
+              out += `[${inner || "ссылка"}](${href})`;
+            } else {
+              out += inner;
+            }
+            return;
+          }
+          if (tag === "div" || tag === "p") {
+            out += inner;
+            if (!out.endsWith("\n")) out += "\n";
+            return;
+          }
+          out += inner;
+        });
+        return out;
+      };
+      const editorToMarkdown = (editor) => {
+        if (!(editor instanceof HTMLElement)) return "";
+        const raw = nodesToMarkdown(Array.from(editor.childNodes));
+        return raw
+          .replace(/\n{3,}/g, "\n\n")
+          .replace(/[ \t]+\n/g, "\n")
+          .trim();
+      };
+      const syncEditorToSource = (editor) => {
+        if (!(editor instanceof HTMLElement)) return;
+        const sourceId = String(editor.getAttribute("data-markdown-source-id") || "").trim();
+        if (!sourceId) return;
+        const source = document.getElementById(sourceId);
+        if (!(source instanceof HTMLTextAreaElement)) return;
+        source.value = editorToMarkdown(editor);
+        setEditorEmptyClass(editor);
+      };
+      const tryWrapSelectionInRichEditor = (editor, tagName) => {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) return false;
+        const range = selection.getRangeAt(0);
+        if (!editor.contains(range.commonAncestorContainer)) return false;
+        const selectedText = String(selection.toString() || "").trim();
+        const safeText = selectedText || "текст";
+        if (selectedText) {
+          try {
+            const wrapper = document.createElement(tagName);
+            range.surroundContents(wrapper);
+            selection.removeAllRanges();
+            const newRange = document.createRange();
+            newRange.selectNodeContents(wrapper);
+            selection.addRange(newRange);
+            return true;
+          } catch (_) {
+            document.execCommand("insertHTML", false, `<${tagName}>${escapeHtml(safeText)}</${tagName}>`);
+            return true;
+          }
+        }
+        document.execCommand("insertHTML", false, `<${tagName}>${escapeHtml(safeText)}</${tagName}>`);
+        return true;
+      };
+      const applyRichEditorAction = (editor, action) => {
+        if (!(editor instanceof HTMLElement)) return;
+        editor.focus();
+        if (action === "bold") document.execCommand("bold");
+        if (action === "italic") document.execCommand("italic");
+        if (action === "underline") document.execCommand("underline");
+        if (action === "strike") document.execCommand("strikeThrough");
+        if (action === "mono") tryWrapSelectionInRichEditor(editor, "code");
+        if (action === "link") {
+          const entered = window.prompt("Введите URL ссылки", "https://");
+          const normalizedUrl = normalizeHttpUrl(entered);
+          if (normalizedUrl) {
+            document.execCommand("createLink", false, normalizedUrl);
+            const selection = window.getSelection();
+            const anchorNode = selection && selection.anchorNode instanceof HTMLElement
+              ? selection.anchorNode.closest("a")
+              : null;
+            if (anchorNode instanceof HTMLAnchorElement) {
+              anchorNode.setAttribute("target", "_blank");
+              anchorNode.setAttribute("rel", "noopener noreferrer");
+            }
+          }
+        }
+        syncEditorToSource(editor);
+      };
+
+      richEditors.forEach((editor) => {
+        if (!(editor instanceof HTMLElement)) return;
+        const sourceId = String(editor.getAttribute("data-markdown-source-id") || "").trim();
+        if (!sourceId) return;
+        const source = document.getElementById(sourceId);
+        if (!(source instanceof HTMLTextAreaElement)) return;
+        editorBySourceId.set(sourceId, editor);
+        editor.innerHTML = markdownToEditorHtml(source.value || "");
+        setEditorEmptyClass(editor);
+        editor.addEventListener("input", () => syncEditorToSource(editor));
+        editor.addEventListener("blur", () => syncEditorToSource(editor));
+        editor.addEventListener("keyup", () => setEditorEmptyClass(editor));
+      });
+
       const toolbars = Array.from(document.querySelectorAll(".format-toolbar"));
       if (!toolbars.length) return;
-
       const closeAllMenus = () => {
         toolbars.forEach((toolbar) => {
           const menu = toolbar.querySelector(".format-menu");
@@ -1919,7 +2148,6 @@
           }
         });
       };
-
       document.addEventListener("click", (event) => {
         const target = event.target;
         if (!(target instanceof Element)) return;
@@ -1927,34 +2155,56 @@
           closeAllMenus();
         }
       });
-
       toolbars.forEach((toolbar) => {
         const targetId = toolbar.getAttribute("data-format-target") || "";
-        const textarea = document.getElementById(targetId);
+        const target = document.getElementById(targetId);
         const trigger = toolbar.querySelector(".format-trigger");
         const menu = toolbar.querySelector(".format-menu");
-        if (!(textarea instanceof HTMLTextAreaElement)) return;
-        if (!(trigger instanceof HTMLButtonElement)) return;
-        if (!(menu instanceof HTMLElement)) return;
+        if (!(trigger instanceof HTMLButtonElement) || !(menu instanceof HTMLElement) || !target) return;
 
         trigger.addEventListener("click", (event) => {
           event.preventDefault();
           const alreadyOpen = menu.classList.contains("open");
           closeAllMenus();
-          if (!alreadyOpen) {
-            menu.classList.add("open");
-          }
+          if (!alreadyOpen) menu.classList.add("open");
         });
-
         menu.addEventListener("click", (event) => {
-          const target = event.target;
-          if (!(target instanceof Element)) return;
-          const actionBtn = target.closest("button[data-format-action]");
+          const clickTarget = event.target;
+          if (!(clickTarget instanceof Element)) return;
+          const actionBtn = clickTarget.closest("button[data-format-action]");
           if (!(actionBtn instanceof HTMLButtonElement)) return;
           event.preventDefault();
-          const action = actionBtn.getAttribute("data-format-action") || "";
-          applyMarkdownAction(textarea, action);
+          const action = String(actionBtn.getAttribute("data-format-action") || "").trim();
+          if (!action) return;
+          if (target instanceof HTMLTextAreaElement) {
+            applyMarkdownActionTextArea(target, action);
+          } else if (target instanceof HTMLElement && target.classList.contains("rich-editor")) {
+            applyRichEditorAction(target, action);
+          }
           menu.classList.remove("open");
+        });
+      });
+
+      const forms = Array.from(document.querySelectorAll("form"));
+      forms.forEach((form) => {
+        if (!(form instanceof HTMLFormElement)) return;
+        const editors = Array.from(form.querySelectorAll(".rich-editor[data-markdown-source-id]"));
+        if (!editors.length) return;
+        form.addEventListener("submit", (event) => {
+          editors.forEach((editorNode) => {
+            if (!(editorNode instanceof HTMLElement)) return;
+            syncEditorToSource(editorNode);
+            const sourceId = String(editorNode.getAttribute("data-markdown-source-id") || "").trim();
+            const source = sourceId ? document.getElementById(sourceId) : null;
+            if (!(source instanceof HTMLTextAreaElement)) return;
+            const required = String(source.getAttribute("data-required") || "").trim() === "1";
+            if (!required) return;
+            if (!String(source.value || "").trim()) {
+              event.preventDefault();
+              alert("Заполните обязательное поле сообщения.");
+              editorNode.focus();
+            }
+          });
         });
       });
     })();
