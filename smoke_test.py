@@ -2388,6 +2388,26 @@ def run() -> None:
         assert 'id="schedule-pop"' in admin_chats_page_after_send.text
         assert 'name="schedule_at"' in admin_chats_page_after_send.text
         assert "Закрепленные чаты:" in admin_chats_page_after_send.text
+        # Numeric HTML entity in message text should be displayed as emoji, not raw entity.
+        with SessionLocal() as db:
+            emoji_row = ChatMessage(
+                workspace_id=1,
+                conversation_id=conversation_id,
+                direction="customer",
+                source="customer",
+                text="Спасибо &#128149;",
+                image_url=None,
+                image_urls_json="[]",
+            )
+            db.add(emoji_row)
+            db.commit()
+        emoji_render_page = client.get(
+            f"/admin/chats?conversation_id={conversation_id}",
+            cookies=cookies,
+        )
+        assert emoji_render_page.status_code == 200
+        assert "Спасибо 💕" in emoji_render_page.text
+        assert "Спасибо &#128149;" not in emoji_render_page.text
 
         with SessionLocal() as db:
             (
