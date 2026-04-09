@@ -7607,13 +7607,14 @@ def _build_chat_updates_payload(
     threads_signature: str = "",
     messages_signature: str = "",
 ) -> dict[str, object]:
-    threads = load_chat_threads(
+    all_threads = load_chat_threads(
         db,
         query=query,
         workspace_id=workspace_id,
         service_user_id=int(service_user_id or 0),
     )
-    threads = _filter_threads_by_folder(threads, folder_id)
+    threads = _filter_threads_by_folder(all_threads, folder_id)
+    folder_unread_counts = _folder_unread_counts(all_threads)
 
     active_thread = _select_active_thread(
         threads=threads,
@@ -7676,6 +7677,7 @@ def _build_chat_updates_payload(
         "messages_changed": messages_changed,
         "threads_changed": threads_changed,
         "threads": [_thread_summary_dict(item) for item in threads],
+        "folder_unread_counts": {int(key): int(value) for key, value in folder_unread_counts.items()},
         "messages": [_message_summary_dict(item) for item in messages],
         "now_utc": datetime.utcnow().isoformat(),
     }

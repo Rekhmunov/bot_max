@@ -3994,7 +3994,37 @@
         });
         return true;
       };
-      const updateFolderUnreadBadges = (threadsPayload) => {
+      const updateFolderUnreadBadges = (threadsPayload, folderCountsPayload = null) => {
+        if (folderCountsPayload && typeof folderCountsPayload === "object") {
+          const folderNodes = Array.from(document.querySelectorAll("[data-folder-unread-target='1'][data-folder-id]"));
+          folderNodes.forEach((node) => {
+            if (!(node instanceof HTMLElement)) return;
+            const folderId = Number(node.getAttribute("data-folder-id") || 0);
+            if (folderId <= 0) return;
+            const nextRaw = folderCountsPayload[String(folderId)];
+            const nextCount = Number(nextRaw || 0);
+            const container = node.querySelector(".folder-item-inner");
+            if (!(container instanceof HTMLElement)) return;
+            const existing = container.querySelector(".folder-unread-badge");
+            if (nextCount <= 0) {
+              existing?.remove();
+              return;
+            }
+            const text = nextCount > 99 ? "99+" : String(nextCount);
+            const label = `Непрочитанные в папке: ${text}`;
+            if (existing instanceof HTMLElement) {
+              existing.textContent = text;
+              existing.setAttribute("aria-label", label);
+              return;
+            }
+            const badge = document.createElement("span");
+            badge.className = "folder-unread-badge folder-badge";
+            badge.textContent = text;
+            badge.setAttribute("aria-label", label);
+            container.appendChild(badge);
+          });
+          return;
+        }
         if (!Array.isArray(threadsPayload)) return;
         const counts = new Map();
         threadsPayload.forEach((thread) => {
@@ -4225,7 +4255,7 @@
           const nextMessagesSig = String(payload.active_messages_signature || "");
           const hasMessageChanges = Boolean(payload.messages_changed);
           const hasThreadsChanges = Boolean(payload.threads_changed);
-          updateFolderUnreadBadges(payload.threads);
+          updateFolderUnreadBadges(payload.threads, payload.folder_unread_counts || null);
           const hasOnlyThreadsChanges = hasThreadsChanges && !hasMessageChanges;
 
           if (hasOnlyThreadsChanges) {
