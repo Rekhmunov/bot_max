@@ -6,21 +6,22 @@
   <title>Админка Max Support Bot</title>
   <style>
     :root {
-      --bg: #f6f8fc;
+      --bg: #eef3ff;
       --card: #ffffff;
-      --text: #1f2430;
-      --muted: #70798c;
-      --line: #e4e8f1;
-      --primary: #1976ff;
+      --text: #121a2b;
+      --muted: #63728e;
+      --line: #dbe5fb;
+      --primary: #1f7bff;
       --primary-soft: #ebf3ff;
-      --danger: #e34a4a;
-      --danger-soft: #fff0f0;
-      --ok-bg: #eaf8f0;
-      --ok-border: #cfead8;
-      --error-bg: #fff2f2;
-      --error-border: #ffd1d1;
-      --shadow: 0 10px 28px rgba(12, 31, 66, 0.08);
-      --radius: 14px;
+      --danger: #d94848;
+      --danger-soft: #fff2f2;
+      --ok-bg: #ecf9f1;
+      --ok-border: #ccefdc;
+      --error-bg: #fff3f3;
+      --error-border: #ffd2d2;
+      --shadow: 0 12px 36px rgba(29, 56, 108, 0.12);
+      --shadow-soft: 0 4px 12px rgba(29, 56, 108, 0.08);
+      --radius: 16px;
       --space-1: 8px;
       --space-2: 16px;
       --space-3: 24px;
@@ -28,14 +29,17 @@
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
-      background: var(--bg);
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      background:
+        radial-gradient(80rem 40rem at -10% -20%, #d9e8ff 0%, transparent 60%),
+        radial-gradient(80rem 40rem at 120% -10%, #e5f1ff 0%, transparent 55%),
+        var(--bg);
       color: var(--text);
     }
     .container {
-      max-width: 1160px;
+      max-width: 1220px;
       margin: 0 auto;
-      padding: var(--space-2) var(--space-2) var(--space-3);
+      padding: 18px var(--space-2) 28px;
     }
     .top {
       display: flex;
@@ -46,23 +50,34 @@
       border: 1px solid var(--line);
       border-radius: var(--radius);
       box-shadow: var(--shadow);
-      padding: var(--space-2);
+      padding: 14px var(--space-2);
+      position: sticky;
+      top: 10px;
+      z-index: 40;
+      backdrop-filter: blur(8px);
     }
     h1 {
       margin: 0;
-      font-size: 21px;
+      font-size: 22px;
       font-weight: 800;
-      line-height: 1.2;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
     }
     .logout-btn {
       border: 1px solid var(--line);
-      background: #f0f3fa;
-      color: #556079;
-      padding: 8px 10px;
-      border-radius: 10px;
+      background: #f7faff;
+      color: #435574;
+      padding: 8px 12px;
+      border-radius: 11px;
       cursor: pointer;
       font-size: 12px;
       font-weight: 700;
+      transition: transform .14s ease, box-shadow .14s ease, border-color .14s ease;
+    }
+    .logout-btn:hover {
+      border-color: #bfd4ff;
+      box-shadow: var(--shadow-soft);
+      transform: translateY(-1px);
     }
     .grid {
       display: block;
@@ -84,6 +99,14 @@
       padding: var(--space-2);
       box-shadow: var(--shadow);
       overflow: hidden;
+      position: relative;
+    }
+    .card::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(180deg, rgba(32, 117, 255, 0.045) 0%, transparent 28%);
     }
     h2 {
       margin: 0 0 var(--space-2) 0;
@@ -98,7 +121,7 @@
       margin: calc(var(--space-2) * -1) calc(var(--space-2) * -1) var(--space-2);
       padding: 12px var(--space-2);
       border-bottom: 1px solid var(--line);
-      background: linear-gradient(180deg, #fcfdff 0%, #f8fbff 100%);
+      background: linear-gradient(180deg, #fcfdff 0%, #eff5ff 100%);
     }
     .card-title {
       margin: 0;
@@ -114,8 +137,8 @@
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      background: var(--primary-soft);
-      border: 1px solid #d6e4ff;
+      background: linear-gradient(180deg, #f5f9ff 0%, #e9f2ff 100%);
+      border: 1px solid #cfe0ff;
       font-size: 14px;
       line-height: 1;
       flex-shrink: 0;
@@ -137,9 +160,9 @@
       flex-wrap: wrap;
     }
     .card-head-kicker {
-      color: #4f5b73;
+      color: #40506a;
       border: 1px solid var(--line);
-      background: #fff;
+      background: #f8fbff;
       border-radius: 999px;
       padding: 4px 10px;
       font-size: 12px;
@@ -212,11 +235,16 @@
       color: var(--primary);
       font-size: 12px;
       font-weight: 700;
-      border-radius: 9px;
-      background: var(--primary-soft);
-      border: 1px solid #d6e4ff;
-      padding: 7px 9px;
+      border-radius: 11px;
+      background: linear-gradient(180deg, #f8fbff 0%, #ebf3ff 100%);
+      border: 1px solid #cfe0ff;
+      padding: 7px 10px;
       display: inline-block;
+      transition: transform .14s ease, box-shadow .14s ease;
+    }
+    .top-link:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-soft);
     }
     label {
       display: block;
@@ -228,36 +256,45 @@
     input, textarea {
       width: 100%;
       border: 1px solid var(--line);
-      border-radius: 11px;
+      border-radius: 12px;
       padding: 10px 11px;
       font: inherit;
-      background: #fff;
+      background: #fbfdff;
       transition: border-color .18s ease, box-shadow .18s ease;
     }
     input:focus, textarea:focus, select:focus {
       outline: none;
-      border-color: #c3d7ff;
-      box-shadow: 0 0 0 3px rgba(25, 118, 255, 0.12);
+      border-color: #b8d0ff;
+      box-shadow: 0 0 0 3px rgba(31, 123, 255, 0.14);
+      background: #fff;
     }
     textarea { min-height: 90px; resize: vertical; }
     .btn {
       margin-top: var(--space-2);
-      background: var(--primary);
+      background: linear-gradient(180deg, #2a86ff 0%, #1d77f6 100%);
       border: 0;
       color: #fff;
-      padding: 9px 12px;
-      border-radius: 10px;
+      padding: 9px 13px;
+      border-radius: 12px;
       cursor: pointer;
       font-weight: 700;
       font-size: 13px;
       text-decoration: none;
       display: inline-block;
+      box-shadow: 0 8px 18px rgba(29, 119, 246, 0.28);
+      transition: transform .14s ease, box-shadow .14s ease, filter .14s ease;
+    }
+    .btn:hover {
+      transform: translateY(-1px);
+      filter: saturate(1.03);
+      box-shadow: 0 10px 20px rgba(29, 119, 246, 0.30);
     }
     .btn.secondary {
-      background: #f0f3fa;
+      background: #f5f8ff;
       color: #556079;
       border: 1px solid var(--line);
       font-weight: 600;
+      box-shadow: none;
     }
     .edit-quick-reply-btn {
       border: 1px solid var(--line);
@@ -271,10 +308,11 @@
     }
     .notice {
       margin: var(--space-1) 0 var(--space-2);
-      padding: 10px;
-      border-radius: 12px;
+      padding: 10px 12px;
+      border-radius: 13px;
       font-size: 13px;
       border: 1px solid transparent;
+      box-shadow: var(--shadow-soft);
     }
     .notice.ok {
       background: var(--ok-bg);
@@ -292,22 +330,25 @@
     }
     table {
       width: 100%;
-      border-collapse: collapse;
+      border-collapse: separate;
+      border-spacing: 0;
       margin-top: 12px;
       font-size: 13px;
       background: #fff;
-      border-radius: 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
       overflow: hidden;
+      box-shadow: var(--shadow-soft);
     }
     th, td {
       border-bottom: 1px solid var(--line);
-      padding: 8px;
+      padding: 9px 10px;
       text-align: left;
       vertical-align: top;
     }
     th {
-      background: #fbfcff;
-      color: #556079;
+      background: linear-gradient(180deg, #fafdff 0%, #f2f7ff 100%);
+      color: #4d5f7f;
       font-size: 12px;
       font-weight: 700;
       letter-spacing: .01em;
@@ -433,7 +474,7 @@
       border: 1px solid var(--line);
       border-radius: 12px;
       padding: 8px 10px;
-      background: #fbfcff;
+      background: linear-gradient(180deg, #fcfdff 0%, #f5f9ff 100%);
     }
     .manager-status-kpi .label {
       font-size: 12px;
@@ -455,7 +496,7 @@
       border: 1px solid var(--line);
       border-radius: 12px;
       padding: 8px 10px;
-      background: #fbfcff;
+      background: linear-gradient(180deg, #fcfdff 0%, #f5f9ff 100%);
     }
     .diag-item .label {
       font-size: 12px;
