@@ -202,8 +202,27 @@
     .card-toggle-btn:hover {
       background: #f5f7fc;
     }
+    .card-collapsible-body {
+      display: grid;
+      grid-template-rows: 1fr;
+      opacity: 1;
+      transform: translateY(0);
+      max-height: 2400px;
+      overflow: hidden;
+      transition:
+        grid-template-rows .26s ease,
+        opacity .22s ease,
+        transform .22s ease,
+        max-height .26s ease;
+      will-change: opacity, transform, max-height;
+    }
     .card-collapsible-body[hidden] {
-      display: none !important;
+      display: grid !important;
+      grid-template-rows: 0fr;
+      opacity: 0;
+      transform: translateY(-6px);
+      max-height: 0;
+      pointer-events: none;
     }
     .card.is-collapsed {
       padding-bottom: 0;
@@ -1626,11 +1645,34 @@
         header.setAttribute("aria-controls", body.id);
 
         const setExpanded = (expanded) => {
-          body.hidden = !expanded;
           section.classList.toggle("is-collapsed", !expanded);
           toggleBtn.textContent = expanded ? "▾" : "▸";
           toggleBtn.setAttribute("aria-expanded", expanded ? "true" : "false");
           header.setAttribute("aria-expanded", expanded ? "true" : "false");
+          body.classList.toggle("is-open", expanded);
+          if (expanded) {
+            body.hidden = false;
+            const targetHeight = `${body.scrollHeight}px`;
+            body.style.maxHeight = targetHeight;
+            window.setTimeout(() => {
+              if (body.classList.contains("is-open")) {
+                body.style.maxHeight = "none";
+              }
+            }, 320);
+          } else {
+            if (body.hidden) return;
+            if (body.style.maxHeight === "none" || !body.style.maxHeight) {
+              body.style.maxHeight = `${body.scrollHeight}px`;
+            }
+            void body.offsetHeight;
+            body.style.maxHeight = "0px";
+            window.setTimeout(() => {
+              if (!body.classList.contains("is-open")) {
+                body.hidden = true;
+                body.style.maxHeight = "";
+              }
+            }, 320);
+          }
         };
         const toggleExpanded = () => {
           const expandedNow = toggleBtn.getAttribute("aria-expanded") === "true";
