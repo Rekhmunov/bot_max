@@ -1233,38 +1233,83 @@ def run() -> None:
         assert text_only_value in text_only_page.text
         assert "should-not-be-used.jpg" not in text_only_page.text
 
-        # Incoming customer image payload with photos[] should be parsed and rendered.
+        # Incoming customer image payload should be normalized to local /static URL
+        # (do not store transient external downloadUrl in message history).
         incoming_photo_chat_id = f"chat_{uuid4().hex[:8]}"
         incoming_photo_sender = f"buyer_{uuid4().hex[:6]}"
         incoming_photo_url = "https://cdn.example.com/customer-photo.jpg"
-        webhook_customer_photo = client.post(
-            "/webhook/max/ws1key",
-            json={
-                "update_type": "message_created",
-                "chat_id": incoming_photo_chat_id,
-                "sender_id": incoming_photo_sender,
-                "message": {
-                    "sender": {"user_id": incoming_photo_sender},
-                    "recipient": {"chat_id": incoming_photo_chat_id, "chat_type": "dialog"},
-                    "body": {
-                        "text": "",
-                        "attachments": [
-                            {
-                                "type": "image",
-                                "payload": {
-                                    "photos": [
-                                        {
-                                            "url": incoming_photo_url,
-                                        }
-                                    ]
-                                },
-                            }
-                        ],
+        incoming_photo_chat_id_max = f"chat_{uuid4().hex[:8]}"
+        incoming_photo_sender_max = f"buyer_{uuid4().hex[:6]}"
+        incoming_photo_url_max = "https://cdn.example.com/customer-photo-max.jpg"
+
+        async def _fake_materialize_incoming(*, image_urls, client, workspace_id):
+            normalized = []
+            for raw in list(image_urls or []):
+                value = str(raw or "").strip()
+                if value == incoming_photo_url:
+                    normalized.append("/static/uploads/incoming-customer-photo.jpg")
+                elif value == incoming_photo_url_max:
+                    normalized.append("/static/uploads/incoming-customer-photo-max.jpg")
+                elif value:
+                    normalized.append(value)
+            return normalized
+
+        with patch(
+            "app.manager_bridge._materialize_incoming_image_urls",
+            new=AsyncMock(side_effect=_fake_materialize_incoming),
+        ):
+            webhook_customer_photo = client.post(
+                "/webhook/max/ws1key",
+                json={
+                    "update_type": "message_created",
+                    "chat_id": incoming_photo_chat_id,
+                    "sender_id": incoming_photo_sender,
+                    "message": {
+                        "sender": {"user_id": incoming_photo_sender},
+                        "recipient": {"chat_id": incoming_photo_chat_id, "chat_type": "dialog"},
+                        "body": {
+                            "text": "",
+                            "attachments": [
+                                {
+                                    "type": "image",
+                                    "payload": {
+                                        "photos": [
+                                            {
+                                                "url": incoming_photo_url,
+                                            }
+                                        ]
+                                    },
+                                }
+                            ],
+                        },
                     },
                 },
-            },
-        )
-        assert webhook_customer_photo.status_code == 200
+            )
+            assert webhook_customer_photo.status_code == 200
+
+            webhook_customer_photo_max_style = client.post(
+                "/webhook/max/ws1key",
+                json={
+                    "typeWebhook": "incomingMessageReceived",
+                    "chatId": incoming_photo_chat_id_max,
+                    "idMessage": f"incoming_{uuid4().hex[:10]}",
+                    "senderData": {
+                        "chatId": incoming_photo_chat_id_max,
+                        "sender": incoming_photo_sender_max,
+                        "senderName": "Иван Иванов",
+                    },
+                    "messageData": {
+                        "typeMessage": "imageMessage",
+                        "fileMessageData": {
+                            "downloadUrl": incoming_photo_url_max,
+                            "caption": "подпись к фото",
+                            "fileName": "photo.jpg",
+                        },
+                    },
+                },
+            )
+            assert webhook_customer_photo_max_style.status_code == 200
+
         with SessionLocal() as db:
             photo_conv = (
                 db.query(Conversation)
@@ -1287,42 +1332,11 @@ def run() -> None:
                 .first()
             )
             assert photo_msg is not None
-            assert incoming_photo_url in str(getattr(photo_msg, "image_urls_json", "") or "")
-        customer_photo_page = client.get(
-            f"/admin/chats?conversation_id={int(photo_conv.id)}",
-            follow_redirects=True,
-        )
-        assert customer_photo_page.status_code == 200
-        assert incoming_photo_url in customer_photo_page.text
-        assert 'data-media-open' in customer_photo_page.text
+            photo_urls = json.loads(str(getattr(photo_msg, "image_urls_json", "[]") or "[]"))
+            assert isinstance(photo_urls, list) and photo_urls
+            assert str(photo_urls[0]).startswith("/static/uploads/")
+            assert incoming_photo_url not in str(getattr(photo_msg, "image_urls_json", "") or "")
 
-        # Official-style incoming MAX payload: incomingMessageReceived + imageMessage + fileMessageData.downloadUrl
-        incoming_photo_chat_id_max = f"chat_{uuid4().hex[:8]}"
-        incoming_photo_sender_max = f"buyer_{uuid4().hex[:6]}"
-        incoming_photo_url_max = "https://cdn.example.com/customer-photo-max.jpg"
-        webhook_customer_photo_max_style = client.post(
-            "/webhook/max/ws1key",
-            json={
-                "typeWebhook": "incomingMessageReceived",
-                "chatId": incoming_photo_chat_id_max,
-                "idMessage": f"incoming_{uuid4().hex[:10]}",
-                "senderData": {
-                    "chatId": incoming_photo_chat_id_max,
-                    "sender": incoming_photo_sender_max,
-                    "senderName": "Иван Иванов",
-                },
-                "messageData": {
-                    "typeMessage": "imageMessage",
-                    "fileMessageData": {
-                        "downloadUrl": incoming_photo_url_max,
-                        "caption": "подпись к фото",
-                        "fileName": "photo.jpg",
-                    },
-                },
-            },
-        )
-        assert webhook_customer_photo_max_style.status_code == 200
-        with SessionLocal() as db:
             photo_conv_max = (
                 db.query(Conversation)
                 .filter(
@@ -1344,14 +1358,28 @@ def run() -> None:
                 .first()
             )
             assert photo_msg_max is not None
-            assert incoming_photo_url_max in str(getattr(photo_msg_max, "image_urls_json", "") or "")
+            photo_urls_max = json.loads(str(getattr(photo_msg_max, "image_urls_json", "[]") or "[]"))
+            assert isinstance(photo_urls_max, list) and photo_urls_max
+            assert str(photo_urls_max[0]).startswith("/static/uploads/")
+            assert incoming_photo_url_max not in str(getattr(photo_msg_max, "image_urls_json", "") or "")
             assert str(getattr(photo_msg_max, "text", "") or "").strip() == ""
+
+        customer_photo_page = client.get(
+            f"/admin/chats?conversation_id={int(photo_conv.id)}",
+            follow_redirects=True,
+        )
+        assert customer_photo_page.status_code == 200
+        assert "/static/uploads/incoming-customer-photo.jpg" in customer_photo_page.text
+        assert incoming_photo_url not in customer_photo_page.text
+        assert 'data-media-open' in customer_photo_page.text
+
         customer_photo_max_page = client.get(
             f"/admin/chats?conversation_id={int(photo_conv_max.id)}",
             follow_redirects=True,
         )
         assert customer_photo_max_page.status_code == 200
-        assert incoming_photo_url_max in customer_photo_max_page.text
+        assert "/static/uploads/incoming-customer-photo-max.jpg" in customer_photo_max_page.text
+        assert incoming_photo_url_max not in customer_photo_max_page.text
 
         webhook_manager_tickets = client.post(
             "/webhook/max/ws1key",

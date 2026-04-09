@@ -5,12 +5,14 @@ import hashlib
 import json
 import re
 import logging
+import httpx
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from typing import Optional
 import asyncio
 from pathlib import Path
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlsplit
+from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import func
@@ -25,6 +27,7 @@ from app.storage import (
     iter_local_upload_files,
     local_upload_abspath,
     normalize_storage_public_url,
+    save_upload_bytes,
     storage_public_url_for_key,
     upload_file_public_url,
 )
@@ -1116,6 +1119,130 @@ def _to_external_media_url(value: str | None) -> str:
         if base:
             return f"{base}{local}"
     return raw
+
+
+def _incoming_media_extension(*, source_url: str, content_type: str) -> str:
+    path_ext = Path(urlsplit(str(source_url or "").strip()).path).suffix.lower()
+    if path_ext in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}:
+        return path_ext
+    mime = str(content_type or "").strip().lower().split(";", 1)[0]
+    if mime == "image/jpeg":
+        return ".jpg"
+    if mime == "image/png":
+        return ".png"
+    if mime == "image/gif":
+        return ".gif"
+    if mime == "image/webp":
+        return ".webp"
+    if mime == "image/bmp":
+        return ".bmp"
+    return ".jpg"
+
+
+def _incoming_media_auth_headers(client: MaxClient) -> list[dict[str, str]]:
+    token_value = str(getattr(client, "token", "") or "").strip()
+    if not token_value:
+        return [{}]
+    candidates: list[str] = [token_value]
+    if not token_value.lower().startswith("bearer "):
+        candidates.append(f"Bearer {token_value}")
+    headers: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in candidates:
+        key = item.strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        headers.append({"Authorization": key})
+    headers.append({})
+    return headers
+
+
+async def _download_and_store_incoming_media(
+    *,
+    media_url: str,
+    client: MaxClient,
+    workspace_id: int,
+) -> str | None:
+    url = str(media_url or "").strip()
+    if not url or not (url.startswith("http://") or url.startswith("https://")):
+        return None
+    max_bytes = 20 * 1024 * 1024
+    headers_candidates = _incoming_media_auth_headers(client)
+    for headers in headers_candidates:
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http_client:
+                response = await http_client.get(url, headers=headers)
+        except Exception as exc:
+            logger.info("[INCOMING_MEDIA] download failed transport: %s", str(exc))
+            continue
+        if response.status_code >= 400:
+            logger.info(
+                "[INCOMING_MEDIA] download http error status=%s url=%s",
+                response.status_code,
+                url,
+            )
+            continue
+        payload = bytes(response.content or b"")
+        if not payload:
+            logger.info("[INCOMING_MEDIA] download returned empty payload url=%s", url)
+            continue
+        if len(payload) > max_bytes:
+            logger.warning(
+                "[INCOMING_MEDIA] download skipped: payload too large bytes=%s url=%s",
+                len(payload),
+                url,
+            )
+            continue
+        extension = _incoming_media_extension(
+            source_url=url,
+            content_type=str(response.headers.get("content-type", "") or ""),
+        )
+        safe_name = f"incoming-{int(workspace_id)}-{uuid4().hex[:12]}{extension}"
+        try:
+            stored_url = save_upload_bytes(file_name=safe_name, content=payload)
+        except Exception as exc:
+            logger.exception("[INCOMING_MEDIA] failed to store payload: %s", str(exc))
+            return None
+        local_url = _to_local_static_media_path(stored_url)
+        return local_url or str(stored_url or "").strip() or None
+    return None
+
+
+async def _materialize_incoming_image_urls(
+    *,
+    image_urls: list[str],
+    client: MaxClient,
+    workspace_id: int,
+) -> list[str]:
+    prepared: list[str] = []
+    seen: set[str] = set()
+    for raw_value in image_urls or []:
+        candidate = str(raw_value or "").strip()
+        if not candidate:
+            continue
+        local_candidate = _to_local_static_media_path(candidate)
+        if local_candidate:
+            if local_candidate not in seen:
+                seen.add(local_candidate)
+                prepared.append(local_candidate)
+            continue
+        downloaded_local = await _download_and_store_incoming_media(
+            media_url=candidate,
+            client=client,
+            workspace_id=workspace_id,
+        )
+        if downloaded_local:
+            if downloaded_local not in seen:
+                seen.add(downloaded_local)
+                prepared.append(downloaded_local)
+            continue
+        # Keep original URL as graceful fallback when remote content cannot be downloaded.
+        # This preserves previous behavior and prevents data loss in history rows.
+        if candidate not in seen:
+            seen.add(candidate)
+            prepared.append(candidate)
+    return prepared
 
 
 def _mime_from_extension(path_value: str | None) -> str:
@@ -3650,16 +3777,21 @@ async def handle_customer_event(
         )
     )
     db.commit()
+    normalized_image_urls = await _materialize_incoming_image_urls(
+        image_urls=[str(url).strip() for url in (getattr(event, "image_urls", []) or []) if str(url).strip()],
+        client=client,
+        workspace_id=int(workspace_id),
+    )
     _store_chat_message(
         db,
         conversation_id=conversation.id,
         direction="customer",
         source="customer",
         text=event.text or "",
-        image_url=(event.image_urls[0] if getattr(event, "image_urls", []) else None),
+        image_url=(normalized_image_urls[0] if normalized_image_urls else None),
         image_urls_json=(
-            json.dumps([str(url).strip() for url in event.image_urls if str(url).strip()], ensure_ascii=False)
-            if getattr(event, "image_urls", [])
+            json.dumps(normalized_image_urls, ensure_ascii=False)
+            if normalized_image_urls
             else None
         ),
         max_message_mid=event.message_mid,
