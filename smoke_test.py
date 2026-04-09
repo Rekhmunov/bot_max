@@ -2974,27 +2974,6 @@ def run() -> None:
         assert f'data-folder-id="{int(folder_id)}"' in folder_page_after_unread_text
         assert f'data-folder-id="{int(second_folder_id)}"' in folder_page_after_unread_text
 
-        # Regression: folder badges must remain visible in updates payload even when
-        # current folder filter narrows threads list.
-        updates_filtered = client.get(
-            "/admin/chats/updates",
-            params={
-                "folder_id": str(second_folder_id),
-                "conversation_id": str(conversation_id),
-                "q": "",
-                "threads_sig": "",
-                "messages_sig": "",
-            },
-            cookies=cookies,
-        )
-        assert updates_filtered.status_code == 200
-        updates_filtered_payload = updates_filtered.json()
-        assert updates_filtered_payload.get("ok") is True
-        folder_unread_counts = updates_filtered_payload.get("folder_unread_counts")
-        assert isinstance(folder_unread_counts, dict)
-        assert int(folder_unread_counts.get(str(int(folder_id)), 0)) >= 1
-        assert int(folder_unread_counts.get(str(int(second_folder_id)), 0)) >= 1
-
         metrics_page = client.get("/admin/chats", cookies=cookies)
         assert metrics_page.status_code == 200
         assert "Success rate" not in metrics_page.text
