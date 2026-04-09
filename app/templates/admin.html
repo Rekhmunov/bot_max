@@ -816,9 +816,13 @@
             {% if workspace_bot_token_masked %}
               <code class="token-mask token-inline-offset">{{ workspace_bot_token_masked }}</code>
               <a href="#" id="token-toggle-link" class="token-inline-offset">Обновить</a>
-              <form method="post" action="{{ token_delete_action or '/app/settings/delete-bot-token' }}" class="token-delete-form">
-                <button type="submit" class="delete token-delete-btn">Удалить</button>
-              </form>
+              <button
+                type="submit"
+                class="delete token-delete-btn"
+                formaction="{{ token_delete_action or '/app/settings/delete-bot-token' }}"
+                formmethod="post"
+                formnovalidate
+              >Удалить</button>
             {% else %}
               <span class="token-inline-offset">не задан.</span>
               <a href="#" id="token-toggle-link" class="token-inline-offset">Ввести токен</a>
