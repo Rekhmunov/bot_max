@@ -1629,7 +1629,7 @@
             >
               <span class="folder-item-inner">
                 <span>{{ folder.name }}</span>
-                {% set folder_unread_count = folder.unread_count if folder.unread_count is defined else 0 %}
+                {% set folder_unread_count = folder_unread_counts.get(folder.id, 0) if folder_unread_counts is defined else 0 %}
                 {% if folder_unread_count > 0 %}
                   <span class="folder-unread-badge folder-badge" aria-label="Непрочитанные в папке: {{ folder_unread_count }}">{{ folder_unread_count if folder_unread_count < 100 else "99+" }}</span>
                 {% endif %}
@@ -1656,7 +1656,7 @@
               >
                 <span class="folder-item-inner">
                   <span>{{ folder.name }}</span>
-                  {% set folder_unread_count = folder.unread_count if folder.unread_count is defined else 0 %}
+                  {% set folder_unread_count = folder_unread_counts.get(folder.id, 0) if folder_unread_counts is defined else 0 %}
                   {% if folder_unread_count > 0 %}
                     <span class="folder-unread-badge folder-badge" aria-label="Непрочитанные в папке: {{ folder_unread_count }}">{{ folder_unread_count if folder_unread_count < 100 else "99+" }}</span>
                   {% endif %}
