@@ -1220,6 +1220,24 @@
           <div class="label">upload_token_missing</div>
           <div class="value">{{ media_send_diagnostics.upload_token_missing_errors }}</div>
         </div>
+        <div class="diag-item">
+          <div class="label">Лимит nginx (оценка)</div>
+          <div class="value">
+            {% if media_send_diagnostics.nginx_payload_ok_for_10_images %}
+              OK
+            {% else %}
+              Риск 413
+            {% endif %}
+          </div>
+        </div>
+        <div class="diag-item">
+          <div class="label">Оценка payload для 10 фото</div>
+          <div class="value">{{ media_send_diagnostics.estimated_payload_for_10_images_mb }} MB</div>
+        </div>
+        <div class="diag-item">
+          <div class="label">Текущий max_upload_bytes</div>
+          <div class="value">{{ media_send_diagnostics.max_upload_bytes_mb }} MB</div>
+        </div>
       </div>
       {% endif %}
     </section>

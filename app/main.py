@@ -2140,6 +2140,24 @@ def _safe_media_diagnostics(
         return None
 
 
+def _estimate_media_upload_risk_for_ten_photos(*, per_file_bytes: int) -> dict[str, object]:
+    per_file = max(0, int(per_file_bytes or 0))
+    estimated_total = per_file * 10
+    safe_limit = max(0, int(_MAX_UPLOAD_BYTES or 0))
+    risk = bool(safe_limit > 0 and estimated_total > safe_limit)
+    return {
+        "per_file_bytes": per_file,
+        "safe_limit_bytes": safe_limit,
+        "estimated_total_for_10_bytes": estimated_total,
+        "risk_for_10_photos": risk,
+        "note": (
+            "Ожидается риск 413 по суммарному размеру запроса (client_max_body_size)."
+            if risk
+            else "Локальный лимит не указывает риск 413 для 10 фото."
+        ),
+    }
+
+
 def _generate_temp_password() -> str:
     alphabet = string.ascii_letters + string.digits + "!@#$%^&*()-_=+"
     while True:

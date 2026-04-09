@@ -2220,6 +2220,40 @@ def run() -> None:
             assert "sent=1" in location
         assert len(sent_multi_attachments) >= 3
 
+        # 10-photo send should remain supported (no hard count limit).
+        ten_photo_calls = {"count": 0}
+
+        async def _fake_send_message_ten(*args, **kwargs):
+            ten_photo_calls["count"] += 1
+            attachments = kwargs.get("attachments")
+            assert isinstance(attachments, list) and len(attachments) >= 10
+            for entry in attachments:
+                assert isinstance(entry, dict)
+                assert str(entry.get("type") or "").strip() == "image"
+                payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
+                assert str(payload.get("token") or "").strip()
+            return {"success": True, "message": {"body": {"mid": f"mid_{uuid4().hex[:8]}"}}}
+
+        with patch("app.max_client.MaxClient.upload_image_bytes", new=AsyncMock(side_effect=_fake_upload_image_bytes)), patch(
+            "app.max_client.MaxClient.send_message",
+            new=AsyncMock(side_effect=_fake_send_message_ten),
+        ):
+            ten_files = [
+                ("photos", (f"ten_{idx}.png", b"\x89PNG\r\n\x1a\n" + f"ten-{idx}".encode("utf-8"), "image/png"))
+                for idx in range(1, 11)
+            ]
+            ten_photo_send = client.post(
+                f"/admin/chats/{conversation_id}/send",
+                data={"text": "multi_ten_photos"},
+                files=ten_files,
+                cookies=cookies,
+                follow_redirects=False,
+            )
+            assert ten_photo_send.status_code in (302, 303)
+            ten_location = str(ten_photo_send.headers.get("location", ""))
+            assert "sent=1" in ten_location
+        assert int(ten_photo_calls["count"]) >= 1
+
         # Outbox claim should be idempotent to prevent duplicate immediate sends.
         with SessionLocal() as db:
             claim_probe_seed = uuid4().hex[:8]

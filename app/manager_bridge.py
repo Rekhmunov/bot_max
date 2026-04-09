@@ -668,6 +668,9 @@ class MediaDiagnosticsStats:
     fallback_markers: int
     proto_payload_errors: int
     upload_token_missing_errors: int
+    estimated_payload_for_10_photos_bytes: int
+    max_upload_bytes_limit: int
+    estimated_payload_10_over_limit: bool
 
     @property
     def send_success_rate(self) -> float:
@@ -5446,6 +5449,15 @@ def get_media_diagnostics_metrics(
                 elif state == "failed":
                     media_send_failed += 1
 
+    # Client sends multipart form-data with photo binaries; this estimate is for
+    # "how close 10 photos can get to request-body limit" diagnostics in settings.
+    max_upload_bytes_limit = int(getattr(app_settings, "max_upload_bytes", 0) or 0)
+    estimated_payload_for_10_photos_bytes = max(0, int(max_upload_bytes_limit)) * 10
+    estimated_payload_10_over_limit = (
+        bool(max_upload_bytes_limit > 0)
+        and int(estimated_payload_for_10_photos_bytes) > int(max_upload_bytes_limit)
+    )
+
     return MediaDiagnosticsStats(
         window_minutes=window_value,
         total_outbox=total_outbox,
@@ -5461,6 +5473,9 @@ def get_media_diagnostics_metrics(
         fallback_markers=fallback_markers,
         proto_payload_errors=proto_payload_errors,
         upload_token_missing_errors=upload_token_missing_errors,
+        estimated_payload_for_10_photos_bytes=int(estimated_payload_for_10_photos_bytes),
+        max_upload_bytes_limit=int(max_upload_bytes_limit),
+        estimated_payload_10_over_limit=bool(estimated_payload_10_over_limit),
     )
 
 
@@ -5491,6 +5506,9 @@ def get_media_send_diagnostics(
         "proto_payload_errors": int(stats.proto_payload_errors),
         "upload_token_missing_errors": int(stats.upload_token_missing_errors),
         "send_success_rate": float(stats.send_success_rate),
+        "estimated_payload_for_10_photos_bytes": int(stats.estimated_payload_for_10_photos_bytes),
+        "max_upload_bytes_limit": int(stats.max_upload_bytes_limit),
+        "estimated_payload_10_over_limit": bool(stats.estimated_payload_10_over_limit),
     }
 
 
