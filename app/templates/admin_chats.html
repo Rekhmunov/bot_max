@@ -3823,26 +3823,8 @@
           const name = document.createElement("span");
           name.className = "folder-delete-item-name";
           name.textContent = String(folder?.name || "—");
-          const oneDeleteBtn = document.createElement("button");
-          oneDeleteBtn.type = "button";
-          oneDeleteBtn.className = "folder-delete-item-btn";
-          oneDeleteBtn.textContent = "Удалить";
-          oneDeleteBtn.addEventListener("click", () => {
-            if (!(folderDeleteSingleInput instanceof HTMLInputElement)) return;
-            if (!(folderDeleteIdsInput instanceof HTMLInputElement)) return;
-            if (!(folderDeleteCurrentInput instanceof HTMLInputElement)) return;
-            if (!deleteFolderEndpoint) return;
-            folderDeleteSingleInput.value = String(id);
-            folderDeleteIdsInput.value = "";
-            folderDeleteCurrentInput.value = currentFolderId === null ? "" : String(currentFolderId);
-            if (confirm(`Удалить папку "${String(folder?.name || "")}"?`)) {
-              const form = deletePop?.querySelector("#folder-delete-form");
-              if (form instanceof HTMLFormElement) form.submit();
-            }
-          });
           row.appendChild(checkbox);
           row.appendChild(name);
-          row.appendChild(oneDeleteBtn);
           folderDeleteActions.appendChild(row);
         });
         if (folderDeleteApplyBtn instanceof HTMLButtonElement) {
