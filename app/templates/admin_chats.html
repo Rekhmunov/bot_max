@@ -3684,7 +3684,6 @@
 
     (() => {
       const threads = Array.from(document.querySelectorAll(".thread[data-thread-id]"));
-      if (!threads.length) return;
 
       const folders = {{ chat_folders | tojson }};
       const markUnreadPrefix = "{{ mark_unread_prefix }}";
