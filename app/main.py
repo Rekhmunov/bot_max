@@ -58,6 +58,7 @@ from app.manager_bridge import (
     block_conversation_customer,
     unblock_conversation_customer,
     create_chat_folder,
+    delete_chat_folders,
     delete_conversation,
     ensure_default_templates,
     get_conversation_folder_ids,
@@ -3304,6 +3305,44 @@ def admin_chat_create_folder(
     )
 
 
+@app.post("/admin/chats/folders/delete", response_class=RedirectResponse)
+def admin_chat_delete_folders(
+    request: Request,
+    folder_ids: str = Form(""),
+    folder_id: int = Form(0),
+    q: str = Form(""),
+    view: str = Form(""),
+    current_folder_id: int | None = Form(default=None),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="admin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    target_ids = _resolve_folder_ids_from_form(folder_ids_csv=folder_ids, folder_id=folder_id)
+    removed_ids = delete_chat_folders(
+        db,
+        folder_ids=target_ids,
+        workspace_id=DEFAULT_WORKSPACE_ID,
+    )
+    removed_set = {int(value) for value in removed_ids}
+    next_folder_filter = (
+        current_folder_id
+        if current_folder_id is not None and int(current_folder_id) not in removed_set
+        else None
+    )
+    folder_qs = f"&folder_id={int(next_folder_filter)}" if next_folder_filter is not None else ""
+    removed_suffix = "1" if removed_ids else "0"
+    removed_count_suffix = f"&folders_removed_count={len(removed_ids)}" if removed_ids else ""
+    return RedirectResponse(
+        url=f"/admin/chats?q={q}&view={view}{folder_qs}&folders_removed={removed_suffix}{removed_count_suffix}",
+        status_code=302,
+    )
+
+
 @app.post("/admin/chats/{conversation_id}/mark-unread", response_class=RedirectResponse)
 def admin_chat_mark_unread(
     conversation_id: int,
@@ -4172,6 +4211,7 @@ def _admin_chats_ui() -> dict[str, str | bool]:
         "pins_reorder_endpoint": "/admin/chats/pins/reorder",
         "show_pins_info": True,
         "create_folder_endpoint": "/admin/chats/folders",
+        "folder_delete_endpoint": "/admin/chats/folders/delete",
         "delete_message_prefix": "/admin/chats/",
         "endpoint_query_suffix": "",
     }
@@ -4207,6 +4247,7 @@ def _manager_mini_ui(token: str) -> dict[str, str | bool]:
         "pins_reorder_endpoint": "/mini/manager/chats/pins/reorder",
         "show_pins_info": False,
         "create_folder_endpoint": "/mini/manager/chats/folders",
+        "folder_delete_endpoint": "/mini/manager/chats/folders/delete",
         "delete_message_prefix": "/mini/manager/chats/",
         "endpoint_query_suffix": query_suffix,
     }
@@ -5150,6 +5191,7 @@ async def app_chats_page(
             "pins_reorder_endpoint": "/app/chats/pins/reorder",
             "show_pins_info": True,
             "create_folder_endpoint": "/app/chats/folders",
+            "folder_delete_endpoint": "/app/chats/folders/delete",
             "delete_message_prefix": "/app/chats/",
             "endpoint_query_suffix": endpoint_scope_suffix,
         }
@@ -6709,6 +6751,57 @@ def app_chat_create_folder(
     )
 
 
+@app.post("/app/chats/folders/delete", response_class=RedirectResponse)
+def app_chat_delete_folders(
+    request: Request,
+    folder_ids: str = Form(""),
+    folder_id: int = Form(0),
+    q: str = Form(""),
+    view: str = Form(""),
+    current_folder_id: int | None = Form(default=None),
+    workspace_id: int | None = None,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    target_ids = _resolve_folder_ids_from_form(folder_ids_csv=folder_ids, folder_id=folder_id)
+    removed_ids = delete_chat_folders(
+        db,
+        folder_ids=target_ids,
+        workspace_id=workspace_id,
+    )
+    removed_set = {int(value) for value in removed_ids}
+    next_folder_filter = (
+        current_folder_id
+        if current_folder_id is not None and int(current_folder_id) not in removed_set
+        else None
+    )
+    folder_qs = f"&folder_id={int(next_folder_filter)}" if next_folder_filter is not None else ""
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
+    removed_suffix = "1" if removed_ids else "0"
+    removed_count_suffix = f"&folders_removed_count={len(removed_ids)}" if removed_ids else ""
+    return RedirectResponse(
+        url=(
+            f"/app/chats?q={q}&view={view}{folder_qs}{workspace_qs}"
+            f"&folders_removed={removed_suffix}{removed_count_suffix}"
+        ),
+        status_code=302,
+    )
+
+
 @app.post("/app/chats/{conversation_id}/mark-unread", response_class=RedirectResponse)
 def app_chat_mark_unread(
     conversation_id: int,
@@ -8228,6 +8321,50 @@ def manager_mini_create_folder(
             q=q,
             view=view,
             folder_id=folder_id,
+        ),
+        status_code=302,
+    )
+
+
+@app.post("/mini/manager/chats/folders/delete", response_class=RedirectResponse)
+def manager_mini_delete_folders(
+    request: Request,
+    token: str,
+    folder_ids: str = Form(""),
+    folder_id: int = Form(0),
+    q: str = Form(""),
+    view: str = Form(""),
+    current_folder_id: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="mini_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    target_ids = _resolve_folder_ids_from_form(folder_ids_csv=folder_ids, folder_id=folder_id)
+    removed_ids = delete_chat_folders(
+        db,
+        folder_ids=target_ids,
+        workspace_id=workspace_id,
+    )
+    removed_set = {int(value) for value in removed_ids}
+    next_folder_filter = (
+        current_folder_id
+        if current_folder_id is not None and int(current_folder_id) not in removed_set
+        else None
+    )
+    removed_suffix = "1" if removed_ids else "0"
+    removed_count_suffix = f"&folders_removed_count={len(removed_ids)}" if removed_ids else ""
+    return RedirectResponse(
+        url=_manager_mini_url(
+            token=token,
+            q=q,
+            view=view,
+            folder_id=next_folder_filter,
+            extra=f"folders_removed={removed_suffix}{removed_count_suffix}",
         ),
         status_code=302,
     )

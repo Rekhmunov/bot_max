@@ -5803,6 +5803,104 @@ def create_chat_folder(
         raise
 
 
+def delete_chat_folders(
+    db: Session,
+    *,
+    folder_ids: list[int],
+    workspace_id: int = DEFAULT_WORKSPACE_ID,
+) -> list[int]:
+    normalized_ids: list[int] = []
+    seen: set[int] = set()
+    for value in folder_ids:
+        folder_id = int(value or 0)
+        if folder_id <= 0 or folder_id in seen:
+            continue
+        seen.add(folder_id)
+        normalized_ids.append(folder_id)
+    if not normalized_ids:
+        return []
+
+    target_rows = (
+        db.query(ChatFolder.id, ChatFolder.name)
+        .filter(
+            ChatFolder.workspace_id == workspace_id,
+            ChatFolder.id.in_(normalized_ids),
+        )
+        .all()
+    )
+    if not target_rows:
+        return []
+
+    # System folder for blocked users must remain available.
+    protected_name = BLOCKED_FOLDER_NAME.strip().lower()
+    target_ids = [
+        int(row[0])
+        for row in target_rows
+        if str(row[1] or "").strip().lower() != protected_name
+    ]
+    if not target_ids:
+        return []
+
+    affected_conversation_ids = [
+        int(row[0])
+        for row in (
+            db.query(ConversationFolderLink.conversation_id)
+            .filter(
+                ConversationFolderLink.workspace_id == workspace_id,
+                ConversationFolderLink.folder_id.in_(target_ids),
+            )
+            .distinct()
+            .all()
+        )
+        if row and row[0]
+    ]
+
+    db.query(ConversationFolderLink).filter(
+        ConversationFolderLink.workspace_id == workspace_id,
+        ConversationFolderLink.folder_id.in_(target_ids),
+    ).delete(synchronize_session=False)
+
+    if affected_conversation_ids:
+        conversations = (
+            db.query(Conversation)
+            .filter(
+                Conversation.workspace_id == workspace_id,
+                Conversation.id.in_(affected_conversation_ids),
+            )
+            .all()
+        )
+        for conversation in conversations:
+            first_link = (
+                db.query(ConversationFolderLink.folder_id)
+                .filter(
+                    ConversationFolderLink.workspace_id == workspace_id,
+                    ConversationFolderLink.conversation_id == int(conversation.id),
+                )
+                .order_by(ConversationFolderLink.id.asc())
+                .first()
+            )
+            conversation.folder_id = int(first_link[0]) if first_link else None
+            db.add(conversation)
+
+    db.query(Conversation).filter(
+        Conversation.workspace_id == workspace_id,
+        Conversation.folder_id.in_(target_ids),
+    ).update({Conversation.folder_id: None}, synchronize_session=False)
+
+    db.query(ConversationMeta).filter(
+        ConversationMeta.workspace_id == workspace_id,
+        ConversationMeta.blocked_prev_folder_id.in_(target_ids),
+    ).update({ConversationMeta.blocked_prev_folder_id: None}, synchronize_session=False)
+
+    db.query(ChatFolder).filter(
+        ChatFolder.workspace_id == workspace_id,
+        ChatFolder.id.in_(target_ids),
+    ).delete(synchronize_session=False)
+
+    db.commit()
+    return target_ids
+
+
 def get_conversation_folder_links(
     db: Session,
     *,

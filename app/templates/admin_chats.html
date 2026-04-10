@@ -225,7 +225,7 @@
     .chat-list-body {
       min-height: 0;
       display: grid;
-      grid-template-columns: 132px minmax(0, 1fr);
+      grid-template-columns: 156px minmax(0, 1fr);
       overflow: hidden;
     }
     .folder-rail {
@@ -341,6 +341,22 @@
       font-weight: 700;
       cursor: pointer;
     }
+    .folder-rail-delete {
+      margin: 0 6px 8px;
+      border: 1px solid #f2c4c4;
+      border-radius: 10px;
+      height: 34px;
+      background: #fff5f5;
+      color: #d94848;
+      font-size: 15px;
+      line-height: 1;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .folder-rail-delete:hover {
+      background: #ffecec;
+      border-color: #eea5a5;
+    }
     .mobile-folder-bar {
       display: none;
       border-bottom: 1px solid var(--line);
@@ -393,6 +409,18 @@
       background: var(--accent);
       color: #fff;
       font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .mobile-folder-delete {
+      flex: 0 0 auto;
+      width: 32px;
+      height: 32px;
+      border: 1px solid #f2c4c4;
+      border-radius: 10px;
+      background: #fff5f5;
+      color: #d94848;
+      font-size: 15px;
       line-height: 1;
       cursor: pointer;
     }
@@ -1499,6 +1527,97 @@
       font-weight: 700;
       cursor: pointer;
     }
+    .folder-delete-list {
+      display: grid;
+      gap: 8px;
+      max-height: 42vh;
+      overflow: auto;
+      border: 1px solid #edf1f7;
+      border-radius: 12px;
+      padding: 8px;
+      background: #fafcff;
+    }
+    .folder-delete-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      padding: 8px 10px;
+      font-size: 13px;
+    }
+    .folder-delete-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #2f3d59;
+      font-weight: 700;
+    }
+    .folder-delete-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
+    .folder-delete-check-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #40506d;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .folder-delete-check-wrap input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+    }
+    .folder-delete-single {
+      border: 1px solid #f2c4c4;
+      border-radius: 8px;
+      background: #fff5f5;
+      color: #d94848;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 5px 8px;
+      cursor: pointer;
+    }
+    .folder-delete-single:hover {
+      background: #ffecec;
+      border-color: #eea5a5;
+    }
+    .folder-delete-actions {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .folder-toggle-all {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: #40506d;
+      padding: 9px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .folder-delete-btn {
+      border: 0;
+      border-radius: 10px;
+      background: #d94848;
+      color: #fff;
+      padding: 9px 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .folder-delete-btn:disabled {
+      background: #efb5b5;
+      cursor: not-allowed;
+    }
     .user-pop {
       position: fixed;
       inset: 0;
@@ -1949,6 +2068,7 @@
   {% set pins_reorder_endpoint = ui.pins_reorder_endpoint if ui is defined and ui.pins_reorder_endpoint else "/admin/chats/pins/reorder" %}
   {% set show_pins_info = ui.show_pins_info if ui is defined and ui.show_pins_info is not none else true %}
   {% set create_folder_endpoint = ui.create_folder_endpoint if ui is defined and ui.create_folder_endpoint else "/admin/chats/folders" %}
+  {% set folder_delete_endpoint = ui.folder_delete_endpoint if ui is defined and ui.folder_delete_endpoint else "" %}
   {% set delete_message_prefix = ui.delete_message_prefix if ui is defined and ui.delete_message_prefix else "/admin/chats/" %}
   {% set updates_endpoint = ui.updates_endpoint if ui is defined and ui.updates_endpoint else "" %}
   {% set ws_endpoint = ui.ws_endpoint if ui is defined and ui.ws_endpoint else "" %}
@@ -2010,6 +2130,7 @@
           {% endfor %}
         </div>
         <button type="button" class="mobile-folder-add" data-open-folder-create aria-label="Создать папку">+</button>
+        <button type="button" class="mobile-folder-delete" data-open-folder-delete aria-label="Удалить папки">🗑</button>
       </div>
 
       <div class="chat-list-body">
@@ -2037,6 +2158,7 @@
             {% endfor %}
           </div>
           <button type="button" class="folder-rail-add" data-open-folder-create aria-label="Создать папку">+</button>
+          <button type="button" class="folder-rail-delete" data-open-folder-delete aria-label="Удалить папки">🗑</button>
           {% if show_admin_nav %}
             <div class="top-actions">
               <a class="top-link" href="{{ settings_href }}">Настройки</a>
@@ -2399,6 +2521,25 @@
       <div class="folder-create-pop-actions">
         <button type="button" class="folder-create-cancel" data-close-folder-create>Отмена</button>
       </div>
+    </div>
+  </div>
+  <div class="folder-create-pop" id="folder-delete-pop" data-close-folder-delete-root>
+    <div class="folder-create-pop-card">
+      <h3>Удалить папки</h3>
+      <input type="text" id="folder-delete-search-input" class="folder-search" placeholder="Поиск папки" />
+      <div class="folder-actions" id="folder-delete-actions"></div>
+      <form id="folder-delete-form" method="post" action="{{ folder_delete_endpoint }}" data-soft-nav style="display:none;">
+        <input type="hidden" id="folder-delete-ids" name="folder_ids" value="" />
+        <input type="hidden" id="folder-delete-single-id" name="folder_id" value="" />
+        <input type="hidden" id="folder-delete-current-folder" name="current_folder_id" value="" />
+        <input type="hidden" name="q" value="{{ query }}" />
+        <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
+      </form>
+      <div class="folder-delete-actions-row">
+        <button class="folder-toggle-all" type="button" id="folder-delete-select-all-btn">Выбрать все</button>
+        <button class="folder-delete-btn danger" type="button" id="folder-delete-apply-btn">Удалить выбранные</button>
+      </div>
+      <button type="button" class="folder-create-cancel" id="folder-delete-close-btn" data-close-folder-delete>Закрыть</button>
     </div>
   </div>
 
@@ -3523,6 +3664,7 @@
       const unpinPrefix = "{{ unpin_prefix }}";
       const pinsReorderEndpoint = "{{ pins_reorder_endpoint }}";
       const createFolderEndpoint = "{{ create_folder_endpoint }}";
+      const deleteFolderEndpoint = "{{ ui.folder_delete_endpoint if ui is defined and ui.folder_delete_endpoint else '' }}";
       const endpointQuerySuffix = "{{ endpoint_query_suffix }}";
       const currentQ = encodeURIComponent("{{ query }}");
       const currentView = encodeURIComponent("{{ 'chat' if mobile_chat_view else '' }}");
@@ -3549,6 +3691,7 @@
         </div>
       `;
       document.body.appendChild(pop);
+      const deletePop = document.getElementById("folder-delete-pop");
 
       const placeFixedMenu = (menuEl, x, y) => {
         const pad = 8;
@@ -3572,12 +3715,31 @@
       const hidePop = () => {
         pop.style.display = "none";
       };
+      const hideDeletePop = () => {
+        if (!(deletePop instanceof HTMLElement)) return;
+        deletePop.style.display = "none";
+      };
       const currentFolderParam = () => (
         currentFolderId === null ? "" : `&folder_id=${encodeURIComponent(String(currentFolderId))}`
       );
       const currentFolderMoveParam = () => (
         currentFolderId === null ? "" : `&current_folder_id=${encodeURIComponent(String(currentFolderId))}`
       );
+      const buildDeleteFolderPayload = (ids) => {
+        const uniqueIds = Array.from(new Set(
+          (Array.isArray(ids) ? ids : [])
+            .map((value) => Number(value || 0))
+            .filter((value) => Number.isFinite(value) && value > 0)
+        ));
+        if (!uniqueIds.length) return "";
+        const firstId = uniqueIds[0];
+        return (
+          `folder_ids=${encodeURIComponent(uniqueIds.join(","))}` +
+          `&folder_id=${encodeURIComponent(String(firstId))}` +
+          `&current_folder_id=${currentFolderId === null ? "" : encodeURIComponent(String(currentFolderId))}` +
+          `&q=${currentQ}&view=${currentView}`
+        );
+      };
       const currentThreadFolderIds = () => {
         if (!selectedThreadId) return [];
         const threadNode = document.querySelector(`.thread[data-thread-id="${selectedThreadId}"]`);
@@ -3592,9 +3754,118 @@
       let folderSearch = "";
       const folderSearchInput = pop.querySelector("#folder-search-input");
       const folderApplyBtn = pop.querySelector("#folder-apply-btn");
+      const folderDeleteSearchInput = deletePop?.querySelector("#folder-delete-search-input");
+      const folderDeleteActions = deletePop?.querySelector("#folder-delete-actions");
+      const folderDeleteApplyBtn = deletePop?.querySelector("#folder-delete-apply-btn");
+      const folderDeleteToggleAllBtn = deletePop?.querySelector("#folder-delete-select-all-btn");
+      const folderDeleteIdsInput = deletePop?.querySelector("#folder-delete-ids");
+      const folderDeleteSingleInput = deletePop?.querySelector("#folder-delete-single-id");
+      const folderDeleteCurrentInput = deletePop?.querySelector("#folder-delete-current-folder");
+      let selectedDeleteFolderIds = new Set();
+      let folderDeleteSearch = "";
+      const renderDeleteFolderButtons = () => {
+        if (!(folderDeleteActions instanceof HTMLElement)) return;
+        folderDeleteActions.innerHTML = "";
+        const normalizedSearch = String(folderDeleteSearch || "").trim().toLowerCase();
+        const filtered = folders.filter((folder) =>
+          !normalizedSearch || String(folder?.name || "").toLowerCase().includes(normalizedSearch)
+        );
+        if (!filtered.length) {
+          const empty = document.createElement("div");
+          empty.className = "folder-empty";
+          empty.textContent = "Папки не найдены";
+          folderDeleteActions.appendChild(empty);
+        }
+        filtered.forEach((folder) => {
+          const id = Number(folder?.id || 0);
+          if (!id) return;
+          const row = document.createElement("label");
+          row.className = "folder-delete-item";
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = selectedDeleteFolderIds.has(id);
+          checkbox.addEventListener("change", () => {
+            if (checkbox.checked) selectedDeleteFolderIds.add(id);
+            else selectedDeleteFolderIds.delete(id);
+          });
+          const name = document.createElement("span");
+          name.className = "folder-delete-item-name";
+          name.textContent = String(folder?.name || "—");
+          const oneDeleteBtn = document.createElement("button");
+          oneDeleteBtn.type = "button";
+          oneDeleteBtn.className = "folder-delete-item-btn";
+          oneDeleteBtn.textContent = "Удалить";
+          oneDeleteBtn.addEventListener("click", () => {
+            if (!(folderDeleteSingleInput instanceof HTMLInputElement)) return;
+            if (!(folderDeleteIdsInput instanceof HTMLInputElement)) return;
+            if (!(folderDeleteCurrentInput instanceof HTMLInputElement)) return;
+            if (!deleteFolderEndpoint) return;
+            folderDeleteSingleInput.value = String(id);
+            folderDeleteIdsInput.value = "";
+            folderDeleteCurrentInput.value = currentFolderId === null ? "" : String(currentFolderId);
+            if (confirm(`Удалить папку "${String(folder?.name || "")}"?`)) {
+              const form = deletePop?.querySelector("#folder-delete-form");
+              if (form instanceof HTMLFormElement) form.submit();
+            }
+          });
+          row.appendChild(checkbox);
+          row.appendChild(name);
+          row.appendChild(oneDeleteBtn);
+          folderDeleteActions.appendChild(row);
+        });
+        if (folderDeleteApplyBtn instanceof HTMLButtonElement) {
+          folderDeleteApplyBtn.disabled = selectedDeleteFolderIds.size === 0;
+        }
+      };
+      const openDeletePop = () => {
+        if (!(deletePop instanceof HTMLElement)) return;
+        selectedDeleteFolderIds = new Set();
+        folderDeleteSearch = "";
+        if (folderDeleteSearchInput instanceof HTMLInputElement) {
+          folderDeleteSearchInput.value = "";
+          folderDeleteSearchInput.focus();
+        }
+        if (folderDeleteSingleInput instanceof HTMLInputElement) folderDeleteSingleInput.value = "";
+        if (folderDeleteIdsInput instanceof HTMLInputElement) folderDeleteIdsInput.value = "";
+        if (folderDeleteCurrentInput instanceof HTMLInputElement) {
+          folderDeleteCurrentInput.value = currentFolderId === null ? "" : String(currentFolderId);
+        }
+        renderDeleteFolderButtons();
+        deletePop.style.display = "flex";
+      };
       const isTouchLikeViewport = () => (
         window.matchMedia("(max-width: 900px), (hover: none) and (pointer: coarse)").matches
       );
+      folderDeleteSearchInput?.addEventListener("input", () => {
+        folderDeleteSearch = String(folderDeleteSearchInput.value || "").trim().toLowerCase();
+        renderDeleteFolderButtons();
+      });
+      folderDeleteToggleAllBtn?.addEventListener("click", () => {
+        const filteredIds = folders
+          .filter((folder) => !folderDeleteSearch || String(folder?.name || "").toLowerCase().includes(folderDeleteSearch))
+          .map((folder) => Number(folder?.id || 0))
+          .filter((id) => Number.isFinite(id) && id > 0);
+        if (!filteredIds.length) return;
+        const allSelected = filteredIds.every((id) => selectedDeleteFolderIds.has(id));
+        if (allSelected) filteredIds.forEach((id) => selectedDeleteFolderIds.delete(id));
+        else filteredIds.forEach((id) => selectedDeleteFolderIds.add(id));
+        renderDeleteFolderButtons();
+      });
+      folderDeleteApplyBtn?.addEventListener("click", () => {
+        if (!deleteFolderEndpoint) return;
+        if (!(folderDeleteIdsInput instanceof HTMLInputElement)) return;
+        if (!(folderDeleteSingleInput instanceof HTMLInputElement)) return;
+        if (!(folderDeleteCurrentInput instanceof HTMLInputElement)) return;
+        const ids = Array.from(selectedDeleteFolderIds.values()).map((value) => Number(value || 0)).filter((value) => value > 0);
+        if (!ids.length) return;
+        folderDeleteSingleInput.value = "";
+        folderDeleteIdsInput.value = ids.join(",");
+        folderDeleteCurrentInput.value = currentFolderId === null ? "" : String(currentFolderId);
+        if (!confirm(`Удалить выбранные папки (${ids.length})?`)) return;
+        const form = deletePop?.querySelector("#folder-delete-form");
+        if (form instanceof HTMLFormElement) form.submit();
+      });
+      deletePop?.querySelector("#folder-delete-close-btn")?.addEventListener("click", hideDeletePop);
       const openCtx = (x, y, threadId, unread, isPinned) => {
         selectedThreadId = threadId;
         ctx.innerHTML = "";
@@ -3858,6 +4129,15 @@
           const rect = menuBtn.getBoundingClientRect();
           openCtx(rect.right - 4, rect.bottom + 4, threadId, unread, isPinned);
         });
+      });
+      document.querySelectorAll("[data-open-folder-delete]").forEach((btn) => {
+        btn.addEventListener("click", openDeletePop);
+      });
+      deletePop?.querySelectorAll("[data-close-folder-delete]").forEach((btn) => {
+        btn.addEventListener("click", hideDeletePop);
+      });
+      deletePop?.addEventListener("click", (event) => {
+        if (event.target === deletePop) hideDeletePop();
       });
     })();
 
