@@ -3816,6 +3816,9 @@
           checkbox.addEventListener("change", () => {
             if (checkbox.checked) selectedDeleteFolderIds.add(id);
             else selectedDeleteFolderIds.delete(id);
+            if (folderDeleteApplyBtn instanceof HTMLButtonElement) {
+              folderDeleteApplyBtn.disabled = selectedDeleteFolderIds.size === 0;
+            }
           });
           const name = document.createElement("span");
           name.className = "folder-delete-item-name";
