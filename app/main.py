@@ -7760,6 +7760,7 @@ def _build_chat_updates_payload(
             workspace_id=workspace_id,
             limit=_CHAT_UPDATES_MESSAGES_LIMIT,
         )
+        _hydrate_message_media_urls(db, messages)
 
     current_threads_signature = _threads_signature(threads)
     current_messages_signature = _messages_signature(
@@ -8219,11 +8220,9 @@ async def _render_chat_workspace(
                         pass
                     break
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
+        _hydrate_message_media_urls(db, messages)
     folder_unread_counts = _folder_unread_counts(all_threads)
     message_summaries = [_message_summary_dict(item) for item in messages]
-    # Ensure media links are available to templates and polling signatures.
-    # Without this, operator-side history can miss image-only/group media updates.
-    _hydrate_message_media_urls(db, messages)
     mobile_chat_view = view.strip().lower() == "chat"
     threads_signature = _threads_signature(threads)
     chat_state = {
