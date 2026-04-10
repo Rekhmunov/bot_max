@@ -7688,6 +7688,16 @@ def _messages_signature(messages: list[object]) -> str:
     return hashlib.sha256(signature_source.encode("utf-8")).hexdigest()[:16]
 
 
+def _messages_signature_window(messages: list[object], *, limit: int) -> list[object]:
+    limit_value = max(0, int(limit or 0))
+    if limit_value <= 0:
+        return list(messages or [])
+    rows = list(messages or [])
+    if len(rows) <= limit_value:
+        return rows
+    return rows[-limit_value:]
+
+
 def _build_chat_updates_payload(
     *,
     db: Session,
@@ -7739,7 +7749,9 @@ def _build_chat_updates_payload(
         )
 
     current_threads_signature = _threads_signature(threads)
-    current_messages_signature = _messages_signature(messages)
+    current_messages_signature = _messages_signature(
+        _messages_signature_window(messages, limit=_CHAT_UPDATES_MESSAGES_LIMIT)
+    )
 
     active_last_message_id = int(messages[-1].id) if messages else 0
     previous_last_message_id = int(last_message_id or 0)
@@ -8207,7 +8219,11 @@ async def _render_chat_workspace(
     chat_state = {
         "active_conversation_id": (active_thread.conversation_id if active_thread else 0),
         "active_last_message_id": (message_summaries[-1]["id"] if message_summaries else 0),
-        "active_messages_signature": _messages_signature(messages),
+        # Keep signature basis identical to /updates payload to avoid
+        # perpetual messages_changed loops on long histories.
+        "active_messages_signature": _messages_signature(
+            _messages_signature_window(messages, limit=_CHAT_UPDATES_MESSAGES_LIMIT)
+        ),
         "threads_signature": threads_signature,
         "threads_count": len(threads),
     }
