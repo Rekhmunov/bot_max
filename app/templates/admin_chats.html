@@ -72,14 +72,13 @@
       flex-direction: column;
       gap: 6px;
       align-items: stretch;
-      margin-top: 0;
+      margin-top: auto;
       padding: 10px 8px 10px;
       border-top: 1px solid var(--line);
       background: #fff;
-      position: static;
-      bottom: auto;
+      position: sticky;
+      bottom: 0;
       z-index: 2;
-      flex: 0 0 auto;
     }
     .top-actions form {
       margin: 0;
@@ -1891,29 +1890,6 @@
     .chat-sub,
     .thread-meta {
       color: #5a6c89;
-    }
-    @media (min-width: 901px) {
-      .chat-list-body {
-        min-height: 0;
-        height: 100%;
-      }
-      .folder-rail {
-        min-height: 0;
-        height: 100%;
-        display: grid;
-        grid-template-rows: minmax(0, 1fr) auto auto;
-      }
-      .folder-rail-scroll {
-        min-height: 0;
-        overflow-y: auto;
-        overflow-x: hidden;
-      }
-      .folder-rail-add {
-        flex: 0 0 auto;
-      }
-      .top-actions {
-        flex: 0 0 auto;
-      }
     }
   </style>
 </head>
