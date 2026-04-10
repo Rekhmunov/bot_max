@@ -8165,9 +8165,9 @@ async def _render_chat_workspace(
     include_removed: bool,
     workspace_id: int,
 ) -> HTMLResponse:
-    # Opportunistically drain due queue items on workspace open, but keep this
-    # lightweight to avoid blocking page render under load.
-    await process_outbox_queue(db, limit=8)
+    # Do not process outbox inline on page render: under load this can block
+    # request thread and escalate into 504 on /app/chats page loads.
+    # Background outbox worker remains responsible for queue draining.
     op_message, op_error = _chat_op_messages(request)
 
     service_user_id = _chat_scope_service_user_id(
