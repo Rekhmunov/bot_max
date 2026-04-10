@@ -5110,7 +5110,7 @@
           ? `${window.location.origin}${wsEndpoint}`
           : wsEndpoint;
         const url = new URL(base, window.location.origin);
-        const scopeSuffix = String(endpoint_query_suffix || "").replace("?", "");
+        const scopeSuffix = String(endpointQuerySuffix || "").replace("?", "");
         if (scopeSuffix) {
           const scoped = new URLSearchParams(scopeSuffix);
           scoped.forEach((value, key) => {
