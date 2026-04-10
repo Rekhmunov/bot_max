@@ -65,6 +65,7 @@ from app.manager_bridge import (
     get_chat_metrics,
     get_delivery_metrics,
     get_media_diagnostics_metrics,
+    list_chat_message_media_urls_map,
     get_template_text,
     list_active_quick_replies,
     list_chat_folders,
@@ -7621,6 +7622,18 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
     }
 
 
+def _hydrate_message_media_urls(db: Session, messages: list[ChatMessage]) -> None:
+    if not messages:
+        return
+    message_ids = [int(getattr(msg, "id", 0) or 0) for msg in messages if int(getattr(msg, "id", 0) or 0) > 0]
+    if not message_ids:
+        return
+    by_message = list_chat_message_media_urls_map(db, chat_message_ids=message_ids)
+    for msg in messages:
+        msg_id = int(getattr(msg, "id", 0) or 0)
+        setattr(msg, "image_urls", get_message_media_urls(msg, linked_urls_map=by_message))
+
+
 def _select_active_thread(
     *,
     threads: list[object],
@@ -8210,10 +8223,7 @@ async def _render_chat_workspace(
     message_summaries = [_message_summary_dict(item) for item in messages]
     # Ensure media links are available to templates and polling signatures.
     # Without this, operator-side history can miss image-only/group media updates.
-    if messages:
-        for msg in messages:
-            if not hasattr(msg, "image_urls"):
-                setattr(msg, "image_urls", get_message_media_urls(msg))
+    _hydrate_message_media_urls(db, messages)
     mobile_chat_view = view.strip().lower() == "chat"
     threads_signature = _threads_signature(threads)
     chat_state = {

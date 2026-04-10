@@ -4250,6 +4250,8 @@ async def send_admin_quick_reply(
     conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
     if conversation is None:
         return False, "Диалог не найден"
+    # Queue-first path keeps UI request latency stable under media bursts.
+    # Background worker drains outbox and delivers the payload shortly after.
     return await send_quick_reply_to_customer(
         db=db,
         conversation_id=conversation_id,
@@ -4260,6 +4262,7 @@ async def send_admin_quick_reply(
         sender_prefix=None,
         source="bot_system",
         workspace_id=conversation.workspace_id,
+        process_immediately=False,
     )
 
 
@@ -5044,46 +5047,68 @@ def _filter_existing_local_media_urls(urls: list[str]) -> list[str]:
     return filtered
 
 
+def list_chat_message_media_urls_map(
+    db: Session,
+    *,
+    chat_message_ids: list[int],
+) -> dict[int, list[str]]:
+    ids = sorted({int(value) for value in (chat_message_ids or []) if int(value or 0) > 0})
+    if not ids:
+        return {}
+    rows = (
+        db.query(
+            ChatMessageMedia.chat_message_id,
+            MediaAsset.public_url,
+            MediaAsset.storage_key,
+        )
+        .join(MediaAsset, MediaAsset.id == ChatMessageMedia.media_asset_id)
+        .filter(ChatMessageMedia.chat_message_id.in_(ids))
+        .order_by(
+            ChatMessageMedia.chat_message_id.asc(),
+            ChatMessageMedia.sort_order.asc(),
+            ChatMessageMedia.id.asc(),
+        )
+        .all()
+    )
+    grouped: dict[int, list[str]] = {}
+    for chat_message_id, public_url, storage_key in rows:
+        message_id = int(chat_message_id or 0)
+        if message_id <= 0:
+            continue
+        url = str(public_url or "").strip()
+        if not url:
+            key_value = str(storage_key or "").strip()
+            if key_value.startswith("uploads/"):
+                url = storage_public_url_for_key(storage_key=key_value)
+        if not url:
+            continue
+        grouped.setdefault(message_id, []).append(url)
+    deduped_grouped: dict[int, list[str]] = {}
+    for message_id, values in grouped.items():
+        deduped_grouped[message_id] = _filter_existing_local_media_urls(values)
+    return deduped_grouped
+
+
 def list_chat_message_media_urls(
     db: Session,
     *,
     chat_message_id: int,
 ) -> list[str]:
-    links = (
-        db.query(ChatMessageMedia)
-        .join(MediaAsset, MediaAsset.id == ChatMessageMedia.media_asset_id)
-        .filter(ChatMessageMedia.chat_message_id == int(chat_message_id))
-        .order_by(ChatMessageMedia.sort_order.asc(), ChatMessageMedia.id.asc())
-        .all()
-    )
-    urls: list[str] = []
-    for link in links:
-        asset = (
-            db.query(MediaAsset)
-            .filter(MediaAsset.id == int(link.media_asset_id))
-            .first()
-        )
-        if asset is None:
-            continue
-        public_url = str(asset.public_url or "").strip()
-        storage_key = str(asset.storage_key or "").strip()
-        if public_url:
-            urls.append(public_url)
-            continue
-        if storage_key.startswith("uploads/"):
-            urls.append(storage_public_url_for_key(storage_key=storage_key))
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for url in urls:
-        if url in seen:
-            continue
-        seen.add(url)
-        deduped.append(url)
-    return deduped
+    return list_chat_message_media_urls_map(
+        db,
+        chat_message_ids=[int(chat_message_id or 0)],
+    ).get(int(chat_message_id or 0), [])
 
 
-def get_message_media_urls(item: ChatMessage) -> list[str]:
+def get_message_media_urls(
+    item: ChatMessage,
+    *,
+    linked_urls_map: dict[int, list[str]] | None = None,
+) -> list[str]:
     """Read message media from normalized links with legacy fallback."""
+    preloaded_urls = getattr(item, "image_urls", None)
+    if isinstance(preloaded_urls, list) and preloaded_urls:
+        return _filter_existing_local_media_urls(preloaded_urls)
     legacy_urls_raw = _parse_image_urls_json(
         getattr(item, "image_urls_json", None),
         fallback_image_url=getattr(item, "image_url", None),
@@ -5092,25 +5117,27 @@ def get_message_media_urls(item: ChatMessage) -> list[str]:
     message_id = int(getattr(item, "id", 0) or 0)
     if message_id > 0:
         try:
-            from app.database import SessionLocal
-
-            with SessionLocal() as local_db:
-                linked_urls_raw = list_chat_message_media_urls(
-                    local_db,
-                    chat_message_id=message_id,
-                )
-                linked_urls = _filter_existing_local_media_urls(linked_urls_raw)
-                if linked_urls:
-                    linked_set = {str(url).strip() for url in linked_urls if str(url).strip()}
-                    legacy_set = {str(url).strip() for url in legacy_urls if str(url).strip()}
-                    # UI must prefer full message payload when normalized links are partial/stale.
-                    # This keeps operator history accurate (e.g. 2 sent photos must stay 2 in bubble).
-                    if legacy_urls and (
-                        len(linked_set) != len(legacy_set)
-                        or linked_set != legacy_set
-                    ):
-                        return legacy_urls
-                    return linked_urls
+            if linked_urls_map is not None:
+                linked_urls = _filter_existing_local_media_urls(linked_urls_map.get(message_id, []) or [])
+            else:
+                linked_urls: list[str] = []
+                item_db = Session.object_session(item)  # type: ignore[arg-type]
+                if item_db is not None:
+                    linked_urls = list_chat_message_media_urls(
+                        item_db,
+                        chat_message_id=message_id,
+                    )
+            if linked_urls:
+                linked_set = {str(url).strip() for url in linked_urls if str(url).strip()}
+                legacy_set = {str(url).strip() for url in legacy_urls if str(url).strip()}
+                # UI must prefer full message payload when normalized links are partial/stale.
+                # This keeps operator history accurate (e.g. 2 sent photos must stay 2 in bubble).
+                if legacy_urls and (
+                    len(linked_set) != len(legacy_set)
+                    or linked_set != legacy_set
+                ):
+                    return legacy_urls
+                return linked_urls
         except Exception:
             pass
     return legacy_urls
