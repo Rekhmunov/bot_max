@@ -6067,10 +6067,21 @@ def load_chat_messages(
     conversation_id: int,
     *,
     workspace_id: int | None = None,
+    limit: int | None = None,
 ) -> list[ChatMessage]:
     query = db.query(ChatMessage).filter(ChatMessage.conversation_id == conversation_id)
     if workspace_id is not None:
         query = query.filter(ChatMessage.workspace_id == workspace_id)
+    limit_value = int(limit or 0)
+    if limit_value > 0:
+        rows = (
+            query
+            .order_by(ChatMessage.id.desc())
+            .limit(limit_value)
+            .all()
+        )
+        rows.reverse()
+        return rows
     return (
         query
         .order_by(ChatMessage.id.asc())

@@ -1648,6 +1648,7 @@ _outbox_worker_task: asyncio.Task | None = None
 _storage_cleanup_last_run_at: datetime | None = None
 _rate_limiter = InMemoryRateLimiter()
 _MAX_UPLOAD_BYTES = int(settings.max_upload_bytes)
+_CHAT_UPDATES_MESSAGES_LIMIT = 220
 _QUICK_REPLY_PHOTO_MAX_BYTES = 1 * 1024 * 1024
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _EMAIL_VERIFY_SALT = "email-verify-link"
@@ -7734,6 +7735,7 @@ def _build_chat_updates_payload(
             db,
             int(active_thread.conversation_id),
             workspace_id=workspace_id,
+            limit=_CHAT_UPDATES_MESSAGES_LIMIT,
         )
 
     current_threads_signature = _threads_signature(threads)

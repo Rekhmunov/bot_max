@@ -4492,6 +4492,7 @@
       let currentThreadsSignature = String(initialState.threads_signature || "");
       let currentMessagesSignature = String(initialState.active_messages_signature || "");
       let inFlight = false;
+      let suppressRefreshUntil = 0;
       const basePollMs = 2800;
       const maxPollMs = 30000;
       let currentPollMs = basePollMs;
@@ -4862,6 +4863,10 @@
 
       const triggerRefresh = async () => {
         if (stopped || !isCurrentPoller()) return;
+        if (Date.now() < Number(suppressRefreshUntil || 0)) {
+          scheduleNext(currentPollMs);
+          return;
+        }
         if (inFlight) {
           scheduleNext(currentPollMs);
           return;
@@ -4943,6 +4948,9 @@
                 const forceBottomForRefresh = !isReadingHistoryAwayFromBottom();
                 window.__chatCaptureMessagesScrollState({ forceBottom: forceBottomForRefresh });
               }
+              // Prevent immediate duplicate soft-refresh cycles caused by
+              // near-simultaneous polling completion + ws incoming hint.
+              suppressRefreshUntil = Date.now() + 1200;
               stopPolling();
               await window.__chatSoftVisit(window.location.href, { replaceHistory: true });
               const bubbleNodes = Array.from(document.querySelectorAll(".bubble[data-message-id]"));
