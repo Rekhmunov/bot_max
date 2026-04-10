@@ -1893,9 +1893,6 @@
       color: #5a6c89;
     }
     @media (min-width: 901px) {
-      .chat-list {
-        min-height: 0;
-      }
       .chat-list-body {
         min-height: 0;
         height: 100%;
@@ -1903,11 +1900,10 @@
       .folder-rail {
         min-height: 0;
         height: 100%;
-        display: flex;
-        flex-direction: column;
+        display: grid;
+        grid-template-rows: minmax(0, 1fr) auto auto;
       }
       .folder-rail-scroll {
-        flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
         overflow-x: hidden;
