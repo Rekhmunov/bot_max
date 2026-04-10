@@ -8153,8 +8153,9 @@ async def _render_chat_workspace(
     include_removed: bool,
     workspace_id: int,
 ) -> HTMLResponse:
-    # Opportunistically drain due queue items on every workspace open.
-    await process_outbox_queue(db, limit=30)
+    # Opportunistically drain due queue items on workspace open, but keep this
+    # lightweight to avoid blocking page render under load.
+    await process_outbox_queue(db, limit=8)
     op_message, op_error = _chat_op_messages(request)
 
     service_user_id = _chat_scope_service_user_id(

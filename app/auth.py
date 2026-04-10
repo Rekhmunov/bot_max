@@ -181,9 +181,19 @@ def get_current_service_user(
         workspace = db.query(Workspace).filter(Workspace.id == user.workspace_id).first()
         if workspace is None or not workspace.is_active or workspace.is_suspended:
             return None
-    session_row.last_seen_at = _now()
-    db.add(session_row)
-    db.commit()
+    # Avoid write-amplification on high-frequency polling endpoints.
+    # Updating last_seen_at on every request causes SQLite lock contention
+    # and can degrade chat updates into gateway timeouts under bursts.
+    now = _now()
+    prev_seen = session_row.last_seen_at
+    should_touch_last_seen = (
+        prev_seen is None
+        or (now - prev_seen) >= timedelta(seconds=60)
+    )
+    if should_touch_last_seen:
+        session_row.last_seen_at = now
+        db.add(session_row)
+        db.commit()
     return user
 
 
