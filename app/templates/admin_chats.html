@@ -4531,6 +4531,7 @@
       let suppressRefreshUntil = 0;
       const basePollMs = 2800;
       const maxPollMs = 30000;
+      const wsKeepalivePollMs = 25000;
       let currentPollMs = basePollMs;
       let timer = null;
       let stopped = false;
@@ -4916,14 +4917,20 @@
           });
           if (response.status === 429) {
             // Adaptive backoff on server throttling to keep UI responsive under peaks.
-            currentPollMs = Math.min(maxPollMs, Math.round(currentPollMs * 1.8));
+            if (wsConnected) {
+              currentPollMs = Math.max(currentPollMs, wsKeepalivePollMs);
+            } else {
+              currentPollMs = Math.min(maxPollMs, Math.round(currentPollMs * 1.8));
+            }
             return;
           }
           if (!response.ok) return;
           const payload = await response.json().catch(() => null);
           if (!payload || payload.ok !== true) return;
-          if (currentPollMs > basePollMs) {
+          if (!wsConnected && currentPollMs > basePollMs) {
             currentPollMs = Math.max(basePollMs, Math.round(currentPollMs * 0.85));
+          } else if (wsConnected) {
+            currentPollMs = Math.max(currentPollMs, wsKeepalivePollMs);
           }
 
           const nextLast = Number(payload.active_last_message_id || 0);
@@ -5054,7 +5061,9 @@
       let wsSocket = null;
       let wsHeartbeatTimer = null;
       let wsReconnectTimer = null;
+      let wsHintRefreshTimer = null;
       let wsStopped = false;
+      let wsConnected = false;
       let wsBackoffMs = 1200;
       let wsHintCooldownUntil = 0;
       const wsHintDedupMap = new Map();
@@ -5071,6 +5080,10 @@
         if (wsReconnectTimer !== null) {
           window.clearTimeout(wsReconnectTimer);
           wsReconnectTimer = null;
+        }
+        if (wsHintRefreshTimer !== null) {
+          window.clearTimeout(wsHintRefreshTimer);
+          wsHintRefreshTimer = null;
         }
       };
 
@@ -5109,17 +5122,17 @@
           triggerRefreshSafe();
           return;
         }
-        if (typeof window.__chatSoftVisit === "function") {
-          if (typeof window.__chatCaptureMessagesScrollState === "function") {
-            window.__chatCaptureMessagesScrollState();
-          }
-          stopPolling();
-          window.__chatSoftVisit(window.location.href, { replaceHistory: true }).catch(() => {
-            window.location.reload();
-          });
-          return;
-        }
+        // For non-active conversations, polling payload is enough to update thread list.
+        // Avoid soft page rerender storms on bursty incoming hints.
         triggerRefreshSafe();
+      };
+      const scheduleWsHintRefresh = (conversationIdRaw) => {
+        const conversationId = Number(conversationIdRaw || 0);
+        if (wsHintRefreshTimer !== null) return;
+        wsHintRefreshTimer = window.setTimeout(() => {
+          wsHintRefreshTimer = null;
+          safeTriggerRefreshForConversation(conversationId);
+        }, 900);
       };
       const consumeWsHint = (conversationIdRaw) => {
         const conversationId = Number(conversationIdRaw || 0);
@@ -5139,7 +5152,7 @@
           }
         }
         wsHintCooldownUntil = nowTs + 120;
-        safeTriggerRefreshForConversation(conversationId);
+        scheduleWsHintRefresh(conversationId);
       };
       const consumeWsResync = () => {
         const nowTs = Date.now();
@@ -5202,9 +5215,12 @@
           return;
         }
         wsSocket.onopen = () => {
+          wsConnected = true;
+          currentPollMs = Math.max(currentPollMs, wsKeepalivePollMs);
           wsBackoffMs = 1200;
           clearWsTimers();
           resetWsStateAfterStableOpen();
+          scheduleNext(currentPollMs);
           wsHeartbeatTimer = window.setInterval(() => {
             if (!(wsSocket && wsSocket.readyState === WebSocket.OPEN)) return;
             try {
@@ -5237,15 +5253,16 @@
         };
         wsSocket.onerror = () => {};
         wsSocket.onclose = () => {
+          wsConnected = false;
+          currentPollMs = Math.min(currentPollMs, basePollMs);
           closeWs();
           scheduleWsReconnect();
+          scheduleNext(currentPollMs);
         };
       };
 
       scheduleNext(900);
       if (wsEnabled) {
-        // When WS is connected, polling becomes low-frequency safety net.
-        currentPollMs = Math.max(currentPollMs, 9000);
         connectWs();
       }
       window.addEventListener("beforeunload", () => {
