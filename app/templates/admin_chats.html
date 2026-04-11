@@ -5071,6 +5071,30 @@
       let wsResyncCooldownUntil = 0;
       let wsReconnects = 0;
       let wsReconnectWindowStartedAt = 0;
+      let wsDebugMode = false;
+      let wsCurrentMode = "polling-fallback";
+
+      const isRealtimeDebugEnabled = () => {
+        try {
+          const params = new URLSearchParams(window.location.search || "");
+          if (params.get("realtime_debug") === "1") return true;
+        } catch (_) {}
+        try {
+          if (window.localStorage.getItem("chatRealtimeDebug") === "1") return true;
+        } catch (_) {}
+        return false;
+      };
+      const logRealtimeDebug = (message, extra = "") => {
+        if (!wsDebugMode) return;
+        const suffix = extra ? ` ${extra}` : "";
+        console.info(`[chat-realtime] ${message}${suffix}`);
+      };
+      const setRealtimeMode = (mode, reason = "") => {
+        const nextMode = String(mode || "").trim() || "polling-fallback";
+        if (wsCurrentMode === nextMode) return;
+        wsCurrentMode = nextMode;
+        logRealtimeDebug(`mode=${wsCurrentMode}`, reason ? `reason=${reason}` : "");
+      };
 
       const clearWsTimers = () => {
         if (wsHeartbeatTimer !== null) {
@@ -5183,6 +5207,7 @@
       const scheduleWsReconnect = () => {
         if (!wsEnabled || wsStopped || stopped || !isCurrentPoller()) return;
         if (wsReconnectTimer !== null) return;
+        setRealtimeMode("polling-fallback", "ws_reconnect_scheduled");
         const nowTs = Date.now();
         if (!wsReconnectWindowStartedAt || (nowTs - wsReconnectWindowStartedAt) > 60000) {
           wsReconnectWindowStartedAt = nowTs;
@@ -5210,12 +5235,14 @@
         if (!wsUrl) return;
         try {
           wsSocket = new WebSocket(wsUrl);
+          logRealtimeDebug("ws_connect_attempt", `url=${wsUrl}`);
         } catch (_) {
           scheduleWsReconnect();
           return;
         }
         wsSocket.onopen = () => {
           wsConnected = true;
+          setRealtimeMode("ws-primary", "ws_open");
           currentPollMs = Math.max(currentPollMs, wsKeepalivePollMs);
           wsBackoffMs = 1200;
           clearWsTimers();
@@ -5254,6 +5281,7 @@
         wsSocket.onerror = () => {};
         wsSocket.onclose = () => {
           wsConnected = false;
+          setRealtimeMode("polling-fallback", "ws_closed");
           currentPollMs = Math.min(currentPollMs, basePollMs);
           closeWs();
           scheduleWsReconnect();
@@ -5262,8 +5290,13 @@
       };
 
       scheduleNext(900);
+      wsDebugMode = isRealtimeDebugEnabled();
+      logRealtimeDebug("debug_enabled", "set ?realtime_debug=1 or localStorage.chatRealtimeDebug=1");
+      logRealtimeDebug("mode=polling-fallback", "initial");
       if (wsEnabled) {
         connectWs();
+      } else {
+        logRealtimeDebug("ws_disabled", "endpoint_missing");
       }
       window.addEventListener("beforeunload", () => {
         wsStopped = true;
