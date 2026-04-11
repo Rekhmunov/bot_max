@@ -77,6 +77,7 @@ from app.manager_bridge import (
     mark_thread_unread,
     mark_thread_read,
     mark_conversation_messages_read_by_customer,
+    _try_delete_unreferenced_media_file,
     handle_customer_event,
     handle_manager_message,
     backfill_chat_message_media_assets,
@@ -1773,7 +1774,12 @@ def _store_uploaded_images(validated_files: list[tuple[str, bytes, str]]) -> lis
 
 def _cleanup_uploaded_images(paths: list[str]) -> None:
     for item in paths:
-        delete_by_public_url(str(item or "").strip())
+        path_value = str(item or "").strip()
+        if not path_value:
+            continue
+        # Avoid removing files that are still referenced by chat/quick-reply rows.
+        with SessionLocal() as cleanup_db:
+            _try_delete_unreferenced_media_file(cleanup_db, media_path=path_value)
 
 
 async def _resolve_schedule_at_value(request: Request, schedule_at: str) -> str:
@@ -1901,12 +1907,13 @@ async def _save_quick_reply_media_files(
 def _delete_quick_reply_media_files(db: Session, *, reply_id: int) -> None:
     media_rows = _quick_reply_media_rows(db, reply_id)
     for media in media_rows:
+        media_path_value = str(media.media_path or "").strip()
         remove_quick_reply_media_asset_link(
             db,
             quick_reply_id=int(reply_id),
-            media_path=str(media.media_path or "").strip(),
+            media_path=media_path_value,
         )
-        delete_by_public_url(str(media.media_path or "").strip())
+        _try_delete_unreferenced_media_file(db, media_path=media_path_value)
     db.query(QuickReplyMedia).filter(QuickReplyMedia.quick_reply_id == reply_id).delete(synchronize_session=False)
     # Keep normalized quick-reply media links consistent after hard delete.
     sync_quick_reply_media_asset_links(
@@ -3103,7 +3110,7 @@ async def _update_quick_reply_data(
                 quick_reply_id=int(reply.id),
                 media_path=media_path_value,
             )
-            delete_by_public_url(media_path_value)
+            _try_delete_unreferenced_media_file(db, media_path=media_path_value)
             db.delete(media)
         db.commit()
 

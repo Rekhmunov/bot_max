@@ -4129,6 +4129,7 @@ async def send_quick_reply_to_customer(
     sender_prefix: str | None = None,
     source: str = "manager",
     workspace_id: int = DEFAULT_WORKSPACE_ID,
+    process_immediately: bool = True,
 ) -> tuple[bool, str]:
     command = command_text.strip().lstrip("/").strip().lower()
     if not command:
@@ -4174,15 +4175,27 @@ async def send_quick_reply_to_customer(
         rendered_text = ""
 
     if media_urls:
-        ok = await enqueue_and_process_send_media_group(
-            db,
-            conversation_id=conversation_id,
-            target_chat_id=customer_chat_id,
-            target_user_id=customer_user_id,
-            photo_urls=media_urls,
-            text=rendered_text,
-            source=source,
-        )
+        if process_immediately:
+            ok = await enqueue_and_process_send_media_group(
+                db,
+                conversation_id=conversation_id,
+                target_chat_id=customer_chat_id,
+                target_user_id=customer_user_id,
+                photo_urls=media_urls,
+                text=rendered_text,
+                source=source,
+            )
+        else:
+            await queue_only_send_media_group(
+                db,
+                conversation_id=conversation_id,
+                target_chat_id=customer_chat_id,
+                target_user_id=customer_user_id,
+                photo_urls=media_urls,
+                text=rendered_text,
+                source=source,
+            )
+            ok = True
         if not ok:
             latest = (
                 db.query(ChatMessage)
@@ -4196,15 +4209,27 @@ async def send_quick_reply_to_customer(
             reason = str(getattr(latest, "delivery_error", "") or "").strip() or "Неизвестная ошибка отправки"
             return False, reason
     elif rendered_text:
-        ok = await enqueue_and_process_send_text(
-            db,
-            conversation_id=conversation_id,
-            target_chat_id=customer_chat_id,
-            target_user_id=customer_user_id,
-            text=rendered_text,
-            source=source,
-            text_format="markdown",
-        )
+        if process_immediately:
+            ok = await enqueue_and_process_send_text(
+                db,
+                conversation_id=conversation_id,
+                target_chat_id=customer_chat_id,
+                target_user_id=customer_user_id,
+                text=rendered_text,
+                source=source,
+                text_format="markdown",
+            )
+        else:
+            await queue_only_send_text(
+                db,
+                conversation_id=conversation_id,
+                target_chat_id=customer_chat_id,
+                target_user_id=customer_user_id,
+                text=rendered_text,
+                source=source,
+                text_format="markdown",
+            )
+            ok = True
         if not ok:
             latest = (
                 db.query(ChatMessage)
@@ -5041,8 +5066,10 @@ def _filter_existing_local_media_urls(urls: list[str]) -> list[str]:
         seen.add(url)
         local_path = _to_local_static_media_path(url)
         # Do not expose stale /static URLs to UI; this avoids broken previews.
-        if local_path and local_upload_abspath(local_path) is None:
-            continue
+        if local_path:
+            abs_local = local_upload_abspath(local_path)
+            if abs_local is None or not abs_local.exists():
+                continue
         filtered.append(url)
     return filtered
 
