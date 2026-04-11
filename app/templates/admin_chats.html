@@ -712,7 +712,9 @@
       min-height: 0;
       overscroll-behavior: contain;
       -webkit-overflow-scrolling: touch;
-      scroll-behavior: smooth;
+      /* Keep chat history position stable on reload/soft-refresh:
+         smooth programmatic scrolling causes visible top->bottom jumps. */
+      scroll-behavior: auto;
       transition: opacity var(--motion-base) var(--ease-out);
     }
     .chat-toast-stack {
@@ -2962,7 +2964,16 @@
       const scrollMessagesToBottom = () => {
         const wrap = document.querySelector(".messages-wrap");
         if (!wrap) return;
+        const previousBehavior = wrap.style.scrollBehavior;
+        wrap.style.scrollBehavior = "auto";
         wrap.scrollTop = wrap.scrollHeight;
+        window.requestAnimationFrame(() => {
+          if (previousBehavior) {
+            wrap.style.scrollBehavior = previousBehavior;
+          } else {
+            wrap.style.removeProperty("scroll-behavior");
+          }
+        });
       };
       const snapBottomOnce = () => {
         const wrap = document.querySelector(".messages-wrap");
@@ -2970,7 +2981,16 @@
         // Single-frame bottom snap avoids viewport "pulsing" when layout/visualViewport
         // also updates during chat open/send/receive cycles.
         window.requestAnimationFrame(() => {
+          const previousBehavior = wrap.style.scrollBehavior;
+          wrap.style.scrollBehavior = "auto";
           wrap.scrollTop = wrap.scrollHeight;
+          window.requestAnimationFrame(() => {
+            if (previousBehavior) {
+              wrap.style.scrollBehavior = previousBehavior;
+            } else {
+              wrap.style.removeProperty("scroll-behavior");
+            }
+          });
         });
       };
       const hasOperationQueryFlag = () => {
@@ -3004,13 +3024,29 @@
           }
           const offsetFromBottom = Math.max(0, Number(payload?.offsetFromBottom || 0));
           const stickToBottom = Boolean(payload?.stickToBottom);
+          const previousBehavior = wrap.style.scrollBehavior;
+          wrap.style.scrollBehavior = "auto";
           if (stickToBottom) {
             wrap.scrollTop = wrap.scrollHeight;
             snapBottomOnce();
+            window.requestAnimationFrame(() => {
+              if (previousBehavior) {
+                wrap.style.scrollBehavior = previousBehavior;
+              } else {
+                wrap.style.removeProperty("scroll-behavior");
+              }
+            });
             return true;
           }
           const targetTop = Math.max(0, wrap.scrollHeight - wrap.clientHeight - offsetFromBottom);
           wrap.scrollTop = targetTop;
+          window.requestAnimationFrame(() => {
+            if (previousBehavior) {
+              wrap.style.scrollBehavior = previousBehavior;
+            } else {
+              wrap.style.removeProperty("scroll-behavior");
+            }
+          });
           return true;
         } catch (_) {
           return false;
