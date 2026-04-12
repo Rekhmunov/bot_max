@@ -550,18 +550,31 @@ async def maybe_send_offhours_autoreply(
     )
     # Off-hours auto-reply must not alter operator chat timeline/polling behavior.
     # Send directly to customer in MAX without creating ChatMessage/Outbox records.
-    send_result = await client.send_text(
-        chat_id=event.chat_id,
-        text=rendered,
-        text_format="markdown",
-    )
+    # Protect webhook path from slow upstream responses during bursts.
+    try:
+        send_result = await asyncio.wait_for(
+            client.send_text(
+                chat_id=event.chat_id,
+                text=rendered,
+                text_format="markdown",
+            ),
+            timeout=5.0,
+        )
+    except TimeoutError:
+        send_result = {"success": False, "error": "offhours_send_timeout"}
     send_ok = bool(send_result.get("success", True) or send_result.get("message"))
     if not send_ok and str(event.sender_id or "").strip():
-        fallback_result = await client.send_text_to_user(
-            user_id=str(event.sender_id).strip(),
-            text=rendered,
-            text_format="markdown",
-        )
+        try:
+            fallback_result = await asyncio.wait_for(
+                client.send_text_to_user(
+                    user_id=str(event.sender_id).strip(),
+                    text=rendered,
+                    text_format="markdown",
+                ),
+                timeout=5.0,
+            )
+        except TimeoutError:
+            fallback_result = {"success": False, "error": "offhours_send_timeout"}
         send_ok = bool(fallback_result.get("success", True) or fallback_result.get("message"))
         if send_ok:
             send_result = fallback_result
