@@ -31,6 +31,7 @@ class ServiceUser(Base):
     max_account_id: Mapped[str] = mapped_column(String(255), default="", index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    can_delete_chats: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     email_verification_sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

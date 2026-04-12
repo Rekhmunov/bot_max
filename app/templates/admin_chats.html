@@ -159,6 +159,91 @@
       filter: saturate(1.03);
       box-shadow: 0 8px 16px rgba(25, 118, 255, 0.24);
     }
+    .bulk-toolbar {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: #f6f9ff;
+    }
+    .bulk-toolbar.is-active {
+      display: flex;
+    }
+    .bulk-toolbar-left {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+    .bulk-toolbar-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .bulk-toolbar-title {
+      font-size: 12px;
+      font-weight: 800;
+      color: #2f4673;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .bulk-toolbar-count {
+      font-size: 12px;
+      font-weight: 700;
+      color: #415b8b;
+    }
+    .bulk-btn {
+      border: 1px solid #c7d8fd;
+      border-radius: 9px;
+      background: #eef4ff;
+      color: #2a4a89;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1;
+      cursor: pointer;
+      padding: 7px 9px;
+      white-space: nowrap;
+    }
+    .bulk-btn:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+    .bulk-btn-danger {
+      border-color: #f4c6c6;
+      background: #fff1f1;
+      color: #b43636;
+    }
+    .thread-select-wrap {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      margin-right: 4px;
+      flex: 0 0 auto;
+    }
+    .thread-select-check {
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+    .thread-select-mode .thread-select-wrap {
+      display: inline-flex;
+    }
+    .thread-select-mode .thread {
+      cursor: default;
+    }
+    .thread-select-mode .thread.is-selected {
+      outline: 2px solid rgba(25, 118, 255, 0.26);
+      outline-offset: -1px;
+      box-shadow: 0 8px 16px rgba(25, 118, 255, 0.15);
+    }
     .list-actions-wrap {
       display: none;
       align-items: center;
@@ -221,6 +306,11 @@
     .thread.pin-dragging {
       opacity: 0.68;
       box-shadow: 0 8px 18px rgba(29, 73, 160, 0.12);
+    }
+    .thread.is-selected {
+      border-color: #7aa6ff;
+      box-shadow: 0 0 0 2px rgba(42, 121, 255, 0.18), var(--shadow);
+      background: #f0f6ff;
     }
     .chat-list-body {
       min-height: 0;
@@ -2093,6 +2183,8 @@
   {% set create_folder_endpoint = ui.create_folder_endpoint if ui is defined and ui.create_folder_endpoint else "/admin/chats/folders" %}
   {% set folder_delete_endpoint = ui.folder_delete_endpoint if ui is defined and ui.folder_delete_endpoint else "" %}
   {% set delete_message_prefix = ui.delete_message_prefix if ui is defined and ui.delete_message_prefix else "/admin/chats/" %}
+  {% set bulk_action_endpoint = ui.bulk_action_endpoint if ui is defined and ui.bulk_action_endpoint else "" %}
+  {% set can_delete_chats = ui.can_delete_chats if ui is defined and ui.can_delete_chats is not none else false %}
   {% set updates_endpoint = ui.updates_endpoint if ui is defined and ui.updates_endpoint else "" %}
   {% set ws_endpoint = ui.ws_endpoint if ui is defined and ui.ws_endpoint else "" %}
   {% set endpoint_query_suffix = ui.endpoint_query_suffix if ui is defined and ui.endpoint_query_suffix else "" %}
@@ -2115,6 +2207,16 @@
             <input name="q" value="{{ query }}" placeholder="Поиск по имени, телефону, T-номеру..." />
             <button type="submit">Найти</button>
           </form>
+          {% if bulk_action_endpoint %}
+            <button
+              type="button"
+              class="bulk-btn"
+              id="bulk-select-toggle-btn"
+              aria-label="Выбрать несколько чатов"
+            >
+              Выбрать
+            </button>
+          {% endif %}
           {% if show_admin_nav %}
             <div class="list-actions-wrap">
               <button
@@ -2129,6 +2231,22 @@
           {% endif %}
         </div>
       </div>
+      {% if bulk_action_endpoint %}
+        <div class="bulk-toolbar" id="bulk-toolbar" aria-live="polite">
+          <div class="bulk-toolbar-left">
+            <span class="bulk-toolbar-title">Массовые действия</span>
+            <span class="bulk-toolbar-count" id="bulk-selected-count">Выбрано: 0</span>
+          </div>
+          <div class="bulk-toolbar-actions">
+            <button type="button" class="bulk-btn" id="bulk-select-all-btn">Выбрать все</button>
+            <button type="button" class="bulk-btn" id="bulk-move-btn">Переместить</button>
+            {% if can_delete_chats %}
+              <button type="button" class="bulk-btn bulk-btn-danger" id="bulk-delete-btn">Удалить</button>
+            {% endif %}
+            <button type="button" class="bulk-btn" id="bulk-cancel-btn">Отмена</button>
+          </div>
+        </div>
+      {% endif %}
       <div class="mobile-folder-bar">
         <div class="mobile-folder-scroll">
           <a
@@ -2269,6 +2387,15 @@
                   data-soft-nav
                 >
                   <div class="thread-head">
+                    <span class="thread-select-wrap">
+                      <input
+                        type="checkbox"
+                        class="thread-select-check"
+                        data-thread-select
+                        data-thread-select-id="{{ thread.conversation_id }}"
+                        aria-label="Выбрать чат {{ thread.customer_label }}"
+                      />
+                    </span>
                     <div class="thread-name">
                       <span class="thread-name-with-origin">
                         {% if thread.last_message_from_customer_max %}
@@ -2321,6 +2448,15 @@
                 data-soft-nav
               >
                 <div class="thread-head">
+                  <span class="thread-select-wrap">
+                    <input
+                      type="checkbox"
+                      class="thread-select-check"
+                      data-thread-select
+                      data-thread-select-id="{{ thread.conversation_id }}"
+                      aria-label="Выбрать чат {{ thread.customer_label }}"
+                    />
+                  </span>
                   <div class="thread-name">
                     <span class="thread-name-with-origin">
                       {% if thread.last_message_from_customer_max %}
@@ -3673,6 +3809,24 @@
         const anchor = event.target.closest(`a[${SOFT_NAV_ATTR}]`);
         // Thread action menu button sits inside <a.thread>; do not treat it as navigation click.
         if (event.target instanceof Element && event.target.closest("[data-thread-menu-btn]")) return;
+        if (event.target instanceof Element && event.target.closest("[data-thread-select]")) {
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
+        if (
+          anchor instanceof HTMLElement
+          && anchor.classList.contains("thread")
+          && Boolean(window.__chatBulkModeActive)
+        ) {
+          event.preventDefault();
+          const checkbox = anchor.querySelector("input[data-thread-select]");
+          if (checkbox instanceof HTMLInputElement) {
+            checkbox.checked = !checkbox.checked;
+            checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+          return;
+        }
         if (!canInterceptClick(event, anchor)) return;
         event.preventDefault();
         if (shouldThrottleSoftNavClick(anchor)) return;
@@ -3813,11 +3967,25 @@
       const pinsReorderEndpoint = "{{ pins_reorder_endpoint }}";
       const createFolderEndpoint = "{{ create_folder_endpoint }}";
       const deleteFolderEndpoint = "{{ ui.folder_delete_endpoint if ui is defined and ui.folder_delete_endpoint else '' }}";
+      const bulkActionEndpoint = "{{ bulk_action_endpoint }}";
       const endpointQuerySuffix = "{{ endpoint_query_suffix }}";
       const currentQ = encodeURIComponent("{{ query }}");
       const currentView = encodeURIComponent("{{ 'chat' if mobile_chat_view else '' }}");
       const currentFolderId = {{ folder_filter if folder_filter is not none else "null" }};
       const showDeleteConversation = {{ "true" if show_delete_user else "false" }};
+      const canDeleteChats = {{ "true" if can_delete_chats else "false" }};
+      const bulkSelectToggleBtn = document.getElementById("bulk-select-toggle-btn");
+      const bulkToolbar = document.getElementById("bulk-toolbar");
+      const bulkSelectedCount = document.getElementById("bulk-selected-count");
+      const bulkSelectAllBtn = document.getElementById("bulk-select-all-btn");
+      const bulkMoveBtn = document.getElementById("bulk-move-btn");
+      const bulkDeleteBtn = document.getElementById("bulk-delete-btn");
+      const bulkCancelBtn = document.getElementById("bulk-cancel-btn");
+      if (!canDeleteChats && bulkDeleteBtn instanceof HTMLButtonElement) {
+        bulkDeleteBtn.disabled = true;
+      }
+      const selectedConversationIds = new Set();
+      let bulkMode = false;
       let selectedThreadId = null;
 
       const ctx = document.createElement("div");
@@ -3868,6 +4036,163 @@
         if (!(deletePop instanceof HTMLElement)) return;
         deletePop.style.display = "none";
       };
+      const selectedThreadIdsOrdered = () =>
+        Array.from(document.querySelectorAll(".thread[data-thread-id]"))
+          .map((node) => Number(node.getAttribute("data-thread-id") || 0))
+          .filter((id) => id > 0 && selectedConversationIds.has(id));
+      const updateBulkToolbarState = () => {
+        if (!(bulkToolbar instanceof HTMLElement)) return;
+        const selectedCount = selectedConversationIds.size;
+        if (bulkSelectedCount instanceof HTMLElement) {
+          bulkSelectedCount.textContent = `Выбрано: ${selectedCount}`;
+        }
+        if (bulkMoveBtn instanceof HTMLButtonElement) {
+          bulkMoveBtn.disabled = selectedCount <= 0;
+        }
+        if (bulkDeleteBtn instanceof HTMLButtonElement) {
+          bulkDeleteBtn.disabled = selectedCount <= 0;
+        }
+        if (bulkSelectAllBtn instanceof HTMLButtonElement) {
+          const visibleThreadIds = Array.from(document.querySelectorAll(".thread[data-thread-id]"))
+            .map((node) => Number(node.getAttribute("data-thread-id") || 0))
+            .filter((id) => id > 0);
+          const allSelected = visibleThreadIds.length > 0
+            && visibleThreadIds.every((id) => selectedConversationIds.has(id));
+          bulkSelectAllBtn.textContent = allSelected ? "Снять все" : "Выбрать все";
+          bulkSelectAllBtn.disabled = visibleThreadIds.length <= 0;
+        }
+      };
+      const syncThreadSelectionFromState = () => {
+        document.querySelectorAll(".thread[data-thread-id]").forEach((threadNode) => {
+          if (!(threadNode instanceof HTMLElement)) return;
+          const conversationId = Number(threadNode.getAttribute("data-thread-id") || 0);
+          if (conversationId <= 0) return;
+          const selected = selectedConversationIds.has(conversationId);
+          threadNode.classList.toggle("is-selected", selected);
+          const checkbox = threadNode.querySelector("input[data-thread-select]");
+          if (checkbox instanceof HTMLInputElement) {
+            checkbox.checked = selected;
+          }
+        });
+        updateBulkToolbarState();
+      };
+      const setBulkMode = (enabled) => {
+        bulkMode = Boolean(enabled);
+        window.__chatBulkModeActive = bulkMode;
+        document.body.classList.toggle("thread-select-mode", bulkMode);
+        if (bulkToolbar instanceof HTMLElement) {
+          bulkToolbar.classList.toggle("is-active", bulkMode);
+        }
+        if (bulkSelectToggleBtn instanceof HTMLButtonElement) {
+          bulkSelectToggleBtn.textContent = bulkMode ? "Режим выбора: вкл" : "Выбрать";
+        }
+        if (!bulkMode) {
+          selectedConversationIds.clear();
+        }
+        syncThreadSelectionFromState();
+      };
+      const buildBulkRequestPayload = (actionName, extra = {}) => {
+        const payload = {
+          action: String(actionName || "").trim(),
+          conversation_ids: selectedThreadIdsOrdered(),
+          q: decodeURIComponent(currentQ || ""),
+          view: decodeURIComponent(currentView || ""),
+          current_folder_id: currentFolderId,
+          ...extra,
+        };
+        return payload;
+      };
+      const submitBulkAction = async (actionName, extra = {}) => {
+        if (!bulkActionEndpoint || !selectedConversationIds.size) return;
+        if (typeof window.__chatCaptureMessagesScrollState === "function") {
+          window.__chatCaptureMessagesScrollState();
+        }
+        const payload = buildBulkRequestPayload(actionName, extra);
+        const response = await fetch(`${bulkActionEndpoint}${endpointQuerySuffix}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (window.__chatSoftRenderFromResponse) {
+          await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });
+        } else {
+          window.location.reload();
+        }
+      };
+      if (bulkSelectToggleBtn instanceof HTMLButtonElement) {
+        bulkSelectToggleBtn.addEventListener("click", () => {
+          setBulkMode(!bulkMode);
+        });
+      }
+      document.addEventListener("click", (event) => {
+        if (!bulkMode) return;
+        const threadNode = event.target instanceof Element
+          ? event.target.closest(".thread[data-thread-id]")
+          : null;
+        if (!(threadNode instanceof HTMLElement)) return;
+        if (event.target instanceof Element && event.target.closest("[data-thread-menu-btn], [data-thread-select]")) {
+          return;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        const conversationId = Number(threadNode.getAttribute("data-thread-id") || 0);
+        if (conversationId <= 0) return;
+        if (selectedConversationIds.has(conversationId)) {
+          selectedConversationIds.delete(conversationId);
+        } else {
+          selectedConversationIds.add(conversationId);
+        }
+        syncThreadSelectionFromState();
+      }, true);
+      bulkSelectAllBtn?.addEventListener("click", () => {
+        const visibleThreadIds = Array.from(document.querySelectorAll(".thread[data-thread-id]"))
+          .map((node) => Number(node.getAttribute("data-thread-id") || 0))
+          .filter((id) => id > 0);
+        if (!visibleThreadIds.length) {
+          updateBulkToolbarState();
+          return;
+        }
+        const allSelected = visibleThreadIds.every((id) => selectedConversationIds.has(id));
+        if (allSelected) {
+          visibleThreadIds.forEach((id) => selectedConversationIds.delete(id));
+        } else {
+          visibleThreadIds.forEach((id) => selectedConversationIds.add(id));
+        }
+        syncThreadSelectionFromState();
+      });
+      bulkMoveBtn?.addEventListener("click", async () => {
+        if (!selectedConversationIds.size) return;
+        selectedFolderIds = new Set();
+        folderSearch = "";
+        if (folderSearchInput instanceof HTMLInputElement) {
+          folderSearchInput.value = "";
+        }
+        renderFolderButtons();
+        pop.style.display = "flex";
+      });
+      bulkDeleteBtn?.addEventListener("click", async () => {
+        if (!canDeleteChats || !selectedConversationIds.size) return;
+        const confirmed = window.confirm(`Удалить выбранные чаты (${selectedConversationIds.size}) и всю переписку/медиа?`);
+        if (!confirmed) return;
+        await submitBulkAction("delete");
+      });
+      bulkCancelBtn?.addEventListener("click", () => {
+        setBulkMode(false);
+      });
+      document.addEventListener("change", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement)) return;
+        if (!target.hasAttribute("data-thread-select")) return;
+        const conversationId = Number(target.getAttribute("data-thread-select-id") || 0);
+        if (conversationId <= 0) return;
+        if (target.checked) {
+          selectedConversationIds.add(conversationId);
+        } else {
+          selectedConversationIds.delete(conversationId);
+        }
+        syncThreadSelectionFromState();
+      });
+      setBulkMode(false);
       const currentFolderParam = () => (
         currentFolderId === null ? "" : `&folder_id=${encodeURIComponent(String(currentFolderId))}`
       );
@@ -4011,6 +4336,7 @@
       });
       deletePop?.querySelector("#folder-delete-close-btn")?.addEventListener("click", hideDeletePop);
       const openCtx = (x, y, threadId, unread, isPinned) => {
+        if (bulkMode) return;
         selectedThreadId = threadId;
         ctx.innerHTML = "";
 
@@ -4241,19 +4567,34 @@
         renderFolderButtons();
       });
       folderApplyBtn?.addEventListener("click", async () => {
-        if (!selectedThreadId) return;
+        const selectedBulkIds = selectedThreadIdsOrdered();
+        if (!selectedThreadId && !selectedBulkIds.length) return;
         if (typeof window.__chatCaptureMessagesScrollState === "function") {
           window.__chatCaptureMessagesScrollState();
         }
         const ids = Array.from(selectedFolderIds.values()).map((v) => Number(v)).filter((v) => v > 0);
-        const response = await fetch(`${moveFolderPrefix}${selectedThreadId}/move-folder${endpointQuerySuffix}`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body:
-            `folder_ids=${encodeURIComponent(ids.join(","))}` +
-            `&folder_id=${ids.length ? encodeURIComponent(String(ids[0])) : ""}` +
-            `&q=${currentQ}&view=${currentView}${currentFolderMoveParam()}`,
-        });
+        let response = null;
+        if (bulkMode && selectedBulkIds.length && bulkActionEndpoint) {
+          const payload = buildBulkRequestPayload("move", {
+            folder_ids: ids,
+            folder_id: ids.length ? ids[0] : null,
+          });
+          response = await fetch(`${bulkActionEndpoint}${endpointQuerySuffix}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          setBulkMode(false);
+        } else {
+          response = await fetch(`${moveFolderPrefix}${selectedThreadId}/move-folder${endpointQuerySuffix}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body:
+              `folder_ids=${encodeURIComponent(ids.join(","))}` +
+              `&folder_id=${ids.length ? encodeURIComponent(String(ids[0])) : ""}` +
+              `&q=${currentQ}&view=${currentView}${currentFolderMoveParam()}`,
+          });
+        }
         if (window.__chatSoftRenderFromResponse) {
           await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });
         } else {
@@ -4286,6 +4627,10 @@
       });
 
       document.addEventListener("contextmenu", (event) => {
+        if (bulkMode) {
+          event.preventDefault();
+          return;
+        }
         const threadEl = event.target instanceof Element
           ? event.target.closest(".thread[data-thread-id]")
           : null;
@@ -4308,6 +4653,20 @@
         if (!(threadEl instanceof HTMLElement)) return;
         const state = resolveThreadState(threadEl);
         if (!state) return;
+        if (bulkMode) {
+          const conversationId = Number(state.threadId || 0);
+          if (conversationId > 0) {
+            if (selectedConversationIds.has(conversationId)) {
+              selectedConversationIds.delete(conversationId);
+            } else {
+              selectedConversationIds.add(conversationId);
+            }
+            syncThreadSelectionFromState();
+          }
+          event.preventDefault();
+          event.stopPropagation();
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         const rect = menuBtn.getBoundingClientRect();
@@ -4814,6 +5173,7 @@
           if (!(node instanceof HTMLElement)) return;
           updateThreadNodeFromPayload(node, thread);
         });
+        syncThreadSelectionFromState();
         return true;
       };
       const createThreadNodeFromPayload = (threadPayload) => {
@@ -4832,6 +5192,15 @@
         }
         threadNode.innerHTML = `
           <div class="thread-head">
+            <span class="thread-select-wrap">
+              <input
+                type="checkbox"
+                class="thread-select-check"
+                data-thread-select
+                data-thread-select-id="${Number(threadPayload.conversation_id || 0)}"
+                aria-label="Выбрать чат"
+              />
+            </span>
             <div class="thread-name">
               <span class="thread-name-with-origin">
                 <span class="thread-name-text">—</span>
@@ -4927,6 +5296,7 @@
           empty.textContent = "Чаты не найдены";
           threadsContainer.appendChild(empty);
         }
+        syncThreadSelectionFromState();
         return true;
       };
       const syncThreadNodesFromPayload = (threadsPayload) => {

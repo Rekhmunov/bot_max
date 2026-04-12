@@ -638,6 +638,10 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(text("ALTER TABLE service_users ADD COLUMN totp_secret VARCHAR(255) DEFAULT ''"))
             if "totp_enabled" not in service_user_columns:
                 conn.execute(text("ALTER TABLE service_users ADD COLUMN totp_enabled INTEGER DEFAULT 0"))
+            if "can_delete_chats" not in service_user_columns:
+                conn.execute(
+                    text("ALTER TABLE service_users ADD COLUMN can_delete_chats INTEGER DEFAULT 0")
+                )
             if "email_verified" not in service_user_columns:
                 conn.execute(text("ALTER TABLE service_users ADD COLUMN email_verified INTEGER DEFAULT 0"))
             if "email_verified_at" not in service_user_columns:
@@ -652,6 +656,15 @@ def _ensure_lightweight_migrations() -> None:
                     "UPDATE service_users "
                     "SET role = 'admin' "
                     "WHERE role = 'owner' AND workspace_id IS NOT NULL"
+                )
+            )
+            # Backward compatibility: owner/admin/superadmin keep delete access.
+            # Managers remain restricted unless explicitly allowed in settings.
+            conn.execute(
+                text(
+                    "UPDATE service_users "
+                    "SET can_delete_chats = 1 "
+                    "WHERE LOWER(COALESCE(role, '')) IN ('owner', 'admin', 'superadmin')"
                 )
             )
 

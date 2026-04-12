@@ -613,6 +613,35 @@
       align-items: center;
       justify-content: center;
     }
+    .manager-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .manager-delete-permission-btn {
+      border: 1px solid #c8d7fb;
+      background: #eef4ff;
+      color: #244887;
+      border-radius: 10px;
+      padding: 6px 9px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .manager-delete-permission-btn.is-enabled {
+      border-color: #b9e6cc;
+      background: #e8f8ef;
+      color: #126b3c;
+    }
+    .manager-delete-permission-btn.is-disabled {
+      border-color: #f0da9d;
+      background: #fff6de;
+      color: #7a5a00;
+    }
     .format-toolbar {
       position: relative;
       margin: 6px 0 8px;
@@ -1607,14 +1636,30 @@
             <td data-label="Подключился">{{ row.connected_at }}</td>
             <td data-label="Последний вход">{{ row.last_login_at }}</td>
             <td data-label="Действия">
-              <button
-                type="button"
-                class="manager-remove-btn"
-                data-remove-manager-id="{{ row.max_account_id }}"
-                data-remove-action="{{ manager_remove_action or '/app/settings/remove-manager' }}"
-                aria-label="Удалить менеджера"
-                title="Удалить менеджера"
-              >🗑</button>
+              <div class="manager-actions">
+                {% if ui_mode == "app" and current_user and current_user.role in ["owner", "admin"] and row.has_service_user %}
+                  <button
+                    type="button"
+                    class="manager-delete-permission-btn {% if row.can_delete_chats %}is-enabled{% else %}is-disabled{% endif %}"
+                    data-manager-delete-permission-btn="1"
+                    data-manager-id="{{ row.max_account_id }}"
+                    data-can-delete="{{ '1' if row.can_delete_chats else '0' }}"
+                    data-toggle-action="/app/settings/manager-delete-permission"
+                    aria-label="Переключить право удаления чатов"
+                    title="Разрешить/запретить удаление чатов и сообщений"
+                  >
+                    {% if row.can_delete_chats %}Удаление: разрешено{% else %}Удаление: запрещено{% endif %}
+                  </button>
+                {% endif %}
+                <button
+                  type="button"
+                  class="manager-remove-btn"
+                  data-remove-manager-id="{{ row.max_account_id }}"
+                  data-remove-action="{{ manager_remove_action or '/app/settings/remove-manager' }}"
+                  aria-label="Удалить менеджера"
+                  title="Удалить менеджера"
+                >🗑</button>
+              </div>
             </td>
           </tr>
           {% endfor %}
@@ -2573,6 +2618,45 @@
             })
             .catch(() => {
               showToast("Не удалось удалить менеджера.", "error");
+            });
+          return;
+        }
+        const permissionBtn = target.closest("button[data-manager-delete-permission-btn='1']");
+        if (permissionBtn instanceof HTMLButtonElement) {
+          const managerId = (permissionBtn.getAttribute("data-manager-id") || "").trim();
+          const toggleAction = permissionBtn.getAttribute("data-toggle-action") || "/app/settings/manager-delete-permission";
+          const currentCanDelete = String(permissionBtn.getAttribute("data-can-delete") || "0") === "1";
+          if (!managerId) {
+            showToast("Не удалось определить ID менеджера.", "error");
+            return;
+          }
+          const nextCanDelete = !currentCanDelete;
+          const confirmed = window.confirm(
+            nextCanDelete
+              ? `Разрешить ${managerId} удалять чаты и сообщения?`
+              : `Запретить ${managerId} удалять чаты и сообщения?`
+          );
+          if (!confirmed) {
+            return;
+          }
+          const payload = new FormData();
+          payload.set("manager_max_account_id", managerId);
+          payload.set("can_delete_chats", nextCanDelete ? "1" : "0");
+          fetch(toggleAction, { method: "POST", body: payload })
+            .then((resp) => resp.json().catch(() => ({ ok: false, error: "Некорректный ответ сервера." })))
+            .then((data) => {
+              if (!data || !data.ok) {
+                showToast((data && data.error) ? data.error : "Не удалось обновить право удаления.", "error");
+                return;
+              }
+              showToast(
+                data.message || (nextCanDelete ? "Право удаления разрешено." : "Право удаления запрещено."),
+                "ok"
+              );
+              window.location.reload();
+            })
+            .catch(() => {
+              showToast("Не удалось обновить право удаления.", "error");
             });
           return;
         }

@@ -588,7 +588,7 @@ def _collect_manager_status_rows(
     *,
     workspace_id: int,
     manager_ids: list[str],
-) -> tuple[list[dict[str, str]], dict[str, int]]:
+) -> tuple[list[dict[str, str | bool]], dict[str, int]]:
     normalized_ids: list[str] = []
     seen_ids: set[str] = set()
     for raw_id in manager_ids:
@@ -677,7 +677,7 @@ def _collect_manager_status_rows(
         "not_sent": "Ссылка не отправлялась",
         "deactivated": "Отключен",
     }
-    status_rows: list[dict[str, str]] = []
+    status_rows: list[dict[str, str | bool]] = []
     for max_id in normalized_ids:
         manager_user = manager_by_max_id.get(max_id)
         invite_row = latest_invite_by_max_id.get(max_id)
@@ -709,6 +709,8 @@ def _collect_manager_status_rows(
                 "link_sent_at": _to_iso(last_sent_at),
                 "connected_at": _to_iso(connected_at),
                 "last_login_at": _to_iso(last_login_at),
+                "can_delete_chats": bool(getattr(manager_user, "can_delete_chats", False)),
+                "has_service_user": manager_user is not None,
             }
         )
 
@@ -754,6 +756,173 @@ def _build_usage_context(
         else:
             usage_remaining[key] = str(max(0, int(limit_value) - int(used_value)))
     return usage_limits, usage_used, usage_remaining
+
+
+def _user_can_delete_chats(user: ServiceUser | None) -> bool:
+    if user is None:
+        return False
+    role_value = str(getattr(user, "role", "") or "").strip().lower()
+    if role_value in {"owner", "admin", "superadmin"}:
+        return True
+    return bool(getattr(user, "can_delete_chats", False))
+
+
+def _ensure_user_can_delete_chats(user: ServiceUser | None) -> None:
+    if _user_can_delete_chats(user):
+        return
+    raise HTTPException(status_code=403, detail="Удаление чатов и сообщений запрещено")
+
+
+def _ensure_manager_can_delete_chats(
+    db: Session,
+    *,
+    workspace_id: int,
+    manager_user_id: int,
+) -> ServiceUser:
+    manager = (
+        db.query(ServiceUser)
+        .filter(
+            ServiceUser.id == int(manager_user_id),
+            ServiceUser.workspace_id == int(workspace_id),
+            ServiceUser.role == "manager",
+            ServiceUser.is_active.is_(True),
+            ServiceUser.is_blocked.is_(False),
+        )
+        .first()
+    )
+    if manager is None:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    _ensure_user_can_delete_chats(manager)
+    return manager
+
+
+def _parse_conversation_ids_from_payload(payload: object) -> list[int]:
+    ids_raw = payload.get("conversation_ids") if isinstance(payload, dict) else None
+    if not isinstance(ids_raw, list):
+        raise HTTPException(status_code=400, detail="conversation_ids_required")
+    ordered_ids: list[int] = []
+    seen: set[int] = set()
+    for item in ids_raw:
+        try:
+            conv_id = int(item)
+        except (TypeError, ValueError):
+            continue
+        if conv_id <= 0 or conv_id in seen:
+            continue
+        seen.add(conv_id)
+        ordered_ids.append(conv_id)
+    if not ordered_ids:
+        raise HTTPException(status_code=400, detail="conversation_ids_required")
+    return ordered_ids
+
+
+def _parse_folder_ids_from_payload(payload: object) -> list[int]:
+    if not isinstance(payload, dict):
+        return []
+    normalized_ids: list[int] = []
+    seen: set[int] = set()
+    raw_ids = payload.get("folder_ids")
+    if isinstance(raw_ids, list):
+        iterable: list[object] = raw_ids
+    elif isinstance(raw_ids, str):
+        iterable = [item.strip() for item in re.split(r"[,\s;]+", raw_ids) if str(item).strip()]
+    else:
+        iterable = []
+    for item in iterable:
+        try:
+            folder_id = int(item)
+        except (TypeError, ValueError):
+            continue
+        if folder_id <= 0 or folder_id in seen:
+            continue
+        seen.add(folder_id)
+        normalized_ids.append(folder_id)
+    if normalized_ids:
+        return normalized_ids
+    try:
+        fallback_folder_id = int(payload.get("folder_id") or 0)
+    except (TypeError, ValueError):
+        fallback_folder_id = 0
+    return [fallback_folder_id] if fallback_folder_id > 0 else []
+
+
+def _parse_optional_int(value: object) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed
+
+
+async def _parse_bulk_action_request_payload(request: Request) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    content_type = str(request.headers.get("content-type") or "").strip().lower()
+    if "application/json" in content_type:
+        with suppress(Exception):
+            parsed = await request.json()
+            if isinstance(parsed, dict):
+                payload = dict(parsed)
+    if payload:
+        return payload
+
+    form = None
+    with suppress(Exception):
+        form = await request.form()
+    if not form:
+        return {}
+
+    conversation_ids: list[object] = []
+    for raw in form.getlist("conversation_ids"):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        if any(char in text for char in [",", ";", " "]):
+            conversation_ids.extend([item for item in re.split(r"[,\s;]+", text) if item])
+        else:
+            conversation_ids.append(text)
+    if not conversation_ids:
+        csv_fallback = str(form.get("conversation_ids_csv") or "").strip()
+        if csv_fallback:
+            conversation_ids = [item for item in re.split(r"[,\s;]+", csv_fallback) if item]
+
+    return {
+        "action": str(form.get("action") or "").strip(),
+        "conversation_ids": conversation_ids,
+        "folder_ids": form.get("folder_ids"),
+        "folder_id": form.get("folder_id"),
+        "current_folder_id": form.get("current_folder_id"),
+        "q": str(form.get("q") or "").strip(),
+        "view": str(form.get("view") or "").strip(),
+    }
+
+
+def _bulk_operation_redirect_url(
+    *,
+    base_path: str,
+    q: str,
+    view: str,
+    folder_id: int | None = None,
+    workspace_qs: str = "",
+    deleted_total: int = 0,
+    moved_total: int = 0,
+    moved_multi: bool = False,
+) -> str:
+    url = f"{base_path}?q={quote_plus(q.strip())}&view={quote_plus(view.strip())}"
+    if folder_id is not None:
+        url += f"&folder_id={int(folder_id)}"
+    if moved_total > 0:
+        url += "&foldered=1"
+        if moved_multi:
+            url += "&foldered_multi=1"
+        url += f"&bulk_moved={int(moved_total)}"
+    if deleted_total > 0:
+        url += "&removed=1"
+        url += f"&bulk_removed={int(deleted_total)}"
+    elif moved_total <= 0:
+        url += "&removed=0"
+    if workspace_qs:
+        url += workspace_qs
+    return url
 
 
 def _manager_routing_mode_label(mode: str) -> str:
@@ -3515,6 +3684,82 @@ def admin_chat_move_folder(
     )
 
 
+@app.post("/admin/chats/bulk-action", response_class=RedirectResponse)
+async def admin_chat_bulk_action(
+    request: Request,
+    _admin: str = Depends(require_admin),
+    current_user: ServiceUser | None = Depends(get_current_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="admin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    payload = await _parse_bulk_action_request_payload(request)
+    action = str(payload.get("action") or "").strip().lower()
+    conversation_ids = _parse_conversation_ids_from_payload(payload)
+    q_value = str(payload.get("q") or "").strip()
+    view_value = str(payload.get("view") or "").strip()
+    current_folder_id = _parse_optional_int(payload.get("current_folder_id"))
+
+    moved_total = 0
+    deleted_total = 0
+    moved_multi = False
+    workspace_id = DEFAULT_WORKSPACE_ID
+
+    if action == "move":
+        folder_ids = _parse_folder_ids_from_payload(payload)
+        moved_multi = len(folder_ids) > 1
+        for conversation_id in conversation_ids:
+            moved = replace_conversation_folder_links(
+                db=db,
+                conversation_id=conversation_id,
+                folder_ids=folder_ids,
+                workspace_id=workspace_id,
+            )
+            if moved:
+                moved_total += 1
+    elif action == "delete":
+        if current_user is not None:
+            _ensure_user_can_delete_chats(current_user)
+        actor_user_id = int(current_user.id) if current_user is not None else None
+        for conversation_id in conversation_ids:
+            deleted = delete_conversation(
+                db,
+                conversation_id=conversation_id,
+                workspace_id=workspace_id,
+            )
+            if not deleted:
+                continue
+            deleted_total += 1
+            db.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    actor_user_id=actor_user_id,
+                    action="customer_deleted",
+                    object_type="conversation",
+                    object_id=str(conversation_id),
+                    details_json=safe_json_dumps({"source": "admin_chats_bulk"}),
+                )
+            )
+            db.commit()
+    else:
+        raise HTTPException(status_code=400, detail="invalid_bulk_action")
+
+    redirect_url = _bulk_operation_redirect_url(
+        base_path="/admin/chats",
+        q=q_value,
+        view=view_value,
+        folder_id=current_folder_id,
+        deleted_total=deleted_total,
+        moved_total=moved_total,
+        moved_multi=moved_multi,
+    )
+    return RedirectResponse(url=redirect_url, status_code=302)
+
+
 @app.post("/admin/chats/{conversation_id}/pin", response_class=RedirectResponse)
 def admin_chat_pin(
     request: Request,
@@ -4031,9 +4276,12 @@ async def admin_chats_delete_message(
     chat_message_id: int,
     q: str = Form(""),
     view: str = Form(""),
+    current_user: ServiceUser | None = Depends(get_current_service_user),
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    if current_user is not None:
+        _ensure_user_can_delete_chats(current_user)
     workspace_id = DEFAULT_WORKSPACE_ID
     removed = await remove_chat_message(
         db=db,
@@ -4079,6 +4327,7 @@ async def admin_chats_delete_conversation(
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
+    _ensure_user_can_delete_chats(current_user)
     workspace_id = DEFAULT_WORKSPACE_ID
     deleted = delete_conversation(
         db,
@@ -4324,6 +4573,8 @@ def _admin_chats_ui() -> dict[str, str | bool]:
         "create_folder_endpoint": "/admin/chats/folders",
         "folder_delete_endpoint": "/admin/chats/folders/delete",
         "delete_message_prefix": "/admin/chats/",
+        "bulk_action_endpoint": "/admin/chats/bulk-action",
+        "can_delete_chats": True,
         "endpoint_query_suffix": "",
     }
 
@@ -4360,6 +4611,8 @@ def _manager_mini_ui(token: str) -> dict[str, str | bool]:
         "create_folder_endpoint": "/mini/manager/chats/folders",
         "folder_delete_endpoint": "/mini/manager/chats/folders/delete",
         "delete_message_prefix": "/mini/manager/chats/",
+        "bulk_action_endpoint": "/mini/manager/chats/bulk-action",
+        "can_delete_chats": False,
         "endpoint_query_suffix": query_suffix,
     }
 
@@ -5275,6 +5528,7 @@ async def app_chats_page(
         page_title = f"Чаты клиента · {(scoped_workspace.name if scoped_workspace else workspace_id)}"
         settings_href = "/app/superadmin/workspaces"
     ui = _admin_chats_ui()
+    can_delete_chats = _user_can_delete_chats(current_user)
     ui.update(
         {
             "page_title": page_title,
@@ -5286,6 +5540,7 @@ async def app_chats_page(
             "show_admin_nav": True,
             "settings_href": settings_href,
             "logout_action": "/app/logout",
+            "show_delete_user": can_delete_chats,
             "show_rename_user": True,
             "show_block_user": True,
             "send_action_prefix": "/app/chats/",
@@ -5304,6 +5559,8 @@ async def app_chats_page(
             "create_folder_endpoint": "/app/chats/folders",
             "folder_delete_endpoint": "/app/chats/folders/delete",
             "delete_message_prefix": "/app/chats/",
+            "bulk_action_endpoint": "/app/chats/bulk-action",
+            "can_delete_chats": can_delete_chats,
             "endpoint_query_suffix": endpoint_scope_suffix,
         }
     )
@@ -5815,6 +6072,69 @@ async def app_remove_manager(
             status_code=200,
         )
     return JSONResponse({"ok": True, "message": f"Менеджер {target_manager_id} удален."}, status_code=200)
+
+
+@app.post("/app/settings/manager-delete-permission", response_class=JSONResponse)
+async def app_settings_toggle_manager_delete_permission(
+    request: Request,
+    manager_max_account_id: str = Form(""),
+    can_delete_chats: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_settings",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    if current_user.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
+    manager_id = str(manager_max_account_id or "").strip()
+    if not manager_id:
+        return JSONResponse({"ok": False, "error": "Не указан ID менеджера."}, status_code=400)
+    manager_row = (
+        db.query(ServiceUser)
+        .filter(
+            ServiceUser.workspace_id == workspace_id,
+            ServiceUser.role == "manager",
+            ServiceUser.max_account_id == manager_id,
+        )
+        .first()
+    )
+    if manager_row is None:
+        return JSONResponse({"ok": False, "error": "Менеджер не найден."}, status_code=404)
+    next_allowed = str(can_delete_chats or "").strip().lower() in {"1", "true", "yes", "on"}
+    manager_row.can_delete_chats = bool(next_allowed)
+    db.add(manager_row)
+    db.add(
+        AuditLog(
+            workspace_id=workspace_id,
+            actor_user_id=int(current_user.id),
+            action="manager_delete_permission_updated",
+            object_type="service_user",
+            object_id=str(manager_row.id),
+            details_json=safe_json_dumps(
+                {
+                    "max_account_id": manager_id,
+                    "can_delete_chats": bool(next_allowed),
+                }
+            ),
+        )
+    )
+    db.commit()
+    return JSONResponse(
+        {
+            "ok": True,
+            "can_delete_chats": bool(next_allowed),
+            "message": (
+                f"Разрешение на удаление для {manager_id}: "
+                + ("разрешено" if next_allowed else "запрещено")
+            ),
+        },
+        status_code=200,
+    )
 
 
 @app.post("/app/settings/intro-steps", response_class=RedirectResponse)
@@ -7343,6 +7663,7 @@ async def app_chats_delete_message(
         current_user=current_user,
         workspace_id=workspace_id,
     )
+    _ensure_user_can_delete_chats(current_user)
     removed = await remove_chat_message(db=db, chat_message_id=chat_message_id, workspace_id=workspace_id)
     suffix = "1" if removed else "0"
     workspace_qs = _workspace_scope_query_suffix(
@@ -7401,6 +7722,7 @@ async def app_chats_delete_conversation(
         current_user=current_user,
         workspace_id=workspace_id,
     )
+    _ensure_user_can_delete_chats(current_user)
     deleted = delete_conversation(db, conversation_id=conversation_id, workspace_id=workspace_id)
     if deleted:
         db.add(
@@ -7575,6 +7897,89 @@ def app_chats_unblock_conversation_customer(
     )
 
 
+@app.post("/app/chats/bulk-action", response_class=RedirectResponse)
+async def app_chat_bulk_action(
+    request: Request,
+    workspace_id: int | None = None,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    workspace_id, _scoped_workspace, is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    payload = await _parse_bulk_action_request_payload(request)
+    action = str(payload.get("action") or "").strip().lower()
+    conversation_ids = _parse_conversation_ids_from_payload(payload)
+    q_value = str(payload.get("q") or "").strip()
+    view_value = str(payload.get("view") or "").strip()
+    current_folder_id = _parse_optional_int(payload.get("current_folder_id"))
+    workspace_qs = _workspace_scope_query_suffix(
+        workspace_id=workspace_id,
+        is_scoped=is_superadmin_scoped,
+    )
+
+    moved_total = 0
+    deleted_total = 0
+    moved_multi = False
+
+    if action == "move":
+        folder_ids = _parse_folder_ids_from_payload(payload)
+        moved_multi = len(folder_ids) > 1
+        for conversation_id in conversation_ids:
+            moved = replace_conversation_folder_links(
+                db=db,
+                conversation_id=conversation_id,
+                folder_ids=folder_ids,
+                workspace_id=workspace_id,
+            )
+            if moved:
+                moved_total += 1
+    elif action == "delete":
+        _ensure_user_can_delete_chats(current_user)
+        for conversation_id in conversation_ids:
+            deleted = delete_conversation(
+                db,
+                conversation_id=conversation_id,
+                workspace_id=workspace_id,
+            )
+            if not deleted:
+                continue
+            deleted_total += 1
+            db.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    actor_user_id=int(current_user.id),
+                    action="customer_deleted",
+                    object_type="conversation",
+                    object_id=str(conversation_id),
+                    details_json=safe_json_dumps({"source": "app_chats_bulk"}),
+                )
+            )
+            db.commit()
+    else:
+        raise HTTPException(status_code=400, detail="invalid_bulk_action")
+
+    redirect_url = _bulk_operation_redirect_url(
+        base_path="/app/chats",
+        q=q_value,
+        view=view_value,
+        folder_id=current_folder_id,
+        workspace_qs=workspace_qs,
+        deleted_total=deleted_total,
+        moved_total=moved_total,
+        moved_multi=moved_multi,
+    )
+    return RedirectResponse(url=redirect_url, status_code=302)
+
+
 def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
     sent_flag = request.query_params.get("sent")
     scheduled_flag = request.query_params.get("scheduled")
@@ -7635,6 +8040,12 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
         op_error = "Не удалось переместить чат в папку"
     if request.query_params.get("foldered_multi") == "1":
         op_message = "Чат добавлен в несколько папок"
+    bulk_moved_value = _parse_optional_int(request.query_params.get("bulk_moved"))
+    if bulk_moved_value and bulk_moved_value > 0:
+        op_message = f"Перемещено чатов: {bulk_moved_value}"
+    bulk_removed_value = _parse_optional_int(request.query_params.get("bulk_removed"))
+    if bulk_removed_value and bulk_removed_value > 0:
+        op_message = f"Удалено чатов: {bulk_removed_value}"
     if request.query_params.get("pinned") == "1":
         op_message = "Чат закреплен"
     if request.query_params.get("pinned") == "0":
@@ -8660,6 +9071,89 @@ def manager_mini_move_folder(
     )
 
 
+@app.post("/mini/manager/chats/bulk-action", response_class=RedirectResponse)
+async def manager_mini_bulk_action(
+    request: Request,
+    token: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="mini_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    manager_user_id = int(claims.get("service_user_id") or 0)
+    if manager_user_id <= 0:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+
+    payload = await _parse_bulk_action_request_payload(request)
+    action = str(payload.get("action") or "").strip().lower()
+    conversation_ids = _parse_conversation_ids_from_payload(payload)
+    q_value = str(payload.get("q") or "").strip()
+    view_value = str(payload.get("view") or "").strip()
+    current_folder_id = _parse_optional_int(payload.get("current_folder_id"))
+
+    moved_total = 0
+    deleted_total = 0
+    moved_multi = False
+
+    if action == "move":
+        folder_ids = _parse_folder_ids_from_payload(payload)
+        moved_multi = len(folder_ids) > 1
+        for conversation_id in conversation_ids:
+            moved = replace_conversation_folder_links(
+                db=db,
+                conversation_id=conversation_id,
+                folder_ids=folder_ids,
+                workspace_id=workspace_id,
+            )
+            if moved:
+                moved_total += 1
+    elif action == "delete":
+        _ensure_manager_can_delete_chats(
+            db,
+            workspace_id=workspace_id,
+            manager_user_id=manager_user_id,
+        )
+        for conversation_id in conversation_ids:
+            deleted = delete_conversation(
+                db,
+                conversation_id=conversation_id,
+                workspace_id=workspace_id,
+            )
+            if not deleted:
+                continue
+            deleted_total += 1
+            db.add(
+                AuditLog(
+                    workspace_id=workspace_id,
+                    actor_user_id=manager_user_id,
+                    action="customer_deleted",
+                    object_type="conversation",
+                    object_id=str(conversation_id),
+                    details_json=safe_json_dumps({"source": "mini_manager_chats_bulk"}),
+                )
+            )
+            db.commit()
+    else:
+        raise HTTPException(status_code=400, detail="invalid_bulk_action")
+
+    redirect_url = _bulk_operation_redirect_url(
+        base_path="/mini/manager",
+        q=q_value,
+        view=view_value,
+        folder_id=current_folder_id,
+        deleted_total=deleted_total,
+        moved_total=moved_total,
+        moved_multi=moved_multi,
+    )
+    token_qs = f"token={quote_plus(token)}"
+    joiner = "&" if "?" in redirect_url else "?"
+    return RedirectResponse(url=f"{redirect_url}{joiner}{token_qs}", status_code=302)
+
+
 @app.post("/mini/manager/chats/{conversation_id}/delete-user", response_class=RedirectResponse)
 def manager_mini_delete_conversation(
     request: Request,
@@ -8680,6 +9174,11 @@ def manager_mini_delete_conversation(
     manager_user_id = int(claims.get("service_user_id") or 0)
     if manager_user_id <= 0:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
+    _ensure_manager_can_delete_chats(
+        db,
+        workspace_id=workspace_id,
+        manager_user_id=manager_user_id,
+    )
     deleted = delete_conversation(
         db,
         conversation_id=conversation_id,
