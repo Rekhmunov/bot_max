@@ -525,6 +525,7 @@ class MaxClient:
         user_id: str | None = None,
         images: list[tuple[str, bytes]],
         text: str | None = None,
+        text_format: str | None = None,
     ) -> dict[str, Any]:
         if not chat_id and not user_id:
             return {"success": False, "error": "chat_id_or_user_id_required"}
@@ -588,6 +589,7 @@ class MaxClient:
                     user_id=user_id,
                     text=(text if text else None),
                     attachments=candidate_attachments,
+                    text_format=text_format,
                 )
                 response = result.get("response") if isinstance(result, dict) else {}
                 code = str(response.get("code") or "").strip().lower() if isinstance(response, dict) else ""
