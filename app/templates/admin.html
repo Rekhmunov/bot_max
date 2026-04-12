@@ -1503,64 +1503,6 @@
       <div class="hint">Попыток отправки: <b>{{ delivery_metrics.total_sent_attempts }}</b></div>
       <div class="hint">Среднее число повторов: <b>{{ delivery_metrics.avg_retry_count }}</b></div>
       <div class="hint">Неустранимых ошибок: <b>{{ delivery_metrics.permanent_failures }}</b></div>
-      {% if media_send_diagnostics %}
-      <div class="hint" style="margin-top:10px;">
-        Диагностика медиа/дедупликации за последние
-        <b>{{ media_send_diagnostics.window_minutes }}</b> мин.
-      </div>
-      <div class="diag-grid" style="margin-bottom:8px;">
-        <div class="diag-item">
-          <div class="label">Успех отправок</div>
-          <div class="value">{{ media_send_diagnostics.send_success_rate }}%</div>
-        </div>
-        <div class="diag-item">
-          <div class="label">Fallback (3+ фото)</div>
-          <div class="value">{{ media_send_diagnostics.fallback_markers }}</div>
-        </div>
-        <div class="diag-item">
-          <div class="label">Dedup сработал</div>
-          <div class="value">{{ media_send_diagnostics.deduped_outbox }}</div>
-        </div>
-        <div class="diag-item">
-          <div class="label">Media send (всего)</div>
-          <div class="value">{{ media_send_diagnostics.media_send_total }}</div>
-        </div>
-        <div class="diag-item">
-          <div class="label">Media send (успешно)</div>
-          <div class="value">{{ media_send_diagnostics.media_send_sent }}</div>
-        </div>
-        <div class="diag-item">
-          <div class="label">Media send (ошибки)</div>
-          <div class="value">{{ media_send_diagnostics.media_send_failed }}</div>
-        </div>
-        <div class="diag-item">
-          <div class="label">proto.payload ошибок</div>
-          <div class="value">{{ media_send_diagnostics.proto_payload_errors }}</div>
-        </div>
-        <div class="diag-item">
-          <div class="label">upload_token_missing</div>
-          <div class="value">{{ media_send_diagnostics.upload_token_missing_errors }}</div>
-        </div>
-        <div class="diag-item">
-          <div class="label">Лимит nginx (оценка)</div>
-          <div class="value">
-            {% if media_send_diagnostics.nginx_payload_ok_for_10_images %}
-              OK
-            {% else %}
-              Риск 413
-            {% endif %}
-          </div>
-        </div>
-        <div class="diag-item">
-          <div class="label">Оценка payload для 10 фото</div>
-          <div class="value">{{ media_send_diagnostics.estimated_payload_for_10_images_mb }} MB</div>
-        </div>
-        <div class="diag-item">
-          <div class="label">Текущий max_upload_bytes</div>
-          <div class="value">{{ media_send_diagnostics.max_upload_bytes_mb }} MB</div>
-        </div>
-      </div>
-      {% endif %}
     </section>
     {% endif %}
 
