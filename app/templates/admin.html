@@ -1370,7 +1370,20 @@
               <button type="button" data-format-action="link">Ссылка</button>
             </div>
           </div>
-          <textarea id="text" name="text" placeholder="Текст, который бот отправит по команде /price">{{ quick_reply_edit_target.text if quick_reply_edit_target else '' }}</textarea>
+          <textarea
+            id="text"
+            class="rich-editor-source"
+            name="text"
+            data-required="0"
+            placeholder="Текст, который бот отправит по команде /price"
+          >{{ quick_reply_edit_target.text if quick_reply_edit_target else '' }}</textarea>
+          <div
+            id="text_editor"
+            class="rich-editor"
+            contenteditable="true"
+            data-markdown-source-id="text"
+            data-placeholder="Текст, который бот отправит по команде /price"
+          ></div>
 
           <button class="btn" type="submit">
             {% if quick_reply_edit_target %}Сохранить изменения{% else %}Добавить быстрый ответ{% endif %}

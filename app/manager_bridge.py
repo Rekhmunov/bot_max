@@ -2124,6 +2124,7 @@ async def _dispatch_outbox(
         user_id: str | None = None,
         text: str | None = None,
         attachments: list[dict] | None = None,
+        text_format: str | None = None,
         max_attempts: int = 4,
     ) -> dict:
         wait_seconds = 0.6
@@ -2134,6 +2135,7 @@ async def _dispatch_outbox(
                 user_id=user_id,
                 text=text,
                 attachments=attachments,
+                text_format=text_format,
             )
             code = ""
             response = result_value.get("response") if isinstance(result_value, dict) else {}
@@ -2190,6 +2192,7 @@ async def _dispatch_outbox(
                         chat_id=target_chat_id,
                         images=images,
                         text=str(payload.get("text")) if payload.get("text") is not None else None,
+                        text_format=str(payload.get("format") or "").strip().lower() or None,
                     )
                     if isinstance(images_result, dict) and (
                         str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
@@ -2208,6 +2211,7 @@ async def _dispatch_outbox(
                             chat_id=target_chat_id,
                             text=str(payload.get("text")) if payload.get("text") is not None else None,
                             attachments=_resolve_fallback_attachments(),
+                            text_format=str(payload.get("format") or "").strip().lower() or None,
                         )
                     return images_result
             attachments_to_send = (
@@ -2219,6 +2223,7 @@ async def _dispatch_outbox(
                 chat_id=target_chat_id,
                 text=str(payload.get("text")) if payload.get("text") is not None else None,
                 attachments=attachments_to_send,
+                text_format=str(payload.get("format") or "").strip().lower() or None,
             )
         return {"success": False, "error": "unsupported_operation", "operation": item.operation}
 
@@ -2267,6 +2272,7 @@ async def _dispatch_outbox(
                         user_id=target_user_id,
                         images=images,
                         text=str(payload.get("text")) if payload.get("text") is not None else None,
+                        text_format=str(payload.get("format") or "").strip().lower() or None,
                     )
                     if isinstance(images_result, dict) and (
                         str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
@@ -2285,6 +2291,7 @@ async def _dispatch_outbox(
                             user_id=target_user_id,
                             text=str(payload.get("text")) if payload.get("text") is not None else None,
                             attachments=_resolve_fallback_attachments(),
+                            text_format=str(payload.get("format") or "").strip().lower() or None,
                         )
                     return images_result
             attachments_to_send = (
@@ -2296,6 +2303,7 @@ async def _dispatch_outbox(
                 user_id=target_user_id,
                 text=str(payload.get("text")) if payload.get("text") is not None else None,
                 attachments=attachments_to_send,
+                text_format=str(payload.get("format") or "").strip().lower() or None,
             )
         return {"success": False, "error": "unsupported_operation", "operation": item.operation}
 
@@ -2617,6 +2625,7 @@ async def enqueue_and_process_send_media_group(
     target_user_id: str | None = None,
     photo_urls: list[str],
     text: str = "",
+    text_format: str | None = None,
     source: str,
 ) -> bool:
     urls = [str(item).strip() for item in (photo_urls or []) if str(item).strip()]
@@ -2660,13 +2669,14 @@ async def enqueue_and_process_send_media_group(
         payload=(
             {
                 "text": (text or "").strip() or None,
+                "format": text_format,
                 "images": [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads],
                 # Keep URL attachments even on byte-upload path so fallback
                 # after upload_token_missing can resend without payload loss.
                 "attachments": attachments,
             }
             if image_payloads
-            else {"text": (text or "").strip() or None, "attachments": attachments}
+            else {"text": (text or "").strip() or None, "format": text_format, "attachments": attachments}
         ),
     )
     claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
@@ -2724,6 +2734,7 @@ async def queue_only_send_media_group(
     target_user_id: str | None = None,
     photo_urls: list[str],
     text: str = "",
+    text_format: str | None = None,
     source: str,
     scheduled_for: datetime | None = None,
 ) -> None:
@@ -2770,12 +2781,13 @@ async def queue_only_send_media_group(
         payload=(
             {
                 "text": (text or "").strip() or None,
+                "format": text_format,
                 "images": [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads],
                 # Preserve URL attachments for retry/fallback path.
                 "attachments": attachments,
             }
             if image_payloads
-            else {"text": (text or "").strip() or None, "attachments": attachments}
+            else {"text": (text or "").strip() or None, "format": text_format, "attachments": attachments}
         ),
         next_retry_at=next_retry_at,
     )
@@ -4202,6 +4214,7 @@ async def send_quick_reply_to_customer(
                 target_user_id=customer_user_id,
                 photo_urls=media_urls,
                 text=rendered_text,
+                text_format="markdown",
                 source=source,
             )
         else:
@@ -4212,6 +4225,7 @@ async def send_quick_reply_to_customer(
                 target_user_id=customer_user_id,
                 photo_urls=media_urls,
                 text=rendered_text,
+                text_format="markdown",
                 source=source,
             )
             ok = True
@@ -6225,6 +6239,7 @@ async def send_admin_chat_message(
                 target_user_id=conversation.customer_account_id,
                 photo_urls=image_urls,
                 text=(text or "").strip(),
+                text_format="markdown",
                 source="bot_system",
                 scheduled_for=scheduled_for,
             )
@@ -6237,6 +6252,7 @@ async def send_admin_chat_message(
                 target_user_id=conversation.customer_account_id,
                 photo_urls=image_urls,
                 text=(text or "").strip(),
+                text_format="markdown",
                 source="bot_system",
             )
             if ok:
