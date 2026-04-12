@@ -233,6 +233,9 @@
       max-height: 0;
       pointer-events: none;
     }
+    .settings-collapsible-initializing .card-collapsible-body {
+      transition: none !important;
+    }
     .card.is-collapsed {
       padding-bottom: 0;
     }
@@ -1742,6 +1745,7 @@
       if (!isSettingsUi) return;
       const grid = document.querySelector(".grid");
       if (!(grid instanceof HTMLElement)) return;
+      grid.classList.add("settings-collapsible-initializing");
 
       const desiredOrder = settingsUiMode === "manager"
         ? ["quick-replies"]
@@ -1816,7 +1820,8 @@
         header.setAttribute("role", "button");
         header.setAttribute("aria-controls", body.id);
 
-        const setExpanded = (expanded) => {
+        const setExpanded = (expanded, options = {}) => {
+          const animate = options.animate !== false;
           section.classList.toggle("is-collapsed", !expanded);
           toggleBtn.textContent = expanded ? "▾" : "▸";
           toggleBtn.setAttribute("aria-expanded", expanded ? "true" : "false");
@@ -1825,6 +1830,11 @@
             persistOpenBlock(blockKey);
           }
           body.classList.toggle("is-open", expanded);
+          if (!animate) {
+            body.hidden = !expanded;
+            body.style.maxHeight = expanded ? "none" : "";
+            return;
+          }
           if (expanded) {
             body.hidden = false;
             const targetHeight = `${body.scrollHeight}px`;
@@ -1856,7 +1866,7 @@
 
         // Keep the submitted block open after save. Others stay collapsed by default.
         const shouldStartExpanded = Boolean(blockKey && savedOpenBlock === blockKey);
-        setExpanded(shouldStartExpanded);
+        setExpanded(shouldStartExpanded, { animate: false });
         toggleBtn.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -1897,6 +1907,9 @@
             });
           });
         }
+      });
+      window.requestAnimationFrame(() => {
+        grid.classList.remove("settings-collapsible-initializing");
       });
     })();
 
