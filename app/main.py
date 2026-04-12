@@ -8560,6 +8560,56 @@ def manager_mini_move_folder(
     )
 
 
+@app.post("/mini/manager/chats/{conversation_id}/delete-user", response_class=RedirectResponse)
+def manager_mini_delete_conversation(
+    request: Request,
+    conversation_id: int,
+    token: str,
+    q: str = Form(""),
+    view: str = Form(""),
+    folder_id: int | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="mini_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 4),
+    )
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    manager_user_id = int(claims.get("service_user_id") or 0)
+    if manager_user_id <= 0:
+        raise HTTPException(status_code=403, detail="Недостаточно прав")
+    deleted = delete_conversation(
+        db,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+    )
+    if deleted:
+        db.add(
+            AuditLog(
+                workspace_id=workspace_id,
+                actor_user_id=manager_user_id,
+                action="customer_deleted",
+                object_type="conversation",
+                object_id=str(conversation_id),
+                details_json=safe_json_dumps({"source": "mini_manager_chats"}),
+            )
+        )
+        db.commit()
+    suffix = "1" if deleted else "0"
+    return RedirectResponse(
+        url=_manager_mini_url(
+            token=token,
+            q=q,
+            view=view,
+            folder_id=folder_id,
+            extra=f"removed={suffix}",
+        ),
+        status_code=302,
+    )
+
+
 @app.post("/mini/manager/chats/{conversation_id}/pin", response_class=RedirectResponse)
 def manager_mini_pin_chat(
     request: Request,

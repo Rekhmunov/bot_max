@@ -2394,7 +2394,7 @@
               </div>
             {% endif %}
           </div>
-          {% if show_delete_user or show_rename_user or show_block_user %}
+          {% if show_rename_user or show_block_user %}
             <button
               type="button"
               id="header-menu-btn"
@@ -2631,32 +2631,8 @@
     </div>
   {% endif %}
 
-  {% if active_thread and (show_delete_user or show_rename_user or show_block_user) %}
+  {% if active_thread and (show_rename_user or show_block_user) %}
     <div class="context-menu header-context-menu" id="header-context-menu"></div>
-
-    {% if show_delete_user %}
-      <div class="user-pop" id="delete-user-popup">
-        <div class="user-pop-card">
-          <h3>Удалить чат?</h3>
-          <div class="thread-meta">Будет удален диалог и история сообщений этого чата.</div>
-          <form
-            method="post"
-            action="{{ delete_user_action_prefix }}{{ active_thread.conversation_id }}/delete-user{{ endpoint_query_suffix }}"
-            data-soft-nav
-          >
-            <input type="hidden" name="q" value="{{ query }}" />
-            <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
-            {% if folder_filter is not none %}
-              <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
-            {% endif %}
-            <div class="user-pop-actions">
-              <button type="button" class="user-pop-cancel" data-cancel-delete-user>Отмена</button>
-              <button type="submit" class="user-pop-submit">Удалить чат</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    {% endif %}
 
     {% if show_block_user and not active_thread.is_blocked %}
       <div class="user-pop" id="block-user-popup">
@@ -3830,6 +3806,7 @@
 
       const folders = {{ chat_folders | tojson }};
       const markUnreadPrefix = "{{ mark_unread_prefix }}";
+      const deleteConversationPrefix = "{{ delete_user_action_prefix }}";
       const moveFolderPrefix = "{{ move_folder_prefix }}";
       const pinPrefix = "{{ pin_prefix }}";
       const unpinPrefix = "{{ unpin_prefix }}";
@@ -3840,6 +3817,7 @@
       const currentQ = encodeURIComponent("{{ query }}");
       const currentView = encodeURIComponent("{{ 'chat' if mobile_chat_view else '' }}");
       const currentFolderId = {{ folder_filter if folder_filter is not none else "null" }};
+      const showDeleteConversation = {{ "true" if show_delete_user else "false" }};
       let selectedThreadId = null;
 
       const ctx = document.createElement("div");
@@ -4089,7 +4067,40 @@
             window.location.reload();
           }
         });
-        ctx.appendChild(pinBtn);
+        const deleteBtn = document.createElement("button");
+        deleteBtn.type = "button";
+        deleteBtn.textContent = "Удалить чат";
+        deleteBtn.addEventListener("click", async () => {
+          hideCtx();
+          if (!showDeleteConversation) return;
+          const confirmed = window.confirm("Удалить чат и всю переписку/медиа этого чата?");
+          if (!confirmed) return;
+          if (typeof window.__chatCaptureMessagesScrollState === "function") {
+            window.__chatCaptureMessagesScrollState();
+          }
+          const response = await fetch(`${deleteConversationPrefix}${threadId}/delete-user${endpointQuerySuffix}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: `q=${currentQ}&view=${currentView}${currentFolderParam()}`,
+          });
+          if (window.__chatSoftRenderFromResponse) {
+            await window.__chatSoftRenderFromResponse(response, { replaceHistory: true });
+          } else {
+            window.location.reload();
+          }
+        });
+
+        // Desktop context menu: delete after pin/unpin.
+        // Mobile list menu (3 dots): delete before pin/unpin.
+        if (showDeleteConversation && isTouchLikeViewport()) {
+          ctx.appendChild(deleteBtn);
+          ctx.appendChild(pinBtn);
+        } else {
+          ctx.appendChild(pinBtn);
+          if (showDeleteConversation) {
+            ctx.appendChild(deleteBtn);
+          }
+        }
 
         placeFixedMenu(ctx, x, y);
       };
@@ -4302,11 +4313,9 @@
       const headerMenu = document.getElementById("header-context-menu");
       if (!headerMenuBtn || !headerMenu) return;
 
-      const showDeleteUser = {{ "true" if show_delete_user else "false" }};
       const showRenameUser = {{ "true" if show_rename_user else "false" }};
       const showBlockUser = {{ "true" if show_block_user else "false" }};
       const isBlockedThread = {{ "true" if active_thread and active_thread.is_blocked else "false" }};
-      const deletePopup = document.getElementById("delete-user-popup");
       const renamePopup = document.getElementById("rename-user-popup");
       const blockPopup = document.getElementById("block-user-popup");
       const unblockPopup = document.getElementById("unblock-user-popup");
@@ -4330,14 +4339,6 @@
       const hideHeaderMenu = () => {
         headerMenu.style.display = "none";
         headerMenu.innerHTML = "";
-      };
-      const openDeletePopup = () => {
-        if (!deletePopup) return;
-        deletePopup.style.display = "flex";
-      };
-      const closeDeletePopup = () => {
-        if (!deletePopup) return;
-        deletePopup.style.display = "none";
       };
       const openBlockPopup = () => {
         if (!blockPopup) return;
@@ -4377,13 +4378,6 @@
           renameBtn.setAttribute("data-open-rename-user", "1");
           headerMenu.appendChild(renameBtn);
         }
-        if (showDeleteUser) {
-          const deleteBtn = document.createElement("button");
-          deleteBtn.type = "button";
-          deleteBtn.textContent = "Удалить чат";
-          deleteBtn.setAttribute("data-open-delete-user", "1");
-          headerMenu.appendChild(deleteBtn);
-        }
         if (showBlockUser) {
           const blockBtn = document.createElement("button");
           blockBtn.type = "button";
@@ -4411,11 +4405,6 @@
       headerMenu.addEventListener("click", (e) => {
         const target = e.target;
         if (!(target instanceof HTMLElement)) return;
-        if (target.closest("[data-open-delete-user]")) {
-          hideHeaderMenu();
-          openDeletePopup();
-          return;
-        }
         if (target.closest("[data-open-rename-user]")) {
           hideHeaderMenu();
           openRenamePopup();
@@ -4432,9 +4421,6 @@
         }
       });
 
-      document.querySelectorAll("[data-cancel-delete-user]").forEach((btn) => {
-        btn.addEventListener("click", closeDeletePopup);
-      });
       document.querySelectorAll("[data-cancel-rename-user]").forEach((btn) => {
         btn.addEventListener("click", closeRenamePopup);
       });
@@ -4443,9 +4429,6 @@
       });
       document.querySelectorAll("[data-cancel-unblock-user]").forEach((btn) => {
         btn.addEventListener("click", closeUnblockPopup);
-      });
-      deletePopup?.addEventListener("click", (e) => {
-        if (e.target === deletePopup) closeDeletePopup();
       });
       renamePopup?.addEventListener("click", (e) => {
         if (e.target === renamePopup) closeRenamePopup();
