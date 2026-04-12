@@ -1766,8 +1766,25 @@
         grid.appendChild(section);
       });
 
+      const OPEN_BLOCK_STORAGE_KEY = "settings-open-block";
+      const savedOpenBlock = (() => {
+        try {
+          return String(window.sessionStorage.getItem(OPEN_BLOCK_STORAGE_KEY) || "").trim();
+        } catch (_) {
+          return "";
+        }
+      })();
+      const persistOpenBlock = (blockKey) => {
+        try {
+          const normalized = String(blockKey || "").trim();
+          if (!normalized) return;
+          window.sessionStorage.setItem(OPEN_BLOCK_STORAGE_KEY, normalized);
+        } catch (_) {}
+      };
+
       let bodyIdSeq = 1;
       orderedSections.forEach((section) => {
+        const blockKey = String(section.getAttribute("data-settings-block") || "").trim();
         const header = section.querySelector(".card-head");
         if (!(header instanceof HTMLElement)) return;
         const title = header.querySelector(".card-title");
@@ -1834,8 +1851,9 @@
           setExpanded(!expandedNow);
         };
 
-        // Client settings blocks are collapsed by default.
-        setExpanded(false);
+        // Keep the submitted block open after save. Others stay collapsed by default.
+        const shouldStartExpanded = Boolean(blockKey && savedOpenBlock === blockKey);
+        setExpanded(shouldStartExpanded);
         toggleBtn.addEventListener("click", (event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -1856,6 +1874,14 @@
           if (event.key !== "Enter" && event.key !== " ") return;
           event.preventDefault();
           toggleExpanded();
+        });
+
+        const sectionForms = Array.from(section.querySelectorAll("form"));
+        sectionForms.forEach((form) => {
+          if (!(form instanceof HTMLFormElement)) return;
+          form.addEventListener("submit", () => {
+            persistOpenBlock(blockKey);
+          });
         });
       });
     })();
