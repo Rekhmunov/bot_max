@@ -1102,12 +1102,8 @@
               >Проверить</button>
               <span class="storage-health-status" style="margin-left:6px;"></span>
               <div class="hint storage-health-details" style="margin-top:4px;">
-                backend: <code>{{ storage_health.provider or "local" }}</code>
-                {% if storage_health.mode %}
-                  · mode: <code>{{ storage_health.mode }}</code>
-                {% endif %}
                 {% if storage_health.error %}
-                  · <span style="color:#991b1b;">{{ storage_health.error }}</span>
+                  <span style="color:#991b1b;">{{ storage_health.error }}</span>
                 {% endif %}
               </div>
             </div>
@@ -1997,12 +1993,8 @@
           const summary = String(health.summary || (ok ? "OK" : "Ошибка"));
           setStatus(summary, !ok);
           if (detailsEl instanceof HTMLElement) {
-            const provider = String(health.provider || "local");
-            const mode = String(health.mode || "");
             const error = String(health.error || "");
-            let html = `backend: <code>${provider}</code>`;
-            if (mode) html += ` · mode: <code>${mode}</code>`;
-            if (error) html += ` · <span style="color:#991b1b;">${error}</span>`;
+            const html = error ? `<span style="color:#991b1b;">${error}</span>` : "";
             detailsEl.innerHTML = html;
           }
         } catch (_) {
