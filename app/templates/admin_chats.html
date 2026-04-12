@@ -5042,6 +5042,47 @@
           unreadWithoutFolderCount: initialUnreadWithoutFolderCount,
         });
       }
+      const escapeHtml = (value) => (
+        String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+      );
+      const markdownToSafeHtml = (markdownValue) => {
+        let html = escapeHtml(markdownValue || "");
+        const stash = [];
+        const save = (value) => {
+          const key = `__MD_TOKEN_${stash.length}__`;
+          stash.push(value);
+          return key;
+        };
+        html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, (_m, text, url) => {
+          const safeUrl = escapeHtml(String(url || ""));
+          return save(`<a href="${safeUrl}" target="_blank" rel="noopener noreferrer">${text}</a>`);
+        });
+        html = html.replace(/`([^`]+)`/g, (_m, text) => `<code>${text}</code>`);
+        html = html.replace(/\+\+([^+]+)\+\+/g, (_m, text) => `<u>${text}</u>`);
+        html = html.replace(/\*\*([^*]+)\*\*/g, (_m, text) => `<strong>${text}</strong>`);
+        html = html.replace(/~~([^~]+)~~/g, (_m, text) => `<s>${text}</s>`);
+        html = html.replace(/\*([^*\n]+)\*/g, (_m, text) => `<em>${text}</em>`);
+        html = html.replace(/\n/g, "<br>");
+        html = html.replace(/__MD_TOKEN_(\d+)__/g, (_m, idx) => stash[Number(idx)] || "");
+        return html;
+      };
+      const applyMarkdownFormattingToExistingBubbles = () => {
+        const textNodes = Array.from(document.querySelectorAll(".messages-wrap .bubble .bubble-text"));
+        textNodes.forEach((textNode) => {
+          if (!(textNode instanceof HTMLElement)) return;
+          const bubble = textNode.closest(".bubble");
+          const sourceText = (
+            bubble instanceof HTMLElement
+              ? String(bubble.dataset.messageText || "")
+              : String(textNode.textContent || "")
+          );
+          textNode.innerHTML = markdownToSafeHtml(sourceText);
+        });
+      };
       const formatScheduledLabel = (scheduledAtRaw) => {
         const raw = String(scheduledAtRaw || "").trim();
         if (!raw) return "";
@@ -5111,7 +5152,7 @@
         if (text) {
           const textNode = document.createElement("div");
           textNode.className = "bubble-text";
-          textNode.textContent = text;
+          textNode.innerHTML = markdownToSafeHtml(text);
           bubble.appendChild(textNode);
         }
 
@@ -5255,6 +5296,7 @@
         }
         return true;
       };
+      applyMarkdownFormattingToExistingBubbles();
       let deferredLastMessageId = 0;
       let deferredIncomingCount = 0;
 
