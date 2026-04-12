@@ -830,10 +830,10 @@ async def _try_mark_chat_seen(
     client: MaxClient,
     chat_id: str,
     workspace_id: int,
-    sender_id: str,
-    update_type: str,
-    message_mid: str | None,
-    event_uid: str | None,
+    sender_id: str = "",
+    update_type: str = "",
+    message_mid: str | None = None,
+    event_uid: str | None = None,
 ) -> None:
     chat_value = str(chat_id or "").strip()
     if not chat_value:
@@ -873,6 +873,45 @@ async def _try_mark_chat_seen(
         event_uid=str(event_uid or ""),
         status_code=result.get("status_code"),
         error=_extract_max_error_message(result) or result.get("error") or result.get("message"),
+    )
+
+
+async def _try_mark_chat_seen_from_manager_read(
+    *,
+    db: Session,
+    workspace_id: int,
+    conversation_id: int,
+    chat_id: str,
+    sender_id: str = "",
+) -> None:
+    chat_value = str(chat_id or "").strip()
+    if not chat_value:
+        _read_flow_log(
+            "mark_seen_skipped",
+            reason="chat_id_missing_on_manager_read",
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+        )
+        return
+    settings_row = get_or_create_settings(db, workspace_id=workspace_id)
+    client, client_error = _workspace_client_or_error(settings_row)
+    if client is None:
+        _read_flow_log(
+            "mark_seen_skipped",
+            reason="client_unavailable",
+            workspace_id=workspace_id,
+            conversation_id=conversation_id,
+            error=client_error or "",
+        )
+        return
+    await _try_mark_chat_seen(
+        client=client,
+        chat_id=chat_value,
+        workspace_id=workspace_id,
+        sender_id=sender_id,
+        update_type="manager_mark_read",
+        message_mid=None,
+        event_uid=None,
     )
 
 
@@ -8332,7 +8371,17 @@ async def _render_chat_workspace(
     opened_unread_same = request.query_params.get("opened_same_unread") == "1"
     if active_thread:
         if mark_read_requested and not opened_unread_same:
+            thread_chat_id = str(getattr(active_thread, "chat_id", "") or "").strip()
+            thread_sender_id = str(getattr(active_thread, "customer_account_id", "") or "").strip()
             mark_thread_read(db, active_thread.conversation_id, workspace_id=workspace_id)
+            with suppress(Exception):
+                await _try_mark_chat_seen_from_manager_read(
+                    db=db,
+                    workspace_id=workspace_id,
+                    conversation_id=int(active_thread.conversation_id),
+                    chat_id=thread_chat_id,
+                    sender_id=thread_sender_id,
+                )
             try:
                 setattr(active_thread, "is_unread", False)
             except Exception:
@@ -9060,19 +9109,6 @@ async def max_webhook(
         settings=settings_db,
         event=event,
     )
-    # Auto-read acknowledgement in customer<->bot dialog:
-    # immediately mark incoming customer messages as seen by bot
-    # so buyer can receive double-check status in MAX client.
-    with suppress(Exception):
-        await _try_mark_chat_seen(
-            client=max_client,
-            chat_id=event.chat_id,
-            workspace_id=workspace_id,
-            sender_id=event.sender_id,
-            update_type=event.update_type or "",
-            message_mid=event.message_mid,
-            event_uid=event_uid,
-        )
     # This branch handles non-admin/non-manager, non-read events,
     # i.e. customer-originated message flow. Always emit WS hint.
     with suppress(Exception):
