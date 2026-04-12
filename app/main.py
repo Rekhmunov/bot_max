@@ -813,6 +813,18 @@ def _read_flow_log(stage: str, **kwargs: object) -> None:
         logger.info("[READ_FLOW] %s", stage)
 
 
+def _ws_hint_log(stage: str, **kwargs: object) -> None:
+    try:
+        details = ", ".join(f"{key}={repr(value)}" for key, value in kwargs.items())
+    except Exception:
+        details = ""
+    logger = logging.getLogger(__name__)
+    if details:
+        logger.info("[WS_HINT] %s: %s", stage, details)
+    else:
+        logger.info("[WS_HINT] %s", stage)
+
+
 def _user_friendly_bot_connection_error() -> str:
     return "Подключение бота требует проверки, обратитесь в поддержку"
 
@@ -7898,6 +7910,13 @@ async def _broadcast_workspace_chat_update(
             conversation_id=conversation_value,
             min_interval_ms=200,
         ):
+            _ws_hint_log(
+                "skip_dedupe",
+                workspace_id=workspace_value,
+                conversation_id=conversation_value,
+                source=source,
+                seq=seq_value,
+            )
             return
         if not chat_realtime_hub.should_emit_workspace_hint_rate_limited(
             workspace_id=workspace_value,
@@ -7905,15 +7924,23 @@ async def _broadcast_workspace_chat_update(
             max_events_per_window=12,
         ):
             # If burst limiter is hit, ask clients to perform a safe polling resync.
-            await chat_realtime_hub.broadcast_workspace(
+            delivered = await chat_realtime_hub.broadcast_workspace(
                 workspace_id=workspace_value,
                 event=_ws_resync_requested_event(
                     workspace_id=workspace_value,
                     source="rate_limited_hint",
                 ),
             )
+            _ws_hint_log(
+                "resync_requested_rate_limited",
+                workspace_id=workspace_value,
+                conversation_id=conversation_value,
+                source=source,
+                seq=seq_value,
+                delivered=delivered,
+            )
             return
-        await chat_realtime_hub.broadcast_workspace(
+        delivered = await chat_realtime_hub.broadcast_workspace(
             workspace_id=workspace_value,
             event=_ws_incoming_hint_event(
                 workspace_id=workspace_value,
@@ -7922,9 +7949,17 @@ async def _broadcast_workspace_chat_update(
                 seq=seq_value,
             ),
         )
+        _ws_hint_log(
+            "incoming_hint_emitted",
+            workspace_id=workspace_value,
+            conversation_id=conversation_value,
+            source=source,
+            seq=seq_value,
+            delivered=delivered,
+        )
     except Exception:
         # Realtime must never break normal webhook/sync flow.
-        pass
+        logging.getLogger(__name__).exception("[WS_HINT] broadcast_error")
 
 
 def _resolve_conversation_hint_id(
@@ -8897,6 +8932,14 @@ async def max_webhook(
                 chat_id=event.chat_id,
                 sender_id=event.sender_id,
             )
+        _ws_hint_log(
+            "scheduled_from_webhook",
+            workspace_id=workspace_id,
+            conversation_id=conversation_hint_id,
+            update_type=event.update_type,
+            chat_id=event.chat_id,
+            sender_id=event.sender_id,
+        )
         asyncio.create_task(
             _broadcast_workspace_chat_update(
                 workspace_id=workspace_id,
