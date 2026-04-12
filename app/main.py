@@ -7703,6 +7703,33 @@ def _folder_unread_counts(threads: list[object]) -> dict[int, int]:
     return counts
 
 
+def _unread_chat_totals(threads: list[object]) -> tuple[int, int]:
+    """
+    Returns:
+      - total unread chats
+      - unread chats without any folder
+    """
+    unread_total = 0
+    unread_without_folder = 0
+    for item in threads:
+        if not bool(getattr(item, "is_unread", False)):
+            continue
+        unread_total += 1
+        raw_folder_ids = getattr(item, "folder_ids", []) or []
+        has_any_folder = False
+        for value in raw_folder_ids:
+            try:
+                folder_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if folder_id > 0:
+                has_any_folder = True
+                break
+        if not has_any_folder:
+            unread_without_folder += 1
+    return unread_total, unread_without_folder
+
+
 def _messages_signature(messages: list[object]) -> str:
     signature_source = "|".join(
         (
@@ -7743,13 +7770,13 @@ def _build_chat_updates_payload(
     threads_signature: str = "",
     messages_signature: str = "",
 ) -> dict[str, object]:
-    threads = load_chat_threads(
+    all_threads = load_chat_threads(
         db,
         query=query,
         workspace_id=workspace_id,
         service_user_id=int(service_user_id or 0),
     )
-    threads = _filter_threads_by_folder(threads, folder_id)
+    threads = _filter_threads_by_folder(all_threads, folder_id)
 
     active_thread = _select_active_thread(
         threads=threads,
@@ -7785,6 +7812,8 @@ def _build_chat_updates_payload(
     current_messages_signature = _messages_signature(
         _messages_signature_window(messages, limit=_CHAT_UPDATES_MESSAGES_LIMIT)
     )
+    folder_unread_counts = _folder_unread_counts(all_threads)
+    unread_total_count, unread_without_folder_count = _unread_chat_totals(all_threads)
 
     active_last_message_id = int(messages[-1].id) if messages else 0
     previous_last_message_id = int(last_message_id or 0)
@@ -7817,6 +7846,9 @@ def _build_chat_updates_payload(
         "threads_changed": threads_changed,
         "threads": [_thread_summary_dict(item) for item in threads],
         "messages": [_message_summary_dict(item) for item in messages],
+        "folder_unread_counts": {int(key): int(value) for key, value in folder_unread_counts.items()},
+        "unread_total_count": int(unread_total_count),
+        "unread_without_folder_count": int(unread_without_folder_count),
         "now_utc": datetime.utcnow().isoformat(),
     }
 
@@ -8264,6 +8296,7 @@ async def _render_chat_workspace(
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
         _hydrate_message_media_urls(db, messages)
     folder_unread_counts = _folder_unread_counts(all_threads)
+    unread_total_count, unread_without_folder_count = _unread_chat_totals(all_threads)
     message_summaries = [_message_summary_dict(item) for item in messages]
     mobile_chat_view = view.strip().lower() == "chat"
     threads_signature = _threads_signature(threads)
@@ -8277,6 +8310,9 @@ async def _render_chat_workspace(
         ),
         "threads_signature": threads_signature,
         "threads_count": len(threads),
+        "folder_unread_counts": {int(key): int(value) for key, value in folder_unread_counts.items()},
+        "unread_total_count": int(unread_total_count),
+        "unread_without_folder_count": int(unread_without_folder_count),
     }
 
     quick_reply_owner_id = _chat_scope_quick_reply_owner_id(
@@ -8310,6 +8346,8 @@ async def _render_chat_workspace(
             }
             for folder in list_chat_folders(db, workspace_id=workspace_id)
         ],
+        "unread_total_count": int(unread_total_count),
+        "unread_without_folder_count": int(unread_without_folder_count),
         "pinned_limit": _pinned_chats_limit_for_workspace(db, workspace_id=workspace_id),
         "pinned_used": len([item for item in threads if bool(getattr(item, "is_pinned", False))]),
         "ui": ui,
