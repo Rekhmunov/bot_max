@@ -1821,6 +1821,9 @@
           toggleBtn.textContent = expanded ? "▾" : "▸";
           toggleBtn.setAttribute("aria-expanded", expanded ? "true" : "false");
           header.setAttribute("aria-expanded", expanded ? "true" : "false");
+          if (expanded) {
+            persistOpenBlock(blockKey);
+          }
           body.classList.toggle("is-open", expanded);
           if (expanded) {
             body.hidden = false;
@@ -1883,6 +1886,17 @@
             persistOpenBlock(blockKey);
           });
         });
+        if (blockKey === "quick-replies") {
+          const quickReplyActionButtons = Array.from(
+            section.querySelectorAll(".quick-replies-table .inline-edit-form button, .quick-replies-table form .delete")
+          );
+          quickReplyActionButtons.forEach((button) => {
+            if (!(button instanceof HTMLButtonElement)) return;
+            button.addEventListener("click", () => {
+              persistOpenBlock(blockKey);
+            });
+          });
+        }
       });
     })();
 
