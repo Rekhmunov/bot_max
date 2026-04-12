@@ -4641,9 +4641,9 @@
       let currentMessagesSignature = String(initialState.active_messages_signature || "");
       let inFlight = false;
       let suppressRefreshUntil = 0;
-      const basePollMs = 2800;
+      const basePollMs = 30000;
       const maxPollMs = 30000;
-      const wsKeepalivePollMs = 25000;
+      const wsKeepalivePollMs = basePollMs;
       let currentPollMs = basePollMs;
       let timer = null;
       let stopped = false;
@@ -5399,7 +5399,8 @@
           }
         });
       }
-      const wsEnabled = {{ "true" if ws_endpoint else "false" }};
+      // Polling-only mode: websocket realtime is intentionally disabled.
+      const wsEnabled = false;
       const wsEndpoint = "{{ ws_endpoint }}";
       const wsWatchPath = String(window.location.pathname || "");
       let wsSocket = null;
@@ -5633,7 +5634,7 @@
         };
       };
 
-      scheduleNext(900);
+      scheduleNext(basePollMs);
       wsDebugMode = isRealtimeDebugEnabled();
       logRealtimeDebug("debug_enabled", "set ?realtime_debug=1 or localStorage.chatRealtimeDebug=1");
       logRealtimeDebug("mode=polling-fallback", "initial");
