@@ -8886,21 +8886,22 @@ async def max_webhook(
         settings=settings_db,
         event=event,
     )
-    if bool(getattr(event, "is_from_customer", False)):
-        with suppress(Exception):
-            conversation_hint_id = _extract_conversation_id_from_result(result)
-            if conversation_hint_id is None or int(conversation_hint_id) <= 0:
-                conversation_hint_id = _resolve_conversation_hint_id(
-                    db,
-                    workspace_id=workspace_id,
-                    chat_id=event.chat_id,
-                    sender_id=event.sender_id,
-                )
-            asyncio.create_task(
-                _broadcast_workspace_chat_update(
-                    workspace_id=workspace_id,
-                    conversation_id=conversation_hint_id,
-                    source="incoming_customer_message",
-                )
+    # This branch handles non-admin/non-manager, non-read events,
+    # i.e. customer-originated message flow. Always emit WS hint.
+    with suppress(Exception):
+        conversation_hint_id = _extract_conversation_id_from_result(result)
+        if conversation_hint_id is None or int(conversation_hint_id) <= 0:
+            conversation_hint_id = _resolve_conversation_hint_id(
+                db,
+                workspace_id=workspace_id,
+                chat_id=event.chat_id,
+                sender_id=event.sender_id,
             )
+        asyncio.create_task(
+            _broadcast_workspace_chat_update(
+                workspace_id=workspace_id,
+                conversation_id=conversation_hint_id,
+                source="incoming_customer_message",
+            )
+        )
     return result
