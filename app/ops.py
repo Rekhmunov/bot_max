@@ -15,6 +15,7 @@ from app.models import (
     QuickReply,
     ServiceUser,
     Subscription,
+    TariffPlan,
     TenantAlert,
     Workspace,
 )
@@ -25,21 +26,116 @@ def _now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
 
 
+_UNLIMITED_LIMIT_VALUE = 1_000_000_000
+
+
+def _normalized_plan_code(value: str | None) -> str:
+    raw = str(value or "").strip().lower()
+    if raw == "trial":
+        return "basic"
+    return raw or "basic"
+
+
+def _resolve_plan_limits(
+    db: Session,
+    *,
+    plan_code: str,
+    fallback_sub: Subscription | None = None,
+) -> dict[str, int]:
+    normalized = _normalized_plan_code(plan_code)
+    plan = (
+        db.query(TariffPlan)
+        .filter(TariffPlan.code == normalized, TariffPlan.is_active.is_(True))
+        .first()
+    )
+    if plan is not None:
+        return {
+            "manager_limit": int(plan.manager_limit or 0),
+            "dialogs_limit": int(plan.dialogs_limit or 0),
+            "messages_per_month_limit": int(plan.messages_per_month_limit or 0),
+            "quick_replies_limit": int(plan.quick_replies_limit or 0),
+            "folders_limit": int(plan.folders_limit or 0),
+            "pinned_chats_limit": int(plan.pinned_chats_limit or 0),
+        }
+    if normalized == "unlimited":
+        return {
+            "manager_limit": _UNLIMITED_LIMIT_VALUE,
+            "dialogs_limit": _UNLIMITED_LIMIT_VALUE,
+            "messages_per_month_limit": _UNLIMITED_LIMIT_VALUE,
+            "quick_replies_limit": _UNLIMITED_LIMIT_VALUE,
+            "folders_limit": _UNLIMITED_LIMIT_VALUE,
+            "pinned_chats_limit": _UNLIMITED_LIMIT_VALUE,
+        }
+    sub = fallback_sub
+    return {
+        "manager_limit": int(getattr(sub, "manager_limit", 0) or 0),
+        "dialogs_limit": int(getattr(sub, "dialogs_limit", 0) or 0),
+        "messages_per_month_limit": int(getattr(sub, "messages_per_month_limit", 0) or 0),
+        "quick_replies_limit": int(getattr(sub, "quick_replies_limit", 0) or 0),
+        "folders_limit": int(getattr(sub, "folders_limit", 0) or 0),
+        "pinned_chats_limit": int(getattr(sub, "pinned_chats_limit", 0) or 0),
+    }
+
+
+def resolve_subscription_limits(db: Session, *, subscription: Subscription | None) -> dict[str, int]:
+    if subscription is None:
+        return {
+            "manager_limit": 0,
+            "dialogs_limit": 0,
+            "messages_per_month_limit": 0,
+            "quick_replies_limit": 0,
+            "folders_limit": 0,
+            "pinned_chats_limit": 0,
+        }
+    return _resolve_plan_limits(
+        db,
+        plan_code=getattr(subscription, "plan_code", None),
+        fallback_sub=subscription,
+    )
+
+
+def is_subscription_unlimited(db: Session, *, subscription: Subscription | None) -> bool:
+    if subscription is None:
+        return False
+    limits = resolve_subscription_limits(db, subscription=subscription)
+    return int(limits.get("manager_limit", 0) or 0) >= _UNLIMITED_LIMIT_VALUE
+
+
+def _default_plan_code(db: Session) -> str:
+    default_plan = (
+        db.query(TariffPlan)
+        .filter(TariffPlan.is_default.is_(True), TariffPlan.is_active.is_(True))
+        .order_by(TariffPlan.id.asc())
+        .first()
+    )
+    if default_plan is not None and str(default_plan.code or "").strip():
+        return _normalized_plan_code(default_plan.code)
+    return "basic"
+
+
 def get_or_create_subscription(db: Session, *, workspace_id: int) -> Subscription:
     sub = db.query(Subscription).filter(Subscription.workspace_id == workspace_id).first()
     if sub:
+        normalized_code = _normalized_plan_code(sub.plan_code)
+        if normalized_code != (sub.plan_code or ""):
+            sub.plan_code = normalized_code
+            db.add(sub)
+            db.commit()
+            db.refresh(sub)
         return sub
     now = _now()
+    default_code = _default_plan_code(db)
+    limits = _resolve_plan_limits(db, plan_code=default_code, fallback_sub=None)
     sub = Subscription(
         workspace_id=workspace_id,
-        plan_code="basic",
+        plan_code=default_code,
         status="active",
-        manager_limit=3,
-        dialogs_limit=500,
-        messages_per_month_limit=5000,
-        quick_replies_limit=10,
-        folders_limit=10,
-        pinned_chats_limit=5,
+        manager_limit=max(1, int(limits.get("manager_limit", 3) or 3)),
+        dialogs_limit=max(1, int(limits.get("dialogs_limit", 500) or 500)),
+        messages_per_month_limit=max(1, int(limits.get("messages_per_month_limit", 5000) or 5000)),
+        quick_replies_limit=max(1, int(limits.get("quick_replies_limit", 10) or 10)),
+        folders_limit=max(1, int(limits.get("folders_limit", 10) or 10)),
+        pinned_chats_limit=max(1, int(limits.get("pinned_chats_limit", 5) or 5)),
         current_period_start=now,
         current_period_end=now + timedelta(days=30),
         grace_until=now + timedelta(days=settings.default_grace_days),
@@ -76,7 +172,9 @@ def ensure_workspace_active_by_billing(db: Session, *, workspace_id: int) -> boo
 
 def can_add_manager(db: Session, *, workspace_id: int) -> tuple[bool, str]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    if (sub.plan_code or "").strip().lower() == "unlimited":
+    limits = resolve_subscription_limits(db, subscription=sub)
+    manager_limit = int(limits.get("manager_limit", 0) or 0)
+    if manager_limit >= _UNLIMITED_LIMIT_VALUE:
         return True, ""
     count = (
         db.query(ServiceUser)
@@ -87,24 +185,28 @@ def can_add_manager(db: Session, *, workspace_id: int) -> tuple[bool, str]:
         )
         .count()
     )
-    if count >= int(sub.manager_limit or 0):
+    if count >= manager_limit:
         return False, "manager_limit_exceeded"
     return True, ""
 
 
 def can_create_dialog(db: Session, *, workspace_id: int) -> tuple[bool, str]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    if (sub.plan_code or "").strip().lower() == "unlimited":
+    limits = resolve_subscription_limits(db, subscription=sub)
+    dialogs_limit = int(limits.get("dialogs_limit", 0) or 0)
+    if dialogs_limit >= _UNLIMITED_LIMIT_VALUE:
         return True, ""
     dialogs = db.query(Conversation).filter(Conversation.workspace_id == workspace_id).count()
-    if dialogs >= int(sub.dialogs_limit or 0):
+    if dialogs >= dialogs_limit:
         return False, "dialogs_limit_exceeded"
     return True, ""
 
 
 def can_send_message_this_month(db: Session, *, workspace_id: int) -> tuple[bool, str]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    if (sub.plan_code or "").strip().lower() == "unlimited":
+    limits = resolve_subscription_limits(db, subscription=sub)
+    month_limit = int(limits.get("messages_per_month_limit", 0) or 0)
+    if month_limit >= _UNLIMITED_LIMIT_VALUE:
         return True, ""
     now = _now()
     period_start = sub.current_period_start or (now - timedelta(days=30))
@@ -117,34 +219,40 @@ def can_send_message_this_month(db: Session, *, workspace_id: int) -> tuple[bool
         )
         .count()
     )
-    if sent_count >= int(sub.messages_per_month_limit or 0):
+    if sent_count >= month_limit:
         return False, "messages_limit_exceeded"
     return True, ""
 
 
 def can_create_quick_reply(db: Session, *, workspace_id: int) -> tuple[bool, str]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    if (sub.plan_code or "").strip().lower() == "unlimited":
+    limits = resolve_subscription_limits(db, subscription=sub)
+    quick_limit = int(limits.get("quick_replies_limit", 0) or 0)
+    if quick_limit >= _UNLIMITED_LIMIT_VALUE:
         return True, ""
     current = db.query(QuickReply).filter(QuickReply.workspace_id == workspace_id).count()
-    if current >= int(sub.quick_replies_limit or 0):
+    if current >= quick_limit:
         return False, "quick_replies_limit_exceeded"
     return True, ""
 
 
 def can_create_folder(db: Session, *, workspace_id: int) -> tuple[bool, str]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    if (sub.plan_code or "").strip().lower() == "unlimited":
+    limits = resolve_subscription_limits(db, subscription=sub)
+    folders_limit = int(limits.get("folders_limit", 0) or 0)
+    if folders_limit >= _UNLIMITED_LIMIT_VALUE:
         return True, ""
     current = db.query(ChatFolder).filter(ChatFolder.workspace_id == workspace_id).count()
-    if current >= int(sub.folders_limit or 0):
+    if current >= folders_limit:
         return False, "folders_limit_exceeded"
     return True, ""
 
 
 def can_pin_chat(db: Session, *, workspace_id: int, service_user_id: int) -> tuple[bool, str]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    if (sub.plan_code or "").strip().lower() == "unlimited":
+    limits = resolve_subscription_limits(db, subscription=sub)
+    pins_limit = int(limits.get("pinned_chats_limit", 0) or 0)
+    if pins_limit >= _UNLIMITED_LIMIT_VALUE:
         return True, ""
     current = (
         db.query(ConversationPin)
@@ -154,7 +262,7 @@ def can_pin_chat(db: Session, *, workspace_id: int, service_user_id: int) -> tup
         )
         .count()
     )
-    if current >= int(getattr(sub, "pinned_chats_limit", 0) or 0):
+    if current >= pins_limit:
         return False, "pinned_chats_limit_exceeded"
     return True, ""
 
@@ -253,19 +361,23 @@ def refresh_tenant_alerts(
     metrics: dict[str, int] | None = None,
 ) -> list[TenantAlert]:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    limits = resolve_subscription_limits(db, subscription=sub)
     metrics_map = metrics if isinstance(metrics, dict) else collect_tenant_metrics(db, workspace_id=workspace_id)
     thresholds = {
-        "managers_limit": (int(metrics_map.get("managers_active", 0)), int(sub.manager_limit or 0)),
-        "dialogs_limit": (int(metrics_map.get("dialogs_total", 0)), int(sub.dialogs_limit or 0)),
-        "messages_month_limit": (int(metrics_map.get("messages_month", 0)), int(sub.messages_per_month_limit or 0)),
+        "managers_limit": (int(metrics_map.get("managers_active", 0)), int(limits.get("manager_limit", 0) or 0)),
+        "dialogs_limit": (int(metrics_map.get("dialogs_total", 0)), int(limits.get("dialogs_limit", 0) or 0)),
+        "messages_month_limit": (
+            int(metrics_map.get("messages_month", 0)),
+            int(limits.get("messages_per_month_limit", 0) or 0),
+        ),
         "quick_replies_limit": (
             int(metrics_map.get("quick_replies_total", 0)),
-            int(sub.quick_replies_limit or 0),
+            int(limits.get("quick_replies_limit", 0) or 0),
         ),
-        "folders_limit": (int(metrics_map.get("folders_total", 0)), int(sub.folders_limit or 0)),
+        "folders_limit": (int(metrics_map.get("folders_total", 0)), int(limits.get("folders_limit", 0) or 0)),
         "pinned_chats_limit": (
             int(metrics_map.get("pins_total", 0)),
-            int(getattr(sub, "pinned_chats_limit", 0) or 0),
+            int(limits.get("pinned_chats_limit", 0) or 0),
         ),
     }
     created: list[TenantAlert] = []

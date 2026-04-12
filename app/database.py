@@ -690,6 +690,74 @@ def _ensure_lightweight_migrations() -> None:
                     "WHERE LOWER(COALESCE(status, '')) = 'trial'"
                 )
             )
+        if "tariff_plans" not in table_names:
+            conn.execute(
+                text(
+                    "CREATE TABLE tariff_plans ("
+                    "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                    "code VARCHAR(64) NOT NULL, "
+                    "name VARCHAR(255) DEFAULT '', "
+                    "description TEXT DEFAULT '', "
+                    "manager_limit INTEGER DEFAULT 3, "
+                    "dialogs_limit INTEGER DEFAULT 500, "
+                    "messages_per_month_limit INTEGER DEFAULT 5000, "
+                    "quick_replies_limit INTEGER DEFAULT 10, "
+                    "folders_limit INTEGER DEFAULT 10, "
+                    "pinned_chats_limit INTEGER DEFAULT 5, "
+                    "is_default INTEGER DEFAULT 0, "
+                    "is_active INTEGER DEFAULT 1, "
+                    "billing_product_code VARCHAR(128) DEFAULT '', "
+                    "billing_price_code VARCHAR(128) DEFAULT '', "
+                    "created_at DATETIME DEFAULT CURRENT_TIMESTAMP, "
+                    "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+                )
+            )
+            table_names.add("tariff_plans")
+        conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_tariff_plans_code "
+                "ON tariff_plans (code)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_tariff_plans_is_default "
+                "ON tariff_plans (is_default)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_tariff_plans_is_active "
+                "ON tariff_plans (is_active)"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT OR IGNORE INTO tariff_plans "
+                "(code, name, description, manager_limit, dialogs_limit, messages_per_month_limit, quick_replies_limit, folders_limit, pinned_chats_limit, is_default, is_active, billing_product_code, billing_price_code, created_at, updated_at) "
+                "VALUES "
+                "('basic', 'Начальный', 'Базовый тариф по умолчанию', 3, 500, 5000, 10, 10, 5, 1, 1, '', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP), "
+                "('unlimited', 'Безлимит', 'Тариф без ограничений', 1000000000, 1000000000, 1000000000, 1000000000, 1000000000, 1000000000, 0, 1, '', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE tariff_plans SET is_default = 0 WHERE LOWER(COALESCE(code, '')) <> 'basic' AND is_default = 1"
+            )
+        )
+        conn.execute(
+            text(
+                "UPDATE tariff_plans SET is_default = 1 WHERE LOWER(COALESCE(code, '')) = 'basic'"
+            )
+        )
+        if "subscriptions" in table_names:
+            conn.execute(
+                text(
+                    "UPDATE subscriptions "
+                    "SET plan_code = 'basic' "
+                    "WHERE plan_code IS NULL OR TRIM(plan_code) = '' OR LOWER(TRIM(plan_code)) = 'trial'"
+                )
+            )
         if "quick_replies" in table_names:
             qr_cols = {col["name"] for col in inspector.get_columns("quick_replies")}
             if "owner_user_id" not in qr_cols:

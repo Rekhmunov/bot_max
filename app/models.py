@@ -88,6 +88,27 @@ class Subscription(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class TariffPlan(Base):
+    __tablename__ = "tariff_plans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(255), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    manager_limit: Mapped[int] = mapped_column(Integer, default=3)
+    dialogs_limit: Mapped[int] = mapped_column(Integer, default=500)
+    messages_per_month_limit: Mapped[int] = mapped_column(Integer, default=5000)
+    quick_replies_limit: Mapped[int] = mapped_column(Integer, default=10)
+    folders_limit: Mapped[int] = mapped_column(Integer, default=10)
+    pinned_chats_limit: Mapped[int] = mapped_column(Integer, default=5)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    billing_product_code: Mapped[str] = mapped_column(String(128), default="")
+    billing_price_code: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class UserSession(Base):
     __tablename__ = "user_sessions"
 

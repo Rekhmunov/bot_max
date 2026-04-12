@@ -252,6 +252,12 @@
     "workspace_resumed": "Клиент возобновлен",
     "workspace_sessions_revoked": "Сессии клиента сброшены",
     "workspace_plan_updated": "План клиента обновлен",
+    "workspace_plan_reassigned": "Тариф клиента изменен",
+    "workspace_tariff_assigned": "Тариф клиента изменен",
+    "tariff_plan_created": "Тариф создан",
+    "tariff_plan_updated": "Тариф обновлен",
+    "tariff_default_changed": "Тариф по умолчанию изменен",
+    "tariff_plan_deleted": "Тариф удален",
     "workspace_deleted": "Клиент удален",
     "user_deleted": "Пользователь удален",
     "backup_created": "Резервная копия создана",
@@ -308,23 +314,6 @@
           <div class="kpi"><div class="label">Пользователи</div><div class="value">{{ stats.users_total }}</div></div>
           <div class="kpi"><div class="label">Активные сессии</div><div class="value">{{ stats.sessions_active }}</div></div>
           <div class="kpi"><div class="label">Открытые алерты</div><div class="value">{{ stats.alerts_open }}</div></div>
-        </section>
-        <section class="card">
-          <h2>Последние критичные события</h2>
-          <table>
-            <thead><tr><th>Время</th><th>Клиент</th><th>Действие</th><th>Объект</th><th>Подробности</th></tr></thead>
-            <tbody>
-              {% for item in audit_items %}
-                <tr>
-                  <td>{{ item.created_at }}</td>
-                  <td>{{ item.workspace_id or "-" }}</td>
-                  <td>{{ action_labels.get(item.action, item.action) }}</td>
-                  <td>{{ object_type_labels.get(item.object_type, item.object_type) }}#{{ item.object_id }}</td>
-                  <td>{{ item.details_json }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
         </section>
       {% endif %}
 
@@ -431,39 +420,116 @@
 
       {% if section == "plans" %}
         <section class="card">
-          <h2>Тарифы и лимиты</h2>
+          <h2>Тарифная сетка (по умолчанию для новых клиентов)</h2>
+          <form class="inline-form" method="post" action="/app/superadmin/tariffs" style="margin-bottom:12px;">
+            <div><label>Код тарифа</label><input name="code" value="" placeholder="basic-pro" required /></div>
+            <div><label>Название</label><input name="name" value="" placeholder="Базовый+" required /></div>
+            <div><label>Описание</label><input name="description" value="" placeholder="Краткое описание" /></div>
+            <div><label>Менеджеры</label><input type="number" min="1" name="manager_limit" value="3" required /></div>
+            <div><label>Диалоги</label><input type="number" min="1" name="dialogs_limit" value="500" required /></div>
+            <div><label>Сообщения/мес</label><input type="number" min="1" name="messages_per_month_limit" value="5000" required /></div>
+            <div><label>Быстрые ответы</label><input type="number" min="1" name="quick_replies_limit" value="10" required /></div>
+            <div><label>Папки</label><input type="number" min="1" name="folders_limit" value="10" required /></div>
+            <div><label>Закрепленные чаты</label><input type="number" min="1" name="pinned_chats_limit" value="5" required /></div>
+            <div><label>billing_product_code</label><input name="billing_product_code" value="" placeholder="prod_xxx" /></div>
+            <div><label>billing_price_code</label><input name="billing_price_code" value="" placeholder="price_xxx" /></div>
+            <div><button class="btn primary" type="submit">Создать тариф</button></div>
+          </form>
           <table>
-            <thead><tr><th>Клиент</th><th>План</th><th>Статус</th><th>Менеджеры</th><th>Диалоги</th><th>Сообщения/мес</th><th>Быстрые ответы</th><th>Папки</th><th>Закрепленные чаты</th><th>Изменить</th></tr></thead>
+            <thead><tr><th>Код</th><th>Название</th><th>Описание</th><th>По умолчанию</th><th>Статус</th><th>Лимиты</th><th>Billing коды</th><th>Управление</th></tr></thead>
+            <tbody>
+              {% for plan in tariff_rows %}
+                <tr>
+                  <td><code>{{ plan.code }}</code></td>
+                  <td>{{ plan.name }}</td>
+                  <td>{{ plan.description or "—" }}</td>
+                  <td>
+                    {% if plan.is_default %}
+                      <span class="badge ok">Да</span>
+                    {% else %}
+                      <form method="post" action="/app/superadmin/tariffs/{{ plan.id }}/set-default">
+                        <button class="btn" type="submit">Сделать по умолчанию</button>
+                      </form>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if plan.is_active %}
+                      <span class="badge ok">Активен</span>
+                    {% else %}
+                      <span class="badge warn">Отключен</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    M: {{ plan.manager_limit }} · D: {{ plan.dialogs_limit }} · Msg: {{ plan.messages_per_month_limit }}<br />
+                    QR: {{ plan.quick_replies_limit }} · F: {{ plan.folders_limit }} · Pin: {{ plan.pinned_chats_limit }}
+                  </td>
+                  <td>
+                    product: <code>{{ plan.billing_product_code or "—" }}</code><br />
+                    price: <code>{{ plan.billing_price_code or "—" }}</code>
+                  </td>
+                  <td>
+                    <form class="inline-form" method="post" action="/app/superadmin/tariffs/{{ plan.id }}" style="margin-bottom:6px;">
+                      <div><label>Название</label><input name="name" value="{{ plan.name }}" /></div>
+                      <div><label>Описание</label><input name="description" value="{{ plan.description }}" /></div>
+                      <div><label>Менеджеры</label><input type="number" min="1" name="manager_limit" value="{{ plan.manager_limit }}" /></div>
+                      <div><label>Диалоги</label><input type="number" min="1" name="dialogs_limit" value="{{ plan.dialogs_limit }}" /></div>
+                      <div><label>Сообщения/мес</label><input type="number" min="1" name="messages_per_month_limit" value="{{ plan.messages_per_month_limit }}" /></div>
+                      <div><label>Быстрые ответы</label><input type="number" min="1" name="quick_replies_limit" value="{{ plan.quick_replies_limit }}" /></div>
+                      <div><label>Папки</label><input type="number" min="1" name="folders_limit" value="{{ plan.folders_limit }}" /></div>
+                      <div><label>Закрепленные чаты</label><input type="number" min="1" name="pinned_chats_limit" value="{{ plan.pinned_chats_limit }}" /></div>
+                      <div><label>billing_product_code</label><input name="billing_product_code" value="{{ plan.billing_product_code }}" /></div>
+                      <div><label>billing_price_code</label><input name="billing_price_code" value="{{ plan.billing_price_code }}" /></div>
+                      <div>
+                        <label>Статус</label>
+                        <select name="is_active">
+                          <option value="1" {% if plan.is_active %}selected{% endif %}>Активен</option>
+                          <option value="0" {% if not plan.is_active %}selected{% endif %}>Отключен</option>
+                        </select>
+                      </div>
+                      <div><button class="btn primary" type="submit">Сохранить тариф</button></div>
+                    </form>
+                    <form method="post" action="/app/superadmin/tariffs/{{ plan.id }}/delete">
+                      <button class="btn danger" type="submit" {% if plan.is_default %}disabled{% endif %}>Удалить тариф</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+        <section class="card">
+          <h2>Назначение тарифа пользователям (клиентам)</h2>
+          <div class="muted" style="margin-bottom:8px;">
+            Основа для будущей автосмены тарифа после оплаты: у клиента хранится код тарифа, который можно менять вручную или автоматически биллинг-событием.
+          </div>
+          <table>
+            <thead><tr><th>Клиент</th><th>Текущий тариф</th><th>Статус подписки</th><th>Назначить тариф</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
                 {% if row.workspace.id != 1 %}
                 <tr>
                   <td>{{ row.workspace.id }} · {{ row.workspace.name }}</td>
-                  <td>{{ plan_code_labels.get((row.subscription.plan_code or "")|lower, row.subscription.plan_code) }}</td>
+                  <td>{{ row.plan_name or row.plan_code }}</td>
                   <td>{{ subscription_status_labels.get(row.subscription.status, row.subscription.status) }}</td>
-                  <td>{{ row.subscription.manager_limit }}</td>
-                  <td>{{ row.subscription.dialogs_limit }}</td>
-                  <td>{{ row.subscription.messages_per_month_limit }}</td>
-                  <td>{{ row.subscription.quick_replies_limit }}</td>
-                  <td>{{ row.subscription.folders_limit }}</td>
-                  <td>{{ row.subscription.pinned_chats_limit }}</td>
                   <td>
-                    <form class="inline-form" method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/plan">
-                      <div><label>Менеджеры</label><input type="number" min="1" name="manager_limit" value="{{ row.subscription.manager_limit }}" /></div>
-                      <div><label>Диалоги</label><input type="number" min="1" name="dialogs_limit" value="{{ row.subscription.dialogs_limit }}" /></div>
-                      <div><label>Сообщения</label><input type="number" min="1" name="messages_per_month_limit" value="{{ row.subscription.messages_per_month_limit }}" /></div>
-                      <div><label>Быстрые ответы</label><input type="number" min="1" name="quick_replies_limit" value="{{ row.subscription.quick_replies_limit }}" /></div>
-                      <div><label>Папки</label><input type="number" min="1" name="folders_limit" value="{{ row.subscription.folders_limit }}" /></div>
-                      <div><label>Закрепленные чаты</label><input type="number" min="1" name="pinned_chats_limit" value="{{ row.subscription.pinned_chats_limit }}" /></div>
+                    <form class="inline-form" method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/assign-tariff">
+                      <div>
+                        <label>Тариф</label>
+                        <select name="plan_code" required>
+                          {% for opt in row.available_plan_options %}
+                            <option value="{{ opt.code }}" {% if opt.code == row.plan_code %}selected{% endif %}>{{ opt.name }} ({{ opt.code }})</option>
+                          {% endfor %}
+                        </select>
+                      </div>
                       <div>
                         <label>Статус</label>
                         <select name="status">
-                          {% for option, option_label in [("active","Активна"), ("basic","Начальный"), ("unlimited","Безлимит"), ("past_due","Просрочена оплата"), ("paused","На паузе"), ("cancelled","Отменена")] %}
+                          {% for option, option_label in [("active","Активна"), ("basic","Начальный"), ("trial","Триал"), ("past_due","Просрочена оплата"), ("paused","На паузе"), ("cancelled","Отменена")] %}
                             <option value="{{ option }}" {% if row.subscription.status == option %}selected{% endif %}>{{ option_label }}</option>
                           {% endfor %}
                         </select>
                       </div>
-                      <div><button class="btn primary" type="submit">Сохранить</button></div>
+                      <div><button class="btn primary" type="submit">Назначить</button></div>
                     </form>
                   </td>
                 </tr>
@@ -579,6 +645,21 @@
               {% endfor %}
             </tbody>
           </table>
+          <div class="row-actions" style="margin-top:10px;">
+            <span class="muted">
+              Страница {{ audit_pagination.page }} из {{ audit_pagination.pages_total }} · записей: {{ audit_pagination.total_count }}
+            </span>
+            {% if audit_pagination.has_prev %}
+              <a class="btn" href="/app/superadmin/audit?page={{ audit_pagination.prev_page }}">← Назад</a>
+            {% else %}
+              <button class="btn" type="button" disabled>← Назад</button>
+            {% endif %}
+            {% if audit_pagination.has_next %}
+              <a class="btn" href="/app/superadmin/audit?page={{ audit_pagination.next_page }}">Вперед →</a>
+            {% else %}
+              <button class="btn" type="button" disabled>Вперед →</button>
+            {% endif %}
+          </div>
         </section>
       {% endif %}
 

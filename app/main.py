@@ -128,6 +128,7 @@ from app.models import (
     QuickReplyMedia,
     ServiceUser,
     Subscription,
+    TariffPlan,
     TenantAlert,
     UserSession,
     WebhookEvent,
@@ -141,8 +142,10 @@ from app.ops import (
     ensure_workspace_active_by_billing,
     ensure_workspace_limits_and_state,
     get_or_create_subscription,
+    is_subscription_unlimited,
     list_backups,
     refresh_tenant_alerts,
+    resolve_subscription_limits,
     restore_sqlite_backup,
 )
 from app.security import InMemoryRateLimiter, is_safe_image, is_same_origin, verify_hmac_signature, safe_json_dumps
@@ -178,6 +181,8 @@ _SUPERADMIN_TABS = (
     "audit",
     "system",
 )
+_SUPERADMIN_AUDIT_PAGE_SIZE = 50
+_SUBSCRIPTION_STATUS_OPTIONS = {"active", "basic", "trial", "past_due", "paused", "cancelled"}
 
 
 def _require_superadmin(user: ServiceUser) -> None:
@@ -212,6 +217,122 @@ def _safe_int(value: int | str | None, default: int, min_value: int = 0) -> int:
     except (TypeError, ValueError):
         parsed = int(default)
     return max(min_value, parsed)
+
+
+def _normalize_tariff_code(value: object) -> str:
+    return _normalize_tariff_plan_code(value)
+
+
+def _normalize_subscription_status(value: object) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"active", "trial", "past_due", "paused", "cancelled"}:
+        return raw
+    if raw == "basic":
+        return "active"
+    return "active"
+
+
+def _tariff_plan_limits_dict(plan: TariffPlan | None) -> dict[str, int]:
+    if plan is None:
+        return {
+            "manager_limit": 0,
+            "dialogs_limit": 0,
+            "messages_per_month_limit": 0,
+            "quick_replies_limit": 0,
+            "folders_limit": 0,
+            "pinned_chats_limit": 0,
+        }
+    return {
+        "manager_limit": max(1, int(getattr(plan, "manager_limit", 0) or 0)),
+        "dialogs_limit": max(1, int(getattr(plan, "dialogs_limit", 0) or 0)),
+        "messages_per_month_limit": max(1, int(getattr(plan, "messages_per_month_limit", 0) or 0)),
+        "quick_replies_limit": max(1, int(getattr(plan, "quick_replies_limit", 0) or 0)),
+        "folders_limit": max(1, int(getattr(plan, "folders_limit", 0) or 0)),
+        "pinned_chats_limit": max(1, int(getattr(plan, "pinned_chats_limit", 0) or 0)),
+    }
+
+
+def _tariff_plan_display_name(plan: TariffPlan | None, *, fallback_code: str = "") -> str:
+    if plan is not None and str(getattr(plan, "name", "") or "").strip():
+        return str(getattr(plan, "name", "") or "").strip()
+    code_value = str(getattr(plan, "code", "") or fallback_code or "").strip().lower()
+    if code_value in {"basic", "trial"}:
+        return "Начальный"
+    if code_value == "unlimited":
+        return "Безлимит"
+    return code_value or "Тариф"
+
+
+def _ensure_superadmin_tariff_baseline(db: Session) -> None:
+    """Guarantee baseline plans/default and normalize legacy subscription statuses."""
+    changed = False
+    basic = db.query(TariffPlan).filter(TariffPlan.code == "basic").first()
+    if basic is None:
+        basic = TariffPlan(
+            code="basic",
+            name="Начальный",
+            description="Базовый тариф по умолчанию",
+            manager_limit=3,
+            dialogs_limit=500,
+            messages_per_month_limit=5000,
+            quick_replies_limit=10,
+            folders_limit=10,
+            pinned_chats_limit=5,
+            is_default=True,
+            is_active=True,
+            billing_product_code="",
+            billing_price_code="",
+        )
+        db.add(basic)
+        changed = True
+    unlimited = db.query(TariffPlan).filter(TariffPlan.code == "unlimited").first()
+    if unlimited is None:
+        unlimited = TariffPlan(
+            code="unlimited",
+            name="Безлимит",
+            description="Тариф без ограничений",
+            manager_limit=1_000_000_000,
+            dialogs_limit=1_000_000_000,
+            messages_per_month_limit=1_000_000_000,
+            quick_replies_limit=1_000_000_000,
+            folders_limit=1_000_000_000,
+            pinned_chats_limit=1_000_000_000,
+            is_default=False,
+            is_active=True,
+            billing_product_code="",
+            billing_price_code="",
+        )
+        db.add(unlimited)
+        changed = True
+    plans = db.query(TariffPlan).order_by(TariffPlan.id.asc()).all()
+    defaults = [plan for plan in plans if bool(getattr(plan, "is_default", False))]
+    if not defaults and basic is not None:
+        basic.is_default = True
+        db.add(basic)
+        changed = True
+    elif len(defaults) > 1:
+        keep_id = int(defaults[0].id)
+        for plan in defaults[1:]:
+            if int(plan.id) == keep_id:
+                continue
+            if bool(plan.is_default):
+                plan.is_default = False
+                db.add(plan)
+                changed = True
+    subs = db.query(Subscription).all()
+    for sub in subs:
+        normalized_status = _normalize_subscription_status(getattr(sub, "status", "active"))
+        if normalized_status != str(getattr(sub, "status", "") or "").strip().lower():
+            sub.status = normalized_status
+            db.add(sub)
+            changed = True
+        normalized_code = _normalize_tariff_code(getattr(sub, "plan_code", "basic"))
+        if normalized_code != str(getattr(sub, "plan_code", "") or "").strip().lower():
+            sub.plan_code = normalized_code
+            db.add(sub)
+            changed = True
+    if changed:
+        db.commit()
 
 
 def _parse_folder_ids_form(raw: str) -> list[int]:
@@ -718,20 +839,22 @@ def _collect_manager_status_rows(
 
 
 def _build_usage_context(
+    db: Session,
     *,
     subscription: Subscription | None,
     tenant_metrics: dict[str, int] | None,
     manager_status_summary: dict[str, int] | None,
 ) -> tuple[dict[str, int], dict[str, int], dict[str, str]]:
     sub = subscription
+    limits = resolve_subscription_limits(db, subscription=sub) if sub is not None else {}
     metrics = tenant_metrics or {}
     manager_summary = manager_status_summary or {}
-    limit_managers = max(0, int(sub.manager_limit or 0)) if sub is not None else 0
-    limit_dialogs = max(0, int(sub.dialogs_limit or 0)) if sub is not None else 0
-    limit_messages = max(0, int(sub.messages_per_month_limit or 0)) if sub is not None else 0
-    limit_quick = max(0, int(getattr(sub, "quick_replies_limit", 0) or 0)) if sub is not None else 0
-    limit_folders = max(0, int(getattr(sub, "folders_limit", 0) or 0)) if sub is not None else 0
-    limit_pins = max(0, int(getattr(sub, "pinned_chats_limit", 0) or 0)) if sub is not None else 0
+    limit_managers = max(0, int(limits.get("manager_limit", 0) or 0))
+    limit_dialogs = max(0, int(limits.get("dialogs_limit", 0) or 0))
+    limit_messages = max(0, int(limits.get("messages_per_month_limit", 0) or 0))
+    limit_quick = max(0, int(limits.get("quick_replies_limit", 0) or 0))
+    limit_folders = max(0, int(limits.get("folders_limit", 0) or 0))
+    limit_pins = max(0, int(limits.get("pinned_chats_limit", 0) or 0))
     usage_limits = {
         "managers": limit_managers,
         "dialogs": limit_dialogs,
@@ -1213,6 +1336,168 @@ def _localized_alert_entry(alert: TenantAlert) -> dict[str, str]:
     }
 
 
+_SUPERADMIN_AUDIT_PAGE_SIZE = 50
+
+
+def _normalize_tariff_plan_code(value: object) -> str:
+    raw = str(value or "").strip().lower()
+    if raw == "trial":
+        return "basic"
+    normalized = re.sub(r"[^a-z0-9._-]+", "-", raw).strip("-._")
+    return normalized or "basic"
+
+
+def _default_tariff_limits() -> dict[str, int]:
+    return {
+        "manager_limit": 3,
+        "dialogs_limit": 500,
+        "messages_per_month_limit": 5000,
+        "quick_replies_limit": 10,
+        "folders_limit": 10,
+        "pinned_chats_limit": 5,
+    }
+
+
+def _tariff_plan_limits_dict(plan: TariffPlan | None) -> dict[str, int]:
+    defaults = _default_tariff_limits()
+    if plan is None:
+        return defaults
+    return {
+        "manager_limit": max(1, int(getattr(plan, "manager_limit", defaults["manager_limit"]) or defaults["manager_limit"])),
+        "dialogs_limit": max(1, int(getattr(plan, "dialogs_limit", defaults["dialogs_limit"]) or defaults["dialogs_limit"])),
+        "messages_per_month_limit": max(
+            1,
+            int(
+                getattr(plan, "messages_per_month_limit", defaults["messages_per_month_limit"])
+                or defaults["messages_per_month_limit"]
+            ),
+        ),
+        "quick_replies_limit": max(
+            1,
+            int(getattr(plan, "quick_replies_limit", defaults["quick_replies_limit"]) or defaults["quick_replies_limit"]),
+        ),
+        "folders_limit": max(1, int(getattr(plan, "folders_limit", defaults["folders_limit"]) or defaults["folders_limit"])),
+        "pinned_chats_limit": max(
+            1,
+            int(getattr(plan, "pinned_chats_limit", defaults["pinned_chats_limit"]) or defaults["pinned_chats_limit"]),
+        ),
+    }
+
+
+def _get_tariff_plan_by_code(db: Session, *, plan_code: object) -> TariffPlan | None:
+    code = _normalize_tariff_plan_code(plan_code)
+    return db.query(TariffPlan).filter(TariffPlan.code == code).first()
+
+
+def _get_or_create_default_tariff_plan(db: Session) -> TariffPlan:
+    default_plan = (
+        db.query(TariffPlan)
+        .filter(TariffPlan.is_default.is_(True), TariffPlan.is_active.is_(True))
+        .order_by(TariffPlan.id.asc())
+        .first()
+    )
+    if default_plan is not None:
+        return default_plan
+    basic_plan = _get_tariff_plan_by_code(db, plan_code="basic")
+    if basic_plan is not None:
+        basic_plan.is_default = True
+        basic_plan.is_active = True
+        db.add(basic_plan)
+        db.commit()
+        db.refresh(basic_plan)
+        return basic_plan
+    limits = _default_tariff_limits()
+    created = TariffPlan(
+        code="basic",
+        name="Начальный",
+        description="Базовый тариф по умолчанию",
+        manager_limit=limits["manager_limit"],
+        dialogs_limit=limits["dialogs_limit"],
+        messages_per_month_limit=limits["messages_per_month_limit"],
+        quick_replies_limit=limits["quick_replies_limit"],
+        folders_limit=limits["folders_limit"],
+        pinned_chats_limit=limits["pinned_chats_limit"],
+        is_default=True,
+        is_active=True,
+        billing_product_code="",
+        billing_price_code="",
+    )
+    db.add(created)
+    db.commit()
+    db.refresh(created)
+    return created
+
+
+def _sanitize_tariff_plan_form(
+    *,
+    code: object,
+    name: object,
+    description: object,
+    manager_limit: object,
+    dialogs_limit: object,
+    messages_per_month_limit: object,
+    quick_replies_limit: object,
+    folders_limit: object,
+    pinned_chats_limit: object,
+    billing_product_code: object,
+    billing_price_code: object,
+    fallback_code: str = "basic",
+) -> dict[str, object]:
+    normalized_code = _normalize_tariff_plan_code(code or fallback_code)
+    normalized_name = str(name or "").strip()[:255]
+    if not normalized_name:
+        normalized_name = normalized_code
+    payload = {
+        "code": normalized_code,
+        "name": normalized_name,
+        "description": str(description or "").strip()[:3000],
+        "manager_limit": max(1, _safe_int(manager_limit, 3)),
+        "dialogs_limit": max(1, _safe_int(dialogs_limit, 500)),
+        "messages_per_month_limit": max(1, _safe_int(messages_per_month_limit, 5000)),
+        "quick_replies_limit": max(1, _safe_int(quick_replies_limit, 10)),
+        "folders_limit": max(1, _safe_int(folders_limit, 10)),
+        "pinned_chats_limit": max(1, _safe_int(pinned_chats_limit, 5)),
+        "billing_product_code": str(billing_product_code or "").strip()[:128],
+        "billing_price_code": str(billing_price_code or "").strip()[:128],
+    }
+    return payload
+
+
+def _sync_subscription_cached_limits_from_plan(db: Session, *, subscription: Subscription) -> None:
+    limits = resolve_subscription_limits(db, subscription=subscription)
+    subscription.manager_limit = int(limits.get("manager_limit", 0) or 0)
+    subscription.dialogs_limit = int(limits.get("dialogs_limit", 0) or 0)
+    subscription.messages_per_month_limit = int(limits.get("messages_per_month_limit", 0) or 0)
+    subscription.quick_replies_limit = int(limits.get("quick_replies_limit", 0) or 0)
+    subscription.folders_limit = int(limits.get("folders_limit", 0) or 0)
+    subscription.pinned_chats_limit = int(limits.get("pinned_chats_limit", 0) or 0)
+
+
+def _build_audit_pagination(
+    *,
+    total_count: int,
+    requested_page: object,
+    page_size: int = _SUPERADMIN_AUDIT_PAGE_SIZE,
+) -> dict[str, int | bool]:
+    safe_total = max(0, int(total_count or 0))
+    safe_size = max(1, int(page_size or _SUPERADMIN_AUDIT_PAGE_SIZE))
+    pages_total = max(1, int((safe_total + safe_size - 1) / safe_size))
+    page = _safe_int(requested_page if requested_page is not None else 1, 1, min_value=1)
+    page = min(page, pages_total)
+    offset = (page - 1) * safe_size
+    return {
+        "page": page,
+        "page_size": safe_size,
+        "pages_total": pages_total,
+        "offset": offset,
+        "has_prev": page > 1,
+        "has_next": page < pages_total,
+        "prev_page": (page - 1) if page > 1 else 1,
+        "next_page": (page + 1) if page < pages_total else pages_total,
+        "total_count": safe_total,
+    }
+
+
 def _deactivate_workspace_managers_by_max_ids(
     db: Session,
     *,
@@ -1267,35 +1552,26 @@ def _deactivate_workspace_managers_by_max_ids(
 
 def _manager_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    if (sub.plan_code or "").strip().lower() == "unlimited":
-        return 1_000_000_000
-    return max(1, int(sub.manager_limit or 0))
+    limits = resolve_subscription_limits(db, subscription=sub)
+    return max(1, int(limits.get("manager_limit", 0) or 0))
 
 
 def _quick_reply_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    if (sub.plan_code or "").strip().lower() == "unlimited":
-        return 1_000_000_000
-    return max(1, int(getattr(sub, "quick_replies_limit", 0) or 0))
+    limits = resolve_subscription_limits(db, subscription=sub)
+    return max(1, int(limits.get("quick_replies_limit", 0) or 0))
 
 
 def _folder_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    if (sub.plan_code or "").strip().lower() == "unlimited":
-        return 1_000_000_000
-    return max(1, int(getattr(sub, "folders_limit", 0) or 0))
+    limits = resolve_subscription_limits(db, subscription=sub)
+    return max(1, int(limits.get("folders_limit", 0) or 0))
 
 
 def _pinned_chats_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    if (sub.plan_code or "").strip().lower() == "unlimited":
-        return 1_000_000_000
-    return max(1, int(getattr(sub, "pinned_chats_limit", 5) or 0))
-
-
-def _is_unlimited_plan(db: Session, *, workspace_id: int) -> bool:
-    sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    return (sub.plan_code or "").strip().lower() == "unlimited"
+    limits = resolve_subscription_limits(db, subscription=sub)
+    return max(1, int(limits.get("pinned_chats_limit", 0) or 0))
 
 
 def _chat_scope_service_user_id(
@@ -1358,9 +1634,8 @@ def _extract_manager_ids_from_form(form_data: object) -> list[str]:
 
 def _manager_rows_limit(db: Session, *, workspace_id: int) -> int:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    if (sub.plan_code or "").strip().lower() == "unlimited":
-        return 1_000_000_000
-    return max(1, int(sub.manager_limit or 0))
+    limits = resolve_subscription_limits(db, subscription=sub)
+    return max(1, int(limits.get("manager_limit", 0) or 0))
 
 
 def _safe_media_send_diagnostics(
@@ -1723,12 +1998,14 @@ def _build_superadmin_context(
     current_user: ServiceUser,
     db: Session,
     tab: str,
+    audit_page: int = 1,
     message: str | None = None,
     error: str | None = None,
 ) -> dict:
     active_tab = tab if tab in _SUPERADMIN_TABS else "dashboard"
     dashboard = _superadmin_dashboard_snapshot(db)
     workspace_rows: list[dict] = []
+    tariff_rows: list[dict[str, object]] = []
     if active_tab in {"workspaces", "plans", "monitoring"}:
         workspaces = db.query(Workspace).order_by(Workspace.id.asc()).all()
         subs = {
@@ -1757,9 +2034,41 @@ def _build_superadmin_context(
         settings_by_workspace: dict[int, BotSettings] = {
             int(row.workspace_id): row for row in settings_rows
         }
+        plans_by_code: dict[str, TariffPlan] = {
+            _normalize_tariff_plan_code(row.code): row
+            for row in db.query(TariffPlan).order_by(TariffPlan.id.asc()).all()
+        }
+        default_plan = _get_or_create_default_tariff_plan(db)
+        if active_tab == "plans":
+            for plan in plans_by_code.values():
+                limits = _tariff_plan_limits_dict(plan)
+                tariff_rows.append(
+                    {
+                        "id": int(plan.id),
+                        "code": str(plan.code),
+                        "name": str(plan.name or plan.code),
+                        "description": str(plan.description or ""),
+                        "limits": limits,
+                        "is_default": bool(plan.is_default),
+                        "is_active": bool(plan.is_active),
+                        "billing_product_code": str(plan.billing_product_code or ""),
+                        "billing_price_code": str(plan.billing_price_code or ""),
+                        "is_unlimited": int(limits.get("manager_limit", 0) or 0) >= 1_000_000_000,
+                    }
+                )
+            tariff_rows.sort(key=lambda item: (0 if item.get("is_default") else 1, str(item.get("code") or "")))
 
         for ws in workspaces:
             sub = subs.get(ws.id) or get_or_create_subscription(db, workspace_id=ws.id)
+            normalized_sub_plan_code = _normalize_tariff_plan_code(sub.plan_code)
+            sub.plan_code = normalized_sub_plan_code
+            selected_plan = plans_by_code.get(normalized_sub_plan_code) or default_plan
+            if selected_plan is None:
+                selected_plan = _get_or_create_default_tariff_plan(db)
+            if normalized_sub_plan_code != str(selected_plan.code):
+                sub.plan_code = str(selected_plan.code)
+            _sync_subscription_cached_limits_from_plan(db, subscription=sub)
+            db.add(sub)
             m = workspace_metrics.get(ws.id, {})
             ws_settings = settings_by_workspace.get(int(ws.id))
             ws_webhook_key = (ws_settings.webhook_key or "").strip() if ws_settings else ""
@@ -1780,6 +2089,16 @@ def _build_superadmin_context(
                     "tenant_code": ws.tenant_code,
                     "status": status,
                     "plan_code": sub.plan_code,
+                    "plan_name": str(getattr(selected_plan, "name", "") or sub.plan_code),
+                    "available_plan_options": [
+                        {
+                            "code": str(plan.code),
+                            "name": str(plan.name or plan.code),
+                            "is_active": bool(plan.is_active),
+                        }
+                        for plan in plans_by_code.values()
+                        if bool(plan.is_active)
+                    ],
                     "sub_status": sub.status,
                     "owner_username": "—",
                     "managers_active": int(m.get("managers_active", 0)),
@@ -1787,6 +2106,7 @@ def _build_superadmin_context(
                     "messages_month": int(m.get("messages_month", 0)),
                 }
             )
+        db.commit()
 
     user_rows: list[dict] = []
     if active_tab == "users":
@@ -1805,12 +2125,56 @@ def _build_superadmin_context(
                 }
             )
 
+    query_error = str(request.query_params.get("error") or "").strip().lower()
+    query_message = ""
+    if query_error:
+        error_map = {
+            "tariff_exists": "Тариф с таким кодом уже существует.",
+            "tariff_missing": "Тариф не найден.",
+            "tariff_in_use": "Нельзя удалить тариф: он назначен пользователям.",
+            "tariff_default_delete": "Нельзя удалить тариф по умолчанию.",
+            "workspace_missing": "Клиент не найден.",
+        }
+        mapped = error_map.get(query_error)
+        if mapped and not error:
+            error = mapped
+    if request.query_params.get("tariff_created") == "1":
+        query_message = "Тариф создан."
+    elif request.query_params.get("tariff_updated") == "1":
+        query_message = "Тариф обновлен."
+    elif request.query_params.get("tariff_deleted") == "1":
+        query_message = "Тариф удален."
+    elif request.query_params.get("tariff_default") == "1":
+        query_message = "Тариф по умолчанию обновлен."
+    elif request.query_params.get("workspace_tariff_updated") == "1":
+        query_message = "Тариф клиента обновлен."
+    if query_message and not message:
+        message = query_message
+
     audits_rows: list[dict] = []
-    if active_tab in {"dashboard", "audit"}:
+    audit_pagination: dict[str, int | bool] = {
+        "page": 1,
+        "page_size": _SUPERADMIN_AUDIT_PAGE_SIZE,
+        "pages_total": 1,
+        "offset": 0,
+        "has_prev": False,
+        "has_next": False,
+        "prev_page": 1,
+        "next_page": 1,
+        "total_count": 0,
+    }
+    if active_tab in {"audit"}:
+        audit_total_count = db.query(AuditLog).count()
+        audit_pagination = _build_audit_pagination(
+            total_count=audit_total_count,
+            requested_page=request.query_params.get("page"),
+            page_size=_SUPERADMIN_AUDIT_PAGE_SIZE,
+        )
         latest_audits = (
             db.query(AuditLog)
             .order_by(AuditLog.id.desc())
-            .limit(200)
+            .offset(int(audit_pagination["offset"]))
+            .limit(int(audit_pagination["page_size"]))
             .all()
         )
         audits_rows = [
@@ -1879,8 +2243,10 @@ def _build_superadmin_context(
         "error": error,
         "stats": dashboard,
         "workspace_rows": workspace_rows,
+        "tariff_rows": tariff_rows,
         "users": user_rows,
         "audit_items": audits_rows,
+        "audit_pagination": audit_pagination,
         "backups": backups,
         "smtp": smtp_info,
         "security": security_info,
@@ -1897,6 +2263,7 @@ def _render_superadmin_page(
     tab: str,
     message: str | None = None,
     error: str | None = None,
+    audit_page: int | None = None,
 ) -> HTMLResponse:
     _require_superadmin(current_user)
     context = _build_superadmin_context(
@@ -1906,6 +2273,7 @@ def _render_superadmin_page(
         tab=tab,
         message=message,
         error=error,
+        audit_page=audit_page,
     )
     return templates.TemplateResponse(request, "superadmin.html", context)
 
@@ -2528,6 +2896,7 @@ def _render_app_settings_page(
         elapsed = (datetime.now(UTC).replace(tzinfo=None) - current_user.email_verification_sent_at).total_seconds()
         can_resend_verification = elapsed >= cooldown_seconds
     usage_limits, usage_used, usage_remaining = _build_usage_context(
+        db,
         subscription=sub,
         tenant_metrics=tenant_metrics,
         manager_status_summary=manager_status_summary,
@@ -2774,6 +3143,7 @@ def admin_page(
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
     tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
     usage_limits, usage_used, usage_remaining = _build_usage_context(
+        db,
         subscription=sub,
         tenant_metrics=tenant_metrics,
         manager_status_summary=None,
@@ -2817,7 +3187,7 @@ def admin_page(
             "usage_used": usage_used,
             "usage_remaining": usage_remaining,
             "manager_id_rows": _parse_manager_ids(bot_settings.manager_account_id),
-            "manager_ids_limit": int(sub.manager_limit or 0),
+            "manager_ids_limit": _manager_limit_for_workspace(db, workspace_id=workspace_id),
             "manager_invite_copy_action": "/admin/settings/copy-manager-link",
             "manager_status_rows": [],
             "manager_status_summary": {
@@ -2905,7 +3275,7 @@ async def update_settings(
     business_hours_vm = _business_hours_view_model(db, workspace_id=workspace_id)
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
     tenant_metrics = collect_tenant_metrics(db, workspace_id=workspace_id)
-    manager_limit_value = max(1, int(sub.manager_limit or 0))
+    manager_limit_value = _manager_limit_for_workspace(db, workspace_id=workspace_id)
     webhook_workspace_url = _workspace_webhook_url(bot_settings)
     media_send_diagnostics = get_media_diagnostics_metrics(db, workspace_id=workspace_id)
     if len(manager_ids) > manager_limit_value:
@@ -3095,7 +3465,8 @@ async def admin_copy_manager_link(
     target_manager_id = str(form_data.get("copy_manager_id", "") or "").strip()
     bot_settings = get_or_create_settings(db, workspace_id=workspace_id)
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    manager_limit_value = max(1, int(sub.manager_limit or 0))
+    limits = resolve_subscription_limits(db, subscription=sub)
+    manager_limit_value = max(1, int(limits.get("manager_limit", 0) or 0))
     if len(manager_ids) > manager_limit_value:
         return JSONResponse(
             {
@@ -3116,7 +3487,7 @@ async def admin_copy_manager_link(
         "on",
         "yes",
     }
-    quick_replies_limit_value = max(1, int(sub.quick_replies_limit or 0))
+    quick_replies_limit_value = max(1, int(limits.get("quick_replies_limit", 0) or 0))
     quick_replies_count = (
         db.query(QuickReply)
         .filter(
@@ -6368,7 +6739,6 @@ def app_superadmin_page(
         current_user=current_user,
         db=db,
         tab="dashboard",
-        message="SaaS обзор загружен",
     )
 
 
@@ -6425,6 +6795,310 @@ def app_superadmin_plans_page(
     )
 
 
+@app.post("/app/superadmin/tariffs", response_class=RedirectResponse)
+def app_superadmin_create_tariff_plan(
+    request: Request,
+    code: str = Form(""),
+    name: str = Form(""),
+    description: str = Form(""),
+    manager_limit: int = Form(3),
+    dialogs_limit: int = Form(500),
+    messages_per_month_limit: int = Form(5000),
+    quick_replies_limit: int = Form(10),
+    folders_limit: int = Form(10),
+    pinned_chats_limit: int = Form(5),
+    billing_product_code: str = Form(""),
+    billing_price_code: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    _require_superadmin(current_user)
+    payload = _sanitize_tariff_plan_form(
+        code=code,
+        name=name,
+        description=description,
+        manager_limit=manager_limit,
+        dialogs_limit=dialogs_limit,
+        messages_per_month_limit=messages_per_month_limit,
+        quick_replies_limit=quick_replies_limit,
+        folders_limit=folders_limit,
+        pinned_chats_limit=pinned_chats_limit,
+        billing_product_code=billing_product_code,
+        billing_price_code=billing_price_code,
+        fallback_code="basic",
+    )
+    code_value = str(payload["code"])
+    if _get_tariff_plan_by_code(db, plan_code=code_value) is not None:
+        return RedirectResponse(
+            url="/app/superadmin/plans?error=tariff_exists",
+            status_code=302,
+        )
+    plan = TariffPlan(
+        code=code_value,
+        name=str(payload["name"]),
+        description=str(payload["description"]),
+        manager_limit=int(payload["manager_limit"]),
+        dialogs_limit=int(payload["dialogs_limit"]),
+        messages_per_month_limit=int(payload["messages_per_month_limit"]),
+        quick_replies_limit=int(payload["quick_replies_limit"]),
+        folders_limit=int(payload["folders_limit"]),
+        pinned_chats_limit=int(payload["pinned_chats_limit"]),
+        is_default=False,
+        is_active=True,
+        billing_product_code=str(payload["billing_product_code"]),
+        billing_price_code=str(payload["billing_price_code"]),
+    )
+    db.add(plan)
+    db.flush()
+    db.add(
+        AuditLog(
+            workspace_id=None,
+            actor_user_id=current_user.id,
+            action="tariff_plan_created",
+            object_type="tariff_plan",
+            object_id=str(plan.id),
+            details_json=safe_json_dumps(
+                {
+                    "code": plan.code,
+                    "name": plan.name,
+                    "limits": _tariff_plan_limits_dict(plan),
+                    "billing_product_code": plan.billing_product_code,
+                    "billing_price_code": plan.billing_price_code,
+                }
+            ),
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/superadmin/plans?tariff_created=1", status_code=302)
+
+
+@app.post("/app/superadmin/tariffs/{plan_id}", response_class=RedirectResponse)
+def app_superadmin_update_tariff_plan(
+    request: Request,
+    plan_id: int,
+    name: str = Form(""),
+    description: str = Form(""),
+    manager_limit: int = Form(3),
+    dialogs_limit: int = Form(500),
+    messages_per_month_limit: int = Form(5000),
+    quick_replies_limit: int = Form(10),
+    folders_limit: int = Form(10),
+    pinned_chats_limit: int = Form(5),
+    billing_product_code: str = Form(""),
+    billing_price_code: str = Form(""),
+    is_active: str = Form("1"),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    _require_superadmin(current_user)
+    plan = db.query(TariffPlan).filter(TariffPlan.id == int(plan_id)).first()
+    if plan is None:
+        return RedirectResponse(url="/app/superadmin/plans?error=tariff_missing", status_code=302)
+    payload = _sanitize_tariff_plan_form(
+        code=plan.code,
+        name=name,
+        description=description,
+        manager_limit=manager_limit,
+        dialogs_limit=dialogs_limit,
+        messages_per_month_limit=messages_per_month_limit,
+        quick_replies_limit=quick_replies_limit,
+        folders_limit=folders_limit,
+        pinned_chats_limit=pinned_chats_limit,
+        billing_product_code=billing_product_code,
+        billing_price_code=billing_price_code,
+        fallback_code=plan.code,
+    )
+    plan.name = str(payload["name"])
+    plan.description = str(payload["description"])
+    plan.manager_limit = int(payload["manager_limit"])
+    plan.dialogs_limit = int(payload["dialogs_limit"])
+    plan.messages_per_month_limit = int(payload["messages_per_month_limit"])
+    plan.quick_replies_limit = int(payload["quick_replies_limit"])
+    plan.folders_limit = int(payload["folders_limit"])
+    plan.pinned_chats_limit = int(payload["pinned_chats_limit"])
+    plan.billing_product_code = str(payload["billing_product_code"])
+    plan.billing_price_code = str(payload["billing_price_code"])
+    plan.is_active = str(is_active or "").strip().lower() in {"1", "true", "yes", "on"}
+    if plan.is_default:
+        plan.is_active = True
+    db.add(plan)
+
+    updated_subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.plan_code == plan.code)
+        .all()
+    )
+    for sub in updated_subscriptions:
+        _sync_subscription_cached_limits_from_plan(db, subscription=sub)
+        db.add(sub)
+
+    db.add(
+        AuditLog(
+            workspace_id=None,
+            actor_user_id=current_user.id,
+            action="tariff_plan_updated",
+            object_type="tariff_plan",
+            object_id=str(plan.id),
+            details_json=safe_json_dumps(
+                {
+                    "code": plan.code,
+                    "is_active": bool(plan.is_active),
+                    "limits": _tariff_plan_limits_dict(plan),
+                    "updated_subscriptions": len(updated_subscriptions),
+                }
+            ),
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/superadmin/plans?tariff_updated=1", status_code=302)
+
+
+@app.post("/app/superadmin/tariffs/{plan_id}/set-default", response_class=RedirectResponse)
+def app_superadmin_set_default_tariff_plan(
+    request: Request,
+    plan_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    _require_superadmin(current_user)
+    target = db.query(TariffPlan).filter(TariffPlan.id == int(plan_id)).first()
+    if target is None:
+        return RedirectResponse(url="/app/superadmin/plans?error=tariff_missing", status_code=302)
+    current_default = db.query(TariffPlan).filter(TariffPlan.is_default.is_(True)).all()
+    for plan in current_default:
+        if plan.id == target.id:
+            continue
+        plan.is_default = False
+        db.add(plan)
+    target.is_default = True
+    target.is_active = True
+    db.add(target)
+    db.add(
+        AuditLog(
+            workspace_id=None,
+            actor_user_id=current_user.id,
+            action="tariff_default_changed",
+            object_type="tariff_plan",
+            object_id=str(target.id),
+            details_json=safe_json_dumps({"code": target.code}),
+        )
+    )
+    db.commit()
+    return RedirectResponse(url="/app/superadmin/plans?tariff_default=1", status_code=302)
+
+
+@app.post("/app/superadmin/tariffs/{plan_id}/delete", response_class=RedirectResponse)
+def app_superadmin_delete_tariff_plan(
+    request: Request,
+    plan_id: int,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    _require_superadmin(current_user)
+    plan = db.query(TariffPlan).filter(TariffPlan.id == int(plan_id)).first()
+    if plan is None:
+        return RedirectResponse(url="/app/superadmin/plans?error=tariff_missing", status_code=302)
+    if bool(plan.is_default):
+        return RedirectResponse(url="/app/superadmin/plans?error=default_tariff_protected", status_code=302)
+    in_use_count = (
+        db.query(Subscription)
+        .filter(Subscription.plan_code == str(plan.code))
+        .count()
+    )
+    if in_use_count > 0:
+        return RedirectResponse(url="/app/superadmin/plans?error=tariff_in_use", status_code=302)
+    db.add(
+        AuditLog(
+            workspace_id=None,
+            actor_user_id=current_user.id,
+            action="tariff_plan_deleted",
+            object_type="tariff_plan",
+            object_id=str(plan.id),
+            details_json=safe_json_dumps({"code": plan.code}),
+        )
+    )
+    db.delete(plan)
+    db.commit()
+    return RedirectResponse(url="/app/superadmin/plans?tariff_deleted=1", status_code=302)
+
+
+@app.post("/app/superadmin/workspaces/{workspace_id}/assign-tariff", response_class=RedirectResponse)
+def app_superadmin_assign_workspace_tariff(
+    request: Request,
+    workspace_id: int,
+    plan_code: str = Form(""),
+    status: str = Form("active"),
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    _require_superadmin(current_user)
+    ws = db.query(Workspace).filter(Workspace.id == int(workspace_id)).first()
+    if ws is None:
+        return RedirectResponse(url="/app/superadmin/plans?error=workspace_missing", status_code=302)
+    normalized_code = _normalize_tariff_plan_code(plan_code)
+    target_plan = (
+        db.query(TariffPlan)
+        .filter(TariffPlan.code == normalized_code, TariffPlan.is_active.is_(True))
+        .first()
+    )
+    if target_plan is None:
+        return RedirectResponse(url="/app/superadmin/plans?error=tariff_missing", status_code=302)
+    sub = get_or_create_subscription(db, workspace_id=ws.id)
+    sub.plan_code = target_plan.code
+    sub.status = (status or "active").strip().lower()
+    _sync_subscription_cached_limits_from_plan(db, subscription=sub)
+    db.add(sub)
+    db.add(
+        AuditLog(
+            workspace_id=ws.id,
+            actor_user_id=current_user.id,
+            action="workspace_tariff_assigned",
+            object_type="subscription",
+            object_id=str(sub.id),
+            details_json=safe_json_dumps(
+                {
+                    "workspace_id": int(ws.id),
+                    "plan_code": target_plan.code,
+                    "status": sub.status,
+                }
+            ),
+        )
+    )
+    db.commit()
+    ensure_workspace_active_by_billing(db, workspace_id=ws.id)
+    return RedirectResponse(url="/app/superadmin/plans?workspace_tariff_updated=1", status_code=302)
+
+
 @app.get("/app/superadmin/security", response_class=HTMLResponse)
 def app_superadmin_security_page(
     request: Request,
@@ -6470,6 +7144,7 @@ def app_superadmin_backups_page(
 @app.get("/app/superadmin/audit", response_class=HTMLResponse)
 def app_superadmin_audit_page(
     request: Request,
+    page: int = 1,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -6478,6 +7153,7 @@ def app_superadmin_audit_page(
         current_user=current_user,
         db=db,
         tab="audit",
+        audit_page=page,
     )
 
 
@@ -6881,73 +7557,6 @@ def app_superadmin_delete_workspace(
     )
     db.commit()
     return RedirectResponse(url="/app/superadmin/workspaces", status_code=302)
-
-
-@app.post("/app/superadmin/workspaces/{workspace_id}/plan")
-def app_superadmin_update_workspace_plan(
-    request: Request,
-    workspace_id: int,
-    manager_limit: int = Form(3),
-    dialogs_limit: int = Form(500),
-    messages_per_month_limit: int = Form(5000),
-    quick_replies_limit: int = Form(10),
-    folders_limit: int = Form(10),
-    pinned_chats_limit: int = Form(5),
-    plan_code: str = Form("basic"),
-    status: str = Form("active"),
-    current_user: ServiceUser = Depends(require_service_user),
-    db: Session = Depends(get_db),
-) -> RedirectResponse:
-    _enforce_same_origin(request)
-    _check_rate_limit_or_raise(
-        request,
-        scope="superadmin_ops",
-        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
-    )
-    if current_user.role != "superadmin":
-        raise HTTPException(status_code=403, detail="Только для superadmin")
-    sub = get_or_create_subscription(db, workspace_id=workspace_id)
-    normalized_plan = (plan_code or "basic").strip().lower()[:64] or "basic"
-    if normalized_plan == "trial":
-        normalized_plan = "basic"
-    if normalized_plan not in {"basic", "unlimited"}:
-        normalized_plan = "basic"
-    sub.plan_code = normalized_plan
-    if normalized_plan == "unlimited":
-        unlimited_value = 1_000_000_000
-        sub.manager_limit = unlimited_value
-        sub.dialogs_limit = unlimited_value
-        sub.messages_per_month_limit = unlimited_value
-        sub.quick_replies_limit = unlimited_value
-        sub.folders_limit = unlimited_value
-        sub.pinned_chats_limit = unlimited_value
-    else:
-        sub.manager_limit = max(1, int(manager_limit))
-        sub.dialogs_limit = max(1, int(dialogs_limit))
-        sub.messages_per_month_limit = max(1, int(messages_per_month_limit))
-        sub.quick_replies_limit = max(1, int(quick_replies_limit))
-        sub.folders_limit = max(1, int(folders_limit))
-        sub.pinned_chats_limit = max(1, int(pinned_chats_limit))
-    sub.status = (status or "active").strip().lower()
-    db.add(sub)
-    db.add(
-        AuditLog(
-            workspace_id=workspace_id,
-            actor_user_id=current_user.id,
-            action="workspace_plan_updated",
-            object_type="subscription",
-            object_id=str(sub.id),
-            details_json=(
-                f'{{"plan_code":"{sub.plan_code}","manager_limit":{sub.manager_limit},"dialogs_limit":{sub.dialogs_limit},'
-                f'"messages_per_month_limit":{sub.messages_per_month_limit},"quick_replies_limit":{sub.quick_replies_limit},'
-                f'"folders_limit":{sub.folders_limit},"pinned_chats_limit":{int(getattr(sub, "pinned_chats_limit", 0) or 0)},'
-                f'"status":"{sub.status}"}}'
-            ),
-        )
-    )
-    db.commit()
-    ensure_workspace_active_by_billing(db, workspace_id=workspace_id)
-    return RedirectResponse(url="/app/superadmin/plans", status_code=302)
 
 
 @app.post("/app/superadmin/backup")
