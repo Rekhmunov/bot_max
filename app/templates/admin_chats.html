@@ -3671,6 +3671,8 @@
 
       document.addEventListener("click", (event) => {
         const anchor = event.target.closest(`a[${SOFT_NAV_ATTR}]`);
+        // Thread action menu button sits inside <a.thread>; do not treat it as navigation click.
+        if (event.target instanceof Element && event.target.closest("[data-thread-menu-btn]")) return;
         if (!canInterceptClick(event, anchor)) return;
         event.preventDefault();
         if (shouldThrottleSoftNavClick(anchor)) return;
@@ -3802,8 +3804,6 @@
     })();
 
     (() => {
-      const threads = Array.from(document.querySelectorAll(".thread[data-thread-id]"));
-
       const folders = {{ chat_folders | tojson }};
       const markUnreadPrefix = "{{ mark_unread_prefix }}";
       const deleteConversationPrefix = "{{ delete_user_action_prefix }}";
@@ -3970,6 +3970,16 @@
       const isTouchLikeViewport = () => (
         window.matchMedia("(max-width: 900px), (hover: none) and (pointer: coarse)").matches
       );
+      const resolveThreadState = (threadEl) => {
+        if (!(threadEl instanceof HTMLElement)) return null;
+        const threadId = String(threadEl.dataset.threadId || "").trim();
+        if (!threadId) return null;
+        return {
+          threadId,
+          unread: threadEl.dataset.threadUnread === "1",
+          isPinned: threadEl.dataset.threadPinned === "1",
+        };
+      };
       folderDeleteSearchInput?.addEventListener("input", () => {
         folderDeleteSearch = String(folderDeleteSearchInput.value || "").trim().toLowerCase();
         renderDeleteFolderButtons();
@@ -4275,27 +4285,33 @@
         }
       });
 
-      threads.forEach((threadEl) => {
-        const threadId = threadEl.dataset.threadId;
-        const unread = threadEl.dataset.threadUnread === "1";
-        const isPinned = threadEl.dataset.threadPinned === "1";
-        const menuBtn = threadEl.querySelector("[data-thread-menu-btn]");
-
-        threadEl.addEventListener("contextmenu", (e) => {
-          if (isTouchLikeViewport()) {
-            e.preventDefault();
-            return;
-          }
-          e.preventDefault();
-          openCtx(e.clientX, e.clientY, threadId, unread, isPinned);
-        });
-
-        menuBtn?.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          const rect = menuBtn.getBoundingClientRect();
-          openCtx(rect.right - 4, rect.bottom + 4, threadId, unread, isPinned);
-        });
+      document.addEventListener("contextmenu", (event) => {
+        const threadEl = event.target instanceof Element
+          ? event.target.closest(".thread[data-thread-id]")
+          : null;
+        if (!(threadEl instanceof HTMLElement)) return;
+        if (isTouchLikeViewport()) {
+          event.preventDefault();
+          return;
+        }
+        const state = resolveThreadState(threadEl);
+        if (!state) return;
+        event.preventDefault();
+        openCtx(event.clientX, event.clientY, state.threadId, state.unread, state.isPinned);
+      });
+      document.addEventListener("click", (event) => {
+        const menuBtn = event.target instanceof Element
+          ? event.target.closest("[data-thread-menu-btn]")
+          : null;
+        if (!(menuBtn instanceof HTMLElement)) return;
+        const threadEl = menuBtn.closest(".thread[data-thread-id]");
+        if (!(threadEl instanceof HTMLElement)) return;
+        const state = resolveThreadState(threadEl);
+        if (!state) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const rect = menuBtn.getBoundingClientRect();
+        openCtx(rect.right - 4, rect.bottom + 4, state.threadId, state.unread, state.isPinned);
       });
       document.querySelectorAll("[data-open-folder-delete]").forEach((btn) => {
         btn.addEventListener("click", openDeletePop);
@@ -4668,6 +4684,7 @@
         const conversationId = Number(threadPayload.conversation_id || 0);
         const isUnread = Boolean(threadPayload.is_unread);
         const isPinned = Boolean(threadPayload.is_pinned);
+        const pinOrder = Number(threadPayload.pin_order || 0);
         const hasDeliveryErrors = Boolean(threadPayload.has_delivery_errors);
         const isNew = Boolean(threadPayload.is_new);
         const customerAccountId = String(threadPayload.customer_account_id || "").trim() || "—";
@@ -4679,12 +4696,18 @@
         threadNode.dataset.threadId = String(conversationId);
         threadNode.dataset.threadUnread = isUnread ? "1" : "0";
         threadNode.dataset.threadPinned = isPinned ? "1" : "0";
+        threadNode.dataset.pinOrder = pinOrder > 0 ? String(pinOrder) : "0";
         threadNode.dataset.threadFolderIds = Array.isArray(threadPayload.folder_ids)
           ? threadPayload.folder_ids.map((value) => Number(value || 0)).filter((value) => value > 0).join(",")
           : "";
         threadNode.classList.toggle("unread", isUnread);
         threadNode.classList.toggle("active", Number(activeConversationId || 0) === conversationId);
         threadNode.classList.toggle("pinned", isPinned);
+        if (isPinned) {
+          threadNode.setAttribute("draggable", "true");
+        } else {
+          threadNode.removeAttribute("draggable");
+        }
         threadNode.setAttribute("href", buildThreadHref(conversationId));
 
         const threadNameText = threadNode.querySelector(".thread-name-text");
@@ -4792,6 +4815,124 @@
           updateThreadNodeFromPayload(node, thread);
         });
         return true;
+      };
+      const createThreadNodeFromPayload = (threadPayload) => {
+        if (!threadPayload || typeof threadPayload !== "object") return null;
+        const isPinned = Boolean(threadPayload.is_pinned);
+        const threadNode = document.createElement("a");
+        threadNode.className = `thread${isPinned ? " pinned" : ""}`;
+        threadNode.setAttribute("data-thread-id", String(Number(threadPayload.conversation_id || 0)));
+        threadNode.setAttribute("data-thread-folder-ids", "");
+        threadNode.setAttribute("data-thread-unread", "0");
+        threadNode.setAttribute("data-thread-pinned", isPinned ? "1" : "0");
+        threadNode.setAttribute("data-pin-order", String(Number(threadPayload.pin_order || 0) || 0));
+        threadNode.setAttribute("data-soft-nav", "");
+        if (isPinned) {
+          threadNode.setAttribute("draggable", "true");
+        }
+        threadNode.innerHTML = `
+          <div class="thread-head">
+            <div class="thread-name">
+              <span class="thread-name-with-origin">
+                <span class="thread-name-text">—</span>
+              </span>
+            </div>
+            <span class="thread-head-right">
+              <button
+                type="button"
+                class="thread-menu-btn"
+                data-thread-menu-btn
+                aria-label="Действия с чатом"
+              >
+                &#8942;
+              </button>
+            </span>
+          </div>
+          <div class="thread-folder-row"></div>
+          <div class="thread-meta">customer_account_id: —</div>
+          <div class="thread-preview">—</div>
+        `;
+        updateThreadNodeFromPayload(threadNode, threadPayload);
+        return threadNode;
+      };
+      const rebuildThreadNodesFromPayload = (threadsPayload) => {
+        if (!Array.isArray(threadsPayload)) return false;
+        const threadsContainer = document.querySelector(".threads");
+        if (!(threadsContainer instanceof HTMLElement)) return false;
+        const existingNodes = Array.from(document.querySelectorAll(".thread[data-thread-id]"));
+        const existingById = new Map(
+          existingNodes
+            .map((node) => [Number(node.getAttribute("data-thread-id") || 0), node])
+            .filter(([id, node]) => Number(id) > 0 && node instanceof HTMLElement)
+        );
+        const nextPinned = [];
+        const nextUnpinned = [];
+        threadsPayload.forEach((thread) => {
+          if (!thread || typeof thread !== "object") return;
+          const id = Number(thread.conversation_id || 0);
+          if (id <= 0) return;
+          const existing = existingById.get(id);
+          const node = (existing instanceof HTMLElement) ? existing : createThreadNodeFromPayload(thread);
+          if (!(node instanceof HTMLElement)) return;
+          updateThreadNodeFromPayload(node, thread);
+          if (Boolean(thread.is_pinned)) {
+            nextPinned.push(node);
+          } else {
+            nextUnpinned.push(node);
+          }
+          existingById.delete(id);
+        });
+
+        existingById.forEach((node) => {
+          if (node instanceof HTMLElement) node.remove();
+        });
+        existingNodes.forEach((node) => {
+          if (node instanceof HTMLElement) node.remove();
+        });
+
+        const currentPinnedContainer = document.getElementById("pinned-threads");
+        if (nextPinned.length > 0) {
+          const pinnedContainer = currentPinnedContainer instanceof HTMLElement
+            ? currentPinnedContainer
+            : (() => {
+              const container = document.createElement("div");
+              container.id = "pinned-threads";
+              container.className = "pinned-threads";
+              container.setAttribute("data-pinned-list", "1");
+              return container;
+            })();
+          pinnedContainer.innerHTML = "";
+          nextPinned.forEach((node) => pinnedContainer.appendChild(node));
+          const hintNode = threadsContainer.querySelector(".threads-hint");
+          if (hintNode instanceof HTMLElement) {
+            hintNode.insertAdjacentElement("afterend", pinnedContainer);
+          } else if (threadsContainer.firstElementChild) {
+            threadsContainer.insertBefore(pinnedContainer, threadsContainer.firstElementChild);
+          } else {
+            threadsContainer.appendChild(pinnedContainer);
+          }
+        } else if (currentPinnedContainer instanceof HTMLElement) {
+          currentPinnedContainer.remove();
+        }
+
+        const emptyNode = threadsContainer.querySelector(".empty");
+        if (emptyNode instanceof HTMLElement) {
+          emptyNode.remove();
+        }
+        nextUnpinned.forEach((node) => threadsContainer.appendChild(node));
+
+        if (nextPinned.length <= 0 && nextUnpinned.length <= 0) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = "Чаты не найдены";
+          threadsContainer.appendChild(empty);
+        }
+        return true;
+      };
+      const syncThreadNodesFromPayload = (threadsPayload) => {
+        if (!Array.isArray(threadsPayload)) return false;
+        if (patchExistingThreadNodes(threadsPayload)) return true;
+        return rebuildThreadNodesFromPayload(threadsPayload);
       };
       const updateFolderUnreadBadges = (threadsPayload, summaryCounts = null) => {
         if (!Array.isArray(threadsPayload)) return;
@@ -5321,10 +5462,10 @@
           const hasOnlyThreadsChanges = hasThreadsChanges && !hasMessageChanges;
 
           if (hasOnlyThreadsChanges) {
-            // Fast path: patch existing thread nodes without page rerender.
-            // If list topology changed (new/deleted chat), fallback to soft-rerender.
-            const patched = patchExistingThreadNodes(payload.threads);
-            if (patched) {
+            // Keep chat list realtime without full page rerender, including
+            // topology changes (new/deleted/reordered thread ids).
+            const synced = syncThreadNodesFromPayload(payload.threads);
+            if (synced) {
               if (nextSig) {
                 currentThreadsSignature = nextSig;
               }
@@ -5347,7 +5488,7 @@
               if (hasActiveConversationMessages && !hasOpenOverlay()) {
                 renderActiveMessagesFromPayload(payload.messages);
                 if (Array.isArray(payload.threads)) {
-                  patchExistingThreadNodes(payload.threads);
+                  syncThreadNodesFromPayload(payload.threads);
                 }
                 resetDeferredMessages();
                 if (nextLast > currentLastMessageId) {
@@ -5383,7 +5524,7 @@
               renderActiveMessagesFromPayload(payload.messages);
             }
             if (Array.isArray(payload.threads)) {
-              patchExistingThreadNodes(payload.threads);
+              syncThreadNodesFromPayload(payload.threads);
             }
             resetDeferredMessages();
             if (nextLast > currentLastMessageId) {

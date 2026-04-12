@@ -795,8 +795,14 @@ def _get_or_create_conversation(
                 str(conversation.customer_account_id or "").strip() == str(customer_id or "").strip()
             )
             if same_customer and int(conversation.workspace_id or DEFAULT_WORKSPACE_ID) != int(workspace_id):
+                # Cross-workspace legacy rows can carry stale folder bindings.
+                # After workspace rebind, conversation must start without folder assignment.
                 conversation.workspace_id = workspace_id
                 conversation.is_active = True
+                conversation.folder_id = None
+                db.query(ConversationFolderLink).filter(
+                    ConversationFolderLink.conversation_id == int(conversation.id),
+                ).delete(synchronize_session=False)
                 db.add(conversation)
                 db.commit()
                 db.refresh(conversation)
@@ -4765,10 +4771,12 @@ def delete_conversation(
         ManagerDispatch.workspace_id == ws_id,
         ManagerDispatch.conversation_id == conversation_id,
     ).delete()
+    # Purge links by conversation_id regardless of workspace marker.
+    # This protects against legacy/misaligned rows and prevents folder
+    # assignment resurrection when SQLite reuses ids for new conversations.
     db.query(ConversationFolderLink).filter(
-        ConversationFolderLink.workspace_id == ws_id,
         ConversationFolderLink.conversation_id == conversation_id,
-    ).delete()
+    ).delete(synchronize_session=False)
     db.query(ConversationPin).filter(
         ConversationPin.workspace_id == ws_id,
         ConversationPin.conversation_id == conversation_id,
