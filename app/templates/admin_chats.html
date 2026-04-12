@@ -4367,8 +4367,7 @@
       const editIdInput = document.getElementById("edit-message-id");
       const editHint = document.getElementById("edit-mode-hint");
       const cancelEditBtn = document.getElementById("cancel-edit-btn");
-      const bubbles = Array.from(document.querySelectorAll(".bubble[data-message-id]"));
-      if (!bubbles.length || !activeConversationId) return;
+      if (!activeConversationId) return;
 
       if (!allowMessageEditActions || !messageInput || !editIdInput || !editHint) return;
 
@@ -4459,26 +4458,32 @@
       });
       window.addEventListener("resize", hideMsgMenu);
 
-      bubbles.forEach((bubble) => {
-        if (bubble.dataset.messageDirection !== "bot") return;
+      document.addEventListener("contextmenu", (e) => {
+        const bubble = e.target instanceof Element
+          ? e.target.closest(".bubble[data-message-direction='bot']")
+          : null;
+        if (!(bubble instanceof HTMLElement)) return;
+        e.preventDefault();
+        openMsgMenu(e.clientX, e.clientY, bubble);
+      });
 
-        bubble.addEventListener("contextmenu", (e) => {
-          e.preventDefault();
-          openMsgMenu(e.clientX, e.clientY, bubble);
-        });
-
-        bubble.addEventListener("touchstart", (e) => {
-          const touch = e.touches[0];
-          longPressTimer = setTimeout(() => {
-            openMsgMenu(touch.clientX, touch.clientY, bubble);
-          }, 550);
-        }, { passive: true });
-        bubble.addEventListener("touchend", () => {
-          if (longPressTimer) clearTimeout(longPressTimer);
-        });
-        bubble.addEventListener("touchmove", () => {
-          if (longPressTimer) clearTimeout(longPressTimer);
-        });
+      document.addEventListener("touchstart", (e) => {
+        const touch = e.touches?.[0];
+        if (!touch) return;
+        const bubble = e.target instanceof Element
+          ? e.target.closest(".bubble[data-message-direction='bot']")
+          : null;
+        if (!(bubble instanceof HTMLElement)) return;
+        if (longPressTimer) clearTimeout(longPressTimer);
+        longPressTimer = setTimeout(() => {
+          openMsgMenu(touch.clientX, touch.clientY, bubble);
+        }, 550);
+      }, { passive: true });
+      document.addEventListener("touchend", () => {
+        if (longPressTimer) clearTimeout(longPressTimer);
+      });
+      document.addEventListener("touchmove", () => {
+        if (longPressTimer) clearTimeout(longPressTimer);
       });
     })();
 
@@ -4555,6 +4560,7 @@
           .map((node) => Number(node.getAttribute("data-message-id") || 0))
           .filter((id) => id > 0)
       );
+      const messagesWrap = document.querySelector(".messages-wrap");
       const pageQueryPrefix = "{{ page_query_prefix }}";
       const buildThreadHref = (conversationId) => {
         const params = new URLSearchParams();
@@ -4742,6 +4748,154 @@
           container.appendChild(badge);
         });
       };
+      const formatScheduledLabel = (scheduledAtRaw) => {
+        const raw = String(scheduledAtRaw || "").trim();
+        if (!raw) return "";
+        const when = new Date(raw);
+        if (Number.isNaN(when.getTime())) return `Отправится ${raw}`;
+        const pad = (value) => String(value).padStart(2, "0");
+        return `Отправится ${pad(when.getDate())}.${pad(when.getMonth() + 1)}.${when.getFullYear()} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
+      };
+      const renderActiveMessagesFromPayload = (messagesPayload) => {
+        if (!(messagesWrap instanceof HTMLElement)) return false;
+        if (!Array.isArray(messagesPayload)) return false;
+        const previousDistanceToBottom = Math.max(
+          0,
+          messagesWrap.scrollHeight - messagesWrap.scrollTop - messagesWrap.clientHeight
+        );
+        const shouldStickToBottom = previousDistanceToBottom <= 80;
+        messagesWrap.innerHTML = "";
+        let renderedCount = 0;
+        messagesPayload.forEach((row) => {
+          if (!row || typeof row !== "object") return;
+          const messageId = Number(row.id || 0);
+          const direction = String(row.direction || "").trim().toLowerCase();
+          const text = String(row.text || "");
+          const deliveryState = String(row.delivery_state || "sent").trim().toLowerCase();
+          const deliveryError = String(row.delivery_error || "");
+          const scheduledAt = String(row.delivery_next_retry_at || "");
+          const isScheduledPending = Boolean(row.is_scheduled_pending);
+          const imageUrlsRaw = Array.isArray(row.image_urls) ? row.image_urls : [];
+          const imageUrls = imageUrlsRaw
+            .map((url) => String(url || "").trim())
+            .filter(Boolean);
+          if (!imageUrls.length) {
+            const fallbackImage = String(row.image_url || "").trim();
+            if (fallbackImage) imageUrls.push(fallbackImage);
+          }
+          if (!text && !imageUrls.length && !(direction === "bot" && deliveryState === "failed")) return;
+
+          const bubble = document.createElement("article");
+          bubble.className = `bubble ${direction || "bot"}`.trim();
+          if (messageId > 0 && !seenMessageIds.has(messageId)) {
+            bubble.classList.add("is-new");
+            seenMessageIds.add(messageId);
+          }
+          bubble.dataset.messageId = String(messageId > 0 ? messageId : "");
+          bubble.dataset.messageText = text;
+          bubble.dataset.messageDirection = direction || "bot";
+
+          if (text) {
+            const textNode = document.createElement("div");
+            textNode.className = "bubble-text";
+            textNode.textContent = text;
+            bubble.appendChild(textNode);
+          }
+
+          if (imageUrls.length) {
+            const mediaGrid = document.createElement("div");
+            mediaGrid.className = "bubble-media-grid";
+            imageUrls.forEach((url) => {
+              const href = String(url || "").trim();
+              if (!href) return;
+              const mediaItem = document.createElement("a");
+              mediaItem.href = href;
+              mediaItem.className = "bubble-media-item";
+              mediaItem.setAttribute("data-media-open", "");
+              const img = document.createElement("img");
+              img.src = href;
+              img.alt = "image";
+              img.loading = "lazy";
+              mediaItem.appendChild(img);
+              mediaGrid.appendChild(mediaItem);
+            });
+            if (mediaGrid.childElementCount > 0) {
+              bubble.appendChild(mediaGrid);
+            }
+          }
+
+          if (direction === "bot" && (text || imageUrls.length)) {
+            const tail = document.createElement("div");
+            tail.className = "bubble-tail";
+            if (isScheduledPending && scheduledAt) {
+              const scheduledNode = document.createElement("span");
+              scheduledNode.className = "scheduled-label";
+              scheduledNode.title = "Отложенная отправка";
+              scheduledNode.setAttribute("aria-label", "Отложенная отправка");
+              scheduledNode.dataset.scheduledAt = scheduledAt;
+              scheduledNode.textContent = formatScheduledLabel(scheduledAt);
+              tail.appendChild(scheduledNode);
+            } else {
+              let ticks = "✓";
+              let statusClass = "sent";
+              let statusTitle = "Сообщение отправляется";
+              if (deliveryState === "failed") {
+                ticks = "✓✓";
+                statusClass = "failed";
+                statusTitle = "Ошибка отправки";
+              } else if (deliveryState === "sent" && Boolean(row.is_read_by_customer)) {
+                ticks = "✓✓";
+                statusClass = "delivered";
+                statusTitle = "Сообщение прочитано";
+              } else if (deliveryState === "sent") {
+                ticks = "✓";
+                statusClass = "sent";
+                statusTitle = "Сообщение отправлено";
+              }
+              const statusNode = document.createElement("span");
+              statusNode.className = `delivery-status ${statusClass}`;
+              statusNode.title = statusTitle;
+              statusNode.setAttribute("aria-label", statusTitle);
+              const ticksNode = document.createElement("span");
+              ticksNode.className = "ticks";
+              ticksNode.textContent = ticks;
+              statusNode.appendChild(ticksNode);
+              tail.appendChild(statusNode);
+            }
+            bubble.appendChild(tail);
+          }
+
+          if (direction === "bot" && deliveryState === "failed") {
+            const errorNode = document.createElement("div");
+            errorNode.className = "delivery-error";
+            if (deliveryError && !deliveryError.startsWith("Ошибка отправки сообщения:")) {
+              errorNode.textContent = `Ошибка отправки сообщения: ${deliveryError}`;
+            } else {
+              errorNode.textContent = deliveryError;
+            }
+            bubble.appendChild(errorNode);
+          }
+
+          messagesWrap.appendChild(bubble);
+          renderedCount += 1;
+        });
+        if (renderedCount <= 0) {
+          const emptyNode = document.createElement("div");
+          emptyNode.className = "empty";
+          emptyNode.textContent = "В этом чате пока нет сообщений.";
+          messagesWrap.appendChild(emptyNode);
+        }
+        if (shouldStickToBottom) {
+          snapBottomOnce();
+        } else {
+          const targetTop = Math.max(
+            0,
+            messagesWrap.scrollHeight - messagesWrap.clientHeight - previousDistanceToBottom
+          );
+          messagesWrap.scrollTop = targetTop;
+        }
+        return true;
+      };
       let deferredLastMessageId = 0;
       let deferredIncomingCount = 0;
 
@@ -4839,15 +4993,15 @@
         const mediaPreviewEl = document.getElementById("compose-media-preview");
         let isComposingMessage = false;
         if (composeForm instanceof HTMLFormElement) {
-          const activeEl = document.activeElement;
-          const focusInsideCompose = activeEl instanceof HTMLElement && composeForm.contains(activeEl);
           const hasDraftText = messageInputEl instanceof HTMLInputElement
             ? String(messageInputEl.value || "").trim().length > 0
             : false;
           const hasPendingMedia =
             (mediaPreviewEl instanceof HTMLElement && mediaPreviewEl.querySelectorAll(".compose-media-chip").length > 0)
             || (attachInputEl instanceof HTMLInputElement && Number(attachInputEl.files?.length || 0) > 0);
-          isComposingMessage = focusInsideCompose || hasDraftText || hasPendingMedia;
+          // Mere input focus should not freeze incoming message rendering in active chat.
+          // Defer only when there is an actual draft/pending media or short interaction lock.
+          isComposingMessage = hasDraftText || hasPendingMedia;
         }
         return hasOpenOverlay() || isReadingHistoryAwayFromBottom() || isComposingMessage || isComposeInteractionLocked();
       };
@@ -4975,6 +5129,12 @@
                 renderNewMessagesIndicator();
               }
               return;
+            }
+            if (Array.isArray(payload.messages) && Number(payload.active_conversation_id || 0) === Number(activeConversationId || 0)) {
+              renderActiveMessagesFromPayload(payload.messages);
+            }
+            if (Array.isArray(payload.threads)) {
+              patchExistingThreadNodes(payload.threads);
             }
             resetDeferredMessages();
             if (nextLast > currentLastMessageId) {
