@@ -825,6 +825,57 @@ def _ws_hint_log(stage: str, **kwargs: object) -> None:
         logger.info("[WS_HINT] %s", stage)
 
 
+async def _try_mark_chat_seen(
+    *,
+    client: MaxClient,
+    chat_id: str,
+    workspace_id: int,
+    sender_id: str,
+    update_type: str,
+    message_mid: str | None,
+    event_uid: str | None,
+) -> None:
+    chat_value = str(chat_id or "").strip()
+    if not chat_value:
+        _read_flow_log(
+            "mark_seen_skipped",
+            reason="empty_chat_id",
+            workspace_id=workspace_id,
+            sender_id=sender_id,
+            update_type=update_type,
+        )
+        return
+    result = await client.send_chat_action(chat_id=chat_value, action="mark_seen")
+    ok = bool(
+        result.get("success", True)
+        or result.get("ok")
+        or result.get("result")
+        or result.get("mock")
+    )
+    if ok:
+        _read_flow_log(
+            "mark_seen_sent",
+            workspace_id=workspace_id,
+            chat_id=chat_value,
+            sender_id=sender_id,
+            update_type=update_type,
+            message_mid=str(message_mid or ""),
+            event_uid=str(event_uid or ""),
+        )
+        return
+    _read_flow_log(
+        "mark_seen_failed",
+        workspace_id=workspace_id,
+        chat_id=chat_value,
+        sender_id=sender_id,
+        update_type=update_type,
+        message_mid=str(message_mid or ""),
+        event_uid=str(event_uid or ""),
+        status_code=result.get("status_code"),
+        error=_extract_max_error_message(result) or result.get("error") or result.get("message"),
+    )
+
+
 def _user_friendly_bot_connection_error() -> str:
     return "Подключение бота требует проверки, обратитесь в поддержку"
 
@@ -9009,6 +9060,19 @@ async def max_webhook(
         settings=settings_db,
         event=event,
     )
+    # Auto-read acknowledgement in customer<->bot dialog:
+    # immediately mark incoming customer messages as seen by bot
+    # so buyer can receive double-check status in MAX client.
+    with suppress(Exception):
+        await _try_mark_chat_seen(
+            client=max_client,
+            chat_id=event.chat_id,
+            workspace_id=workspace_id,
+            sender_id=event.sender_id,
+            update_type=event.update_type or "",
+            message_mid=event.message_mid,
+            event_uid=event_uid,
+        )
     # This branch handles non-admin/non-manager, non-read events,
     # i.e. customer-originated message flow. Always emit WS hint.
     with suppress(Exception):

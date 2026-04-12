@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 from typing import Any
+from urllib.parse import quote
 from urllib.parse import quote_plus
 from urllib.parse import urlsplit
 from urllib.parse import parse_qs
@@ -254,6 +255,19 @@ class MaxClient:
 
     async def send_text_to_user(self, user_id: str, text: str, text_format: str | None = None) -> dict[str, Any]:
         return await self.send_message(text=text, user_id=user_id, text_format=text_format)
+
+    async def send_chat_action(self, *, chat_id: str, action: str = "mark_seen") -> dict[str, Any]:
+        normalized_chat_id = str(chat_id or "").strip()
+        normalized_action = str(action or "").strip()
+        if not normalized_chat_id:
+            return {"success": False, "error": "chat_id_required"}
+        if not normalized_action:
+            return {"success": False, "error": "action_required"}
+        chat_id_path = quote(normalized_chat_id, safe="")
+        return await self._post(
+            f"/chats/{chat_id_path}/actions",
+            {"action": normalized_action},
+        )
 
     async def send_photo(self, chat_id: str, photo_url: str, caption: str | None = None) -> dict[str, Any]:
         # Backward-compatible path: if caller passes URL instead of bytes,
