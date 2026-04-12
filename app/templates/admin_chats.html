@@ -4926,135 +4926,164 @@
         const pad = (value) => String(value).padStart(2, "0");
         return `Отправится ${pad(when.getDate())}.${pad(when.getMonth() + 1)}.${when.getFullYear()} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
       };
+      const createMessageBubbleNode = (row) => {
+        if (!row || typeof row !== "object") return null;
+        const messageId = Number(row.id || 0);
+        const direction = String(row.direction || "").trim().toLowerCase();
+        const text = String(row.text || "");
+        const deliveryState = String(row.delivery_state || "sent").trim().toLowerCase();
+        const deliveryError = String(row.delivery_error || "");
+        const scheduledAt = String(row.delivery_next_retry_at || "");
+        const isScheduledPending = Boolean(row.is_scheduled_pending);
+        const imageUrlsRaw = Array.isArray(row.image_urls) ? row.image_urls : [];
+        const imageUrls = imageUrlsRaw
+          .map((url) => String(url || "").trim())
+          .filter(Boolean);
+        if (!imageUrls.length) {
+          const fallbackImage = String(row.image_url || "").trim();
+          if (fallbackImage) imageUrls.push(fallbackImage);
+        }
+        if (!text && !imageUrls.length && !(direction === "bot" && deliveryState === "failed")) return null;
+
+        const bubble = document.createElement("article");
+        bubble.className = `bubble ${direction || "bot"}`.trim();
+        if (messageId > 0 && !seenMessageIds.has(messageId)) {
+          bubble.classList.add("is-new");
+          seenMessageIds.add(messageId);
+        }
+        bubble.dataset.messageId = String(messageId > 0 ? messageId : "");
+        bubble.dataset.messageText = text;
+        bubble.dataset.messageDirection = direction || "bot";
+
+        if (text) {
+          const textNode = document.createElement("div");
+          textNode.className = "bubble-text";
+          textNode.textContent = text;
+          bubble.appendChild(textNode);
+        }
+
+        if (imageUrls.length) {
+          const mediaGrid = document.createElement("div");
+          mediaGrid.className = "bubble-media-grid";
+          imageUrls.forEach((url) => {
+            const href = String(url || "").trim();
+            if (!href) return;
+            const mediaItem = document.createElement("a");
+            mediaItem.href = href;
+            mediaItem.className = "bubble-media-item";
+            mediaItem.setAttribute("data-media-open", "");
+            const img = document.createElement("img");
+            img.src = href;
+            img.alt = "image";
+            img.loading = "lazy";
+            mediaItem.appendChild(img);
+            mediaGrid.appendChild(mediaItem);
+          });
+          if (mediaGrid.childElementCount > 0) {
+            bubble.appendChild(mediaGrid);
+          }
+        }
+
+        if (direction === "bot" && (text || imageUrls.length)) {
+          const tail = document.createElement("div");
+          tail.className = "bubble-tail";
+          if (isScheduledPending && scheduledAt) {
+            const scheduledNode = document.createElement("span");
+            scheduledNode.className = "scheduled-label";
+            scheduledNode.title = "Отложенная отправка";
+            scheduledNode.setAttribute("aria-label", "Отложенная отправка");
+            scheduledNode.dataset.scheduledAt = scheduledAt;
+            scheduledNode.textContent = formatScheduledLabel(scheduledAt);
+            tail.appendChild(scheduledNode);
+          } else {
+            let ticks = "✓";
+            let statusClass = "sent";
+            let statusTitle = "Сообщение отправляется";
+            if (deliveryState === "failed") {
+              ticks = "✓✓";
+              statusClass = "failed";
+              statusTitle = "Ошибка отправки";
+            } else if (deliveryState === "sent" && Boolean(row.is_read_by_customer)) {
+              ticks = "✓✓";
+              statusClass = "delivered";
+              statusTitle = "Сообщение прочитано";
+            } else if (deliveryState === "sent") {
+              ticks = "✓";
+              statusClass = "sent";
+              statusTitle = "Сообщение отправлено";
+            }
+            const statusNode = document.createElement("span");
+            statusNode.className = `delivery-status ${statusClass}`;
+            statusNode.title = statusTitle;
+            statusNode.setAttribute("aria-label", statusTitle);
+            const ticksNode = document.createElement("span");
+            ticksNode.className = "ticks";
+            ticksNode.textContent = ticks;
+            statusNode.appendChild(ticksNode);
+            tail.appendChild(statusNode);
+          }
+          bubble.appendChild(tail);
+        }
+
+        if (direction === "bot" && deliveryState === "failed") {
+          const errorNode = document.createElement("div");
+          errorNode.className = "delivery-error";
+          if (deliveryError && !deliveryError.startsWith("Ошибка отправки сообщения:")) {
+            errorNode.textContent = `Ошибка отправки сообщения: ${deliveryError}`;
+          } else {
+            errorNode.textContent = deliveryError;
+          }
+          bubble.appendChild(errorNode);
+        }
+        return bubble;
+      };
       const renderActiveMessagesFromPayload = (messagesPayload) => {
         if (!(messagesWrap instanceof HTMLElement)) return false;
         if (!Array.isArray(messagesPayload)) return false;
+        const existingBubbleNodes = Array.from(messagesWrap.querySelectorAll(".bubble[data-message-id]"));
+        const existingIds = existingBubbleNodes
+          .map((node) => Number(node.getAttribute("data-message-id") || 0))
+          .filter((id) => id > 0);
+        const payloadIds = messagesPayload
+          .map((row) => Number((row && row.id) || 0))
+          .filter((id) => id > 0);
+        const canAppendOnly =
+          existingIds.length > 0 &&
+          payloadIds.length >= existingIds.length &&
+          existingIds.every((id, idx) => id === payloadIds[idx]);
         const previousDistanceToBottom = Math.max(
           0,
           messagesWrap.scrollHeight - messagesWrap.scrollTop - messagesWrap.clientHeight
         );
         const shouldStickToBottom = previousDistanceToBottom <= 80;
-        messagesWrap.innerHTML = "";
-        let renderedCount = 0;
-        messagesPayload.forEach((row) => {
-          if (!row || typeof row !== "object") return;
-          const messageId = Number(row.id || 0);
-          const direction = String(row.direction || "").trim().toLowerCase();
-          const text = String(row.text || "");
-          const deliveryState = String(row.delivery_state || "sent").trim().toLowerCase();
-          const deliveryError = String(row.delivery_error || "");
-          const scheduledAt = String(row.delivery_next_retry_at || "");
-          const isScheduledPending = Boolean(row.is_scheduled_pending);
-          const imageUrlsRaw = Array.isArray(row.image_urls) ? row.image_urls : [];
-          const imageUrls = imageUrlsRaw
-            .map((url) => String(url || "").trim())
-            .filter(Boolean);
-          if (!imageUrls.length) {
-            const fallbackImage = String(row.image_url || "").trim();
-            if (fallbackImage) imageUrls.push(fallbackImage);
-          }
-          if (!text && !imageUrls.length && !(direction === "bot" && deliveryState === "failed")) return;
 
-          const bubble = document.createElement("article");
-          bubble.className = `bubble ${direction || "bot"}`.trim();
-          if (messageId > 0 && !seenMessageIds.has(messageId)) {
-            bubble.classList.add("is-new");
-            seenMessageIds.add(messageId);
+        if (canAppendOnly) {
+          const hasEmptyNode = !!messagesWrap.querySelector(".empty");
+          if (hasEmptyNode) {
+            messagesWrap.innerHTML = "";
           }
-          bubble.dataset.messageId = String(messageId > 0 ? messageId : "");
-          bubble.dataset.messageText = text;
-          bubble.dataset.messageDirection = direction || "bot";
-
-          if (text) {
-            const textNode = document.createElement("div");
-            textNode.className = "bubble-text";
-            textNode.textContent = text;
-            bubble.appendChild(textNode);
+          for (let idx = existingIds.length; idx < messagesPayload.length; idx += 1) {
+            const bubble = createMessageBubbleNode(messagesPayload[idx]);
+            if (!(bubble instanceof HTMLElement)) continue;
+            messagesWrap.appendChild(bubble);
           }
-
-          if (imageUrls.length) {
-            const mediaGrid = document.createElement("div");
-            mediaGrid.className = "bubble-media-grid";
-            imageUrls.forEach((url) => {
-              const href = String(url || "").trim();
-              if (!href) return;
-              const mediaItem = document.createElement("a");
-              mediaItem.href = href;
-              mediaItem.className = "bubble-media-item";
-              mediaItem.setAttribute("data-media-open", "");
-              const img = document.createElement("img");
-              img.src = href;
-              img.alt = "image";
-              img.loading = "lazy";
-              mediaItem.appendChild(img);
-              mediaGrid.appendChild(mediaItem);
-            });
-            if (mediaGrid.childElementCount > 0) {
-              bubble.appendChild(mediaGrid);
-            }
+        } else {
+          messagesWrap.innerHTML = "";
+          let renderedCount = 0;
+          messagesPayload.forEach((row) => {
+            const bubble = createMessageBubbleNode(row);
+            if (!(bubble instanceof HTMLElement)) return;
+            messagesWrap.appendChild(bubble);
+            renderedCount += 1;
+          });
+          if (renderedCount <= 0) {
+            const emptyNode = document.createElement("div");
+            emptyNode.className = "empty";
+            emptyNode.textContent = "В этом чате пока нет сообщений.";
+            messagesWrap.appendChild(emptyNode);
           }
-
-          if (direction === "bot" && (text || imageUrls.length)) {
-            const tail = document.createElement("div");
-            tail.className = "bubble-tail";
-            if (isScheduledPending && scheduledAt) {
-              const scheduledNode = document.createElement("span");
-              scheduledNode.className = "scheduled-label";
-              scheduledNode.title = "Отложенная отправка";
-              scheduledNode.setAttribute("aria-label", "Отложенная отправка");
-              scheduledNode.dataset.scheduledAt = scheduledAt;
-              scheduledNode.textContent = formatScheduledLabel(scheduledAt);
-              tail.appendChild(scheduledNode);
-            } else {
-              let ticks = "✓";
-              let statusClass = "sent";
-              let statusTitle = "Сообщение отправляется";
-              if (deliveryState === "failed") {
-                ticks = "✓✓";
-                statusClass = "failed";
-                statusTitle = "Ошибка отправки";
-              } else if (deliveryState === "sent" && Boolean(row.is_read_by_customer)) {
-                ticks = "✓✓";
-                statusClass = "delivered";
-                statusTitle = "Сообщение прочитано";
-              } else if (deliveryState === "sent") {
-                ticks = "✓";
-                statusClass = "sent";
-                statusTitle = "Сообщение отправлено";
-              }
-              const statusNode = document.createElement("span");
-              statusNode.className = `delivery-status ${statusClass}`;
-              statusNode.title = statusTitle;
-              statusNode.setAttribute("aria-label", statusTitle);
-              const ticksNode = document.createElement("span");
-              ticksNode.className = "ticks";
-              ticksNode.textContent = ticks;
-              statusNode.appendChild(ticksNode);
-              tail.appendChild(statusNode);
-            }
-            bubble.appendChild(tail);
-          }
-
-          if (direction === "bot" && deliveryState === "failed") {
-            const errorNode = document.createElement("div");
-            errorNode.className = "delivery-error";
-            if (deliveryError && !deliveryError.startsWith("Ошибка отправки сообщения:")) {
-              errorNode.textContent = `Ошибка отправки сообщения: ${deliveryError}`;
-            } else {
-              errorNode.textContent = deliveryError;
-            }
-            bubble.appendChild(errorNode);
-          }
-
-          messagesWrap.appendChild(bubble);
-          renderedCount += 1;
-        });
-        if (renderedCount <= 0) {
-          const emptyNode = document.createElement("div");
-          emptyNode.className = "empty";
-          emptyNode.textContent = "В этом чате пока нет сообщений.";
-          messagesWrap.appendChild(emptyNode);
         }
+
         if (shouldStickToBottom) {
           snapBottomOnce();
         } else {
