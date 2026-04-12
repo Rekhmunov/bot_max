@@ -4926,7 +4926,7 @@
         const pad = (value) => String(value).padStart(2, "0");
         return `Отправится ${pad(when.getDate())}.${pad(when.getMonth() + 1)}.${when.getFullYear()} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
       };
-      const createMessageBubbleNode = (row) => {
+      const messageRenderMeta = (row) => {
         if (!row || typeof row !== "object") return null;
         const messageId = Number(row.id || 0);
         const direction = String(row.direction || "").trim().toLowerCase();
@@ -4943,7 +4943,36 @@
           const fallbackImage = String(row.image_url || "").trim();
           if (fallbackImage) imageUrls.push(fallbackImage);
         }
-        if (!text && !imageUrls.length && !(direction === "bot" && deliveryState === "failed")) return null;
+        const isRenderable = Boolean(
+          text || imageUrls.length || (direction === "bot" && deliveryState === "failed")
+        );
+        return {
+          messageId,
+          direction,
+          text,
+          deliveryState,
+          deliveryError,
+          scheduledAt,
+          isScheduledPending,
+          imageUrls,
+          isRenderable,
+          isReadByCustomer: Boolean(row.is_read_by_customer),
+        };
+      };
+      const createMessageBubbleNode = (row) => {
+        const meta = messageRenderMeta(row);
+        if (!meta || !meta.isRenderable) return null;
+        const {
+          messageId,
+          direction,
+          text,
+          deliveryState,
+          deliveryError,
+          scheduledAt,
+          isScheduledPending,
+          imageUrls,
+          isReadByCustomer,
+        } = meta;
 
         const bubble = document.createElement("article");
         bubble.className = `bubble ${direction || "bot"}`.trim();
@@ -5003,7 +5032,7 @@
               ticks = "✓✓";
               statusClass = "failed";
               statusTitle = "Ошибка отправки";
-            } else if (deliveryState === "sent" && Boolean(row.is_read_by_customer)) {
+            } else if (deliveryState === "sent" && isReadByCustomer) {
               ticks = "✓✓";
               statusClass = "delivered";
               statusTitle = "Сообщение прочитано";
@@ -5044,13 +5073,19 @@
         const existingIds = existingBubbleNodes
           .map((node) => Number(node.getAttribute("data-message-id") || 0))
           .filter((id) => id > 0);
-        const payloadIds = messagesPayload
-          .map((row) => Number((row && row.id) || 0))
-          .filter((id) => id > 0);
+        const payloadRenderableRows = messagesPayload
+          .map((row) => ({ row, meta: messageRenderMeta(row) }))
+          .filter((item) => !!item.meta && item.meta.isRenderable)
+          .map((item) => ({
+            row: item.row,
+            messageId: Number(item.meta.messageId || 0),
+          }))
+          .filter((item) => item.messageId > 0);
+        const payloadRenderableIds = payloadRenderableRows.map((item) => item.messageId);
         const canAppendOnly =
           existingIds.length > 0 &&
-          payloadIds.length >= existingIds.length &&
-          existingIds.every((id, idx) => id === payloadIds[idx]);
+          payloadRenderableIds.length >= existingIds.length &&
+          existingIds.every((id, idx) => id === payloadRenderableIds[idx]);
         const previousDistanceToBottom = Math.max(
           0,
           messagesWrap.scrollHeight - messagesWrap.scrollTop - messagesWrap.clientHeight
@@ -5062,11 +5097,12 @@
           if (hasEmptyNode) {
             messagesWrap.innerHTML = "";
           }
-          for (let idx = existingIds.length; idx < messagesPayload.length; idx += 1) {
-            const bubble = createMessageBubbleNode(messagesPayload[idx]);
-            if (!(bubble instanceof HTMLElement)) continue;
+          const newRenderableRows = payloadRenderableRows.slice(existingIds.length);
+          newRenderableRows.forEach((item) => {
+            const bubble = createMessageBubbleNode(item.row);
+            if (!(bubble instanceof HTMLElement)) return;
             messagesWrap.appendChild(bubble);
-          }
+          });
         } else {
           messagesWrap.innerHTML = "";
           let renderedCount = 0;
@@ -5336,7 +5372,11 @@
               }
               return;
             }
-            if (Array.isArray(payload.messages) && Number(payload.active_conversation_id || 0) === Number(activeConversationId || 0)) {
+            if (
+              hasMessageChanges
+              && Array.isArray(payload.messages)
+              && Number(payload.active_conversation_id || 0) === Number(activeConversationId || 0)
+            ) {
               renderActiveMessagesFromPayload(payload.messages);
             }
             if (Array.isArray(payload.threads)) {
