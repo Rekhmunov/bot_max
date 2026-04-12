@@ -5353,7 +5353,31 @@
           }
 
           if (hasMessageChanges || hasThreadsChanges) {
+            const hasActiveConversationMessages = (
+              hasMessageChanges
+              && Array.isArray(payload.messages)
+              && Number(payload.active_conversation_id || 0) === Number(activeConversationId || 0)
+            );
             if (shouldDeferAutoRefresh()) {
+              // Active conversation message updates are rendered passively even in
+              // defer mode (no forced jumps) to avoid "message hidden until reload".
+              if (hasActiveConversationMessages && !hasOpenOverlay()) {
+                renderActiveMessagesFromPayload(payload.messages);
+                if (Array.isArray(payload.threads)) {
+                  patchExistingThreadNodes(payload.threads);
+                }
+                resetDeferredMessages();
+                if (nextLast > currentLastMessageId) {
+                  currentLastMessageId = nextLast;
+                }
+                if (nextSig) {
+                  currentThreadsSignature = nextSig;
+                }
+                if (nextMessagesSig) {
+                  currentMessagesSignature = nextMessagesSig;
+                }
+                return;
+              }
               // Do not interrupt right-click/context actions and
               // do not force-jump to bottom while user reads history.
               if (nextLast > currentLastMessageId) {
@@ -5372,11 +5396,7 @@
               }
               return;
             }
-            if (
-              hasMessageChanges
-              && Array.isArray(payload.messages)
-              && Number(payload.active_conversation_id || 0) === Number(activeConversationId || 0)
-            ) {
+            if (hasActiveConversationMessages) {
               renderActiveMessagesFromPayload(payload.messages);
             }
             if (Array.isArray(payload.threads)) {
