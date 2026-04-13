@@ -107,6 +107,17 @@
       background: #fff3f3;
       color: var(--danger);
     }
+    .btn.icon-btn {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      font-size: 15px;
+    }
     .notice {
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -334,6 +345,7 @@
     "user_deleted": "Пользователь удален",
     "backup_created": "Резервная копия создана",
     "backup_restored": "Резервная копия восстановлена",
+    "backup_deleted": "Резервная копия удалена",
     "superadmin_2fa_updated": "Настройки 2FA суперадмина обновлены"
   } %}
   {% set object_type_labels = {
@@ -711,10 +723,24 @@
             <div><button class="btn danger" type="submit">Восстановить</button></div>
           </form>
           <table style="margin-top:12px;">
-            <thead><tr><th>Имя</th></tr></thead>
+            <thead><tr><th>Имя</th><th>Действия</th></tr></thead>
             <tbody>
               {% for item in backups %}
-                <tr><td>{{ item }}</td></tr>
+                <tr>
+                  <td>{{ item }}</td>
+                  <td>
+                    <form method="post" action="/app/superadmin/backups/delete">
+                      <input type="hidden" name="backup_name" value="{{ item }}" />
+                      <button
+                        class="btn danger icon-btn"
+                        type="submit"
+                        title="Удалить резервную копию"
+                        aria-label="Удалить резервную копию {{ item }}"
+                        onclick="return confirm('Удалить резервную копию {{ item }}?')"
+                      >🗑</button>
+                    </form>
+                  </td>
+                </tr>
               {% endfor %}
             </tbody>
           </table>

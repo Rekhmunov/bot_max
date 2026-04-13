@@ -146,6 +146,7 @@ from app.ops import (
     list_backups,
     refresh_tenant_alerts,
     resolve_subscription_limits,
+    delete_sqlite_backup,
     restore_sqlite_backup,
 )
 from app.security import InMemoryRateLimiter, is_safe_image, is_same_origin, verify_hmac_signature, safe_json_dumps
@@ -2149,6 +2150,7 @@ def _build_superadmin_context(
             "tariff_in_use": "Нельзя удалить тариф: он назначен пользователям.",
             "tariff_default_delete": "Нельзя удалить тариф по умолчанию.",
             "workspace_missing": "Клиент не найден.",
+            "backup_missing": "Резервная копия не найдена.",
         }
         mapped = error_map.get(query_error)
         if mapped and not error:
@@ -2163,6 +2165,8 @@ def _build_superadmin_context(
         query_message = "Тариф по умолчанию обновлен."
     elif request.query_params.get("workspace_tariff_updated") == "1":
         query_message = "Тариф клиента обновлен."
+    elif request.query_params.get("backup_deleted") == "1":
+        query_message = "Резервная копия удалена."
     if query_message and not message:
         message = query_message
 
@@ -7632,6 +7636,42 @@ def app_superadmin_restore_backup(
         )
         db.commit()
     return RedirectResponse(url="/app/superadmin/backups/view", status_code=302)
+
+
+@app.post("/app/superadmin/backups/delete")
+def app_superadmin_delete_backup(
+    request: Request,
+    backup_name: str = Form(""),
+    current_user: ServiceUser = Depends(require_service_user),
+) -> RedirectResponse:
+    _enforce_same_origin(request)
+    _check_rate_limit_or_raise(
+        request,
+        scope="superadmin_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
+    )
+    if current_user.role != "superadmin":
+        raise HTTPException(status_code=403, detail="Только для superadmin")
+    target_name = backup_name.strip()
+    if not target_name:
+        return RedirectResponse(url="/app/superadmin/backups/view?error=backup_missing", status_code=302)
+    try:
+        deleted_path = delete_sqlite_backup(target_name)
+    except (FileNotFoundError, ValueError):
+        return RedirectResponse(url="/app/superadmin/backups/view?error=backup_missing", status_code=302)
+    with SessionLocal() as db:
+        db.add(
+            AuditLog(
+                workspace_id=None,
+                actor_user_id=current_user.id,
+                action="backup_deleted",
+                object_type="backup",
+                object_id=deleted_path.name,
+                details_json="{}",
+            )
+        )
+        db.commit()
+    return RedirectResponse(url="/app/superadmin/backups/view?backup_deleted=1", status_code=302)
 
 
 @app.get("/app/superadmin/backups")

@@ -477,6 +477,22 @@ def list_backups(limit: int = 20) -> list[str]:
     return [p.name for p in files[: max(limit, 1)]]
 
 
+def delete_sqlite_backup(backup_name: str) -> Path:
+    normalized_name = str(backup_name or "").strip()
+    if not normalized_name:
+        raise ValueError("backup_name_required")
+    backup_dir = Path(settings.backups_dir)
+    if not backup_dir.is_absolute():
+        backup_dir = (Path.cwd() / backup_dir).resolve()
+    source = (backup_dir / normalized_name).resolve()
+    if source.parent != backup_dir.resolve():
+        raise ValueError("backup_name_invalid")
+    if not source.exists() or not source.is_file():
+        raise FileNotFoundError(str(source))
+    source.unlink()
+    return source
+
+
 def ensure_workspace_limits_and_state(db: Session, *, workspace_id: int) -> tuple[bool, str]:
     if workspace_id <= 0:
         workspace_id = DEFAULT_WORKSPACE_ID
