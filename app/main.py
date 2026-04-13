@@ -1569,6 +1569,11 @@ def _folder_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     return max(1, int(limits.get("folders_limit", 0) or 0))
 
 
+def _is_unlimited_plan(db: Session, *, workspace_id: int) -> bool:
+    sub = get_or_create_subscription(db, workspace_id=workspace_id)
+    return bool(is_subscription_unlimited(db, subscription=sub))
+
+
 def _pinned_chats_limit_for_workspace(db: Session, *, workspace_id: int) -> int:
     sub = get_or_create_subscription(db, workspace_id=workspace_id)
     limits = resolve_subscription_limits(db, subscription=sub)
