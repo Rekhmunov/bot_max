@@ -148,7 +148,11 @@
       color: #fff;
       font-weight: 700;
       padding: 0 14px;
+      min-height: 40px;
       cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       transition:
         transform var(--motion-fast) var(--ease-emphasized),
         box-shadow var(--motion-fast) var(--ease-standard),
@@ -210,6 +214,32 @@
       padding: 7px 9px;
       white-space: nowrap;
     }
+    .bulk-select-toggle-btn {
+      border-radius: 11px;
+      min-height: 40px;
+      min-width: 40px;
+      width: 40px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+    }
+    .bulk-select-toggle-icon {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      pointer-events: none;
+    }
+    .bulk-select-toggle-btn.is-active {
+      background: #dce9ff;
+      border-color: #afc7f7;
+      color: #1f4fae;
+    }
     .bulk-btn:disabled {
       opacity: .5;
       cursor: not-allowed;
@@ -223,7 +253,7 @@
       display: none;
       align-items: center;
       justify-content: center;
-      margin-right: 4px;
+      margin-right: 0;
       flex: 0 0 auto;
     }
     .thread-select-check {
@@ -572,7 +602,6 @@
     .thread-head {
       display: flex;
       align-items: center;
-      justify-content: space-between;
       gap: 8px;
       margin-bottom: 4px;
     }
@@ -581,11 +610,13 @@
       align-items: center;
       gap: 8px;
       flex: 0 0 auto;
+      margin-left: auto;
     }
     .thread-name {
       font-size: 16px;
       font-weight: 700;
       min-width: 0;
+      flex: 1 1 auto;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -1885,6 +1916,26 @@
       .thread-menu-btn {
         display: inline-flex;
       }
+      .bulk-select-toggle-btn {
+        min-width: 38px;
+        width: 38px;
+      }
+      .folder-pop {
+        align-items: flex-end;
+        padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
+      }
+      .folder-pop-card {
+        width: 100%;
+        max-width: 100%;
+        max-height: calc(var(--layout-height) - 16px);
+        border-radius: 12px;
+        padding: 10px;
+        gap: 8px;
+        overflow: auto;
+      }
+      .folder-actions {
+        max-height: min(44vh, 300px);
+      }
     }
     @media (hover: none) and (pointer: coarse) {
       .thread-menu-btn {
@@ -2210,11 +2261,17 @@
           {% if bulk_action_endpoint %}
             <button
               type="button"
-              class="bulk-btn"
+              class="bulk-btn bulk-select-toggle-btn"
               id="bulk-select-toggle-btn"
               aria-label="Выбрать несколько чатов"
+              title="Выбрать чаты"
             >
-              Выбрать
+              <svg class="bulk-select-toggle-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"></rect>
+                <path d="M7.5 9.5h9"></path>
+                <path d="M7.5 13.5h5"></path>
+                <path d="M16.5 13.5l1.8 1.8 3.2-3.2"></path>
+              </svg>
             </button>
           {% endif %}
           {% if show_admin_nav %}
@@ -3812,6 +3869,11 @@
         if (event.target instanceof Element && event.target.closest("[data-thread-select]")) {
           event.preventDefault();
           event.stopPropagation();
+          const checkbox = event.target.closest("[data-thread-select]");
+          if (checkbox instanceof HTMLInputElement && !checkbox.disabled) {
+            checkbox.checked = !checkbox.checked;
+            checkbox.dispatchEvent(new Event("change", { bubbles: true }));
+          }
           return;
         }
         if (
@@ -4084,7 +4146,12 @@
           bulkToolbar.classList.toggle("is-active", bulkMode);
         }
         if (bulkSelectToggleBtn instanceof HTMLButtonElement) {
-          bulkSelectToggleBtn.textContent = bulkMode ? "Режим выбора: вкл" : "Выбрать";
+          bulkSelectToggleBtn.classList.toggle("is-active", bulkMode);
+          bulkSelectToggleBtn.setAttribute(
+            "aria-label",
+            bulkMode ? "Выключить режим выбора чатов" : "Выбрать несколько чатов",
+          );
+          bulkSelectToggleBtn.setAttribute("title", bulkMode ? "Режим выбора включен" : "Выбрать чаты");
         }
         if (!bulkMode) {
           selectedConversationIds.clear();
