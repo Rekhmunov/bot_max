@@ -5494,6 +5494,32 @@
           isReadByCustomer: Boolean(row.is_read_by_customer),
         };
       };
+      const bubbleRenderFingerprint = (row) => {
+        const meta = messageRenderMeta(row);
+        if (!meta || !meta.isRenderable) return "";
+        const {
+          messageId,
+          direction,
+          text,
+          deliveryState,
+          deliveryError,
+          scheduledAt,
+          isScheduledPending,
+          imageUrls,
+          isReadByCustomer,
+        } = meta;
+        return [
+          String(messageId || 0),
+          String(direction || ""),
+          String(text || ""),
+          String(deliveryState || ""),
+          String(deliveryError || ""),
+          String(scheduledAt || ""),
+          isScheduledPending ? "1" : "0",
+          isReadByCustomer ? "1" : "0",
+          imageUrls.join("|"),
+        ].join("::");
+      };
       const createMessageBubbleNode = (row) => {
         const meta = messageRenderMeta(row);
         if (!meta || !meta.isRenderable) return null;
@@ -5599,6 +5625,7 @@
           }
           bubble.appendChild(errorNode);
         }
+        bubble.dataset.renderFingerprint = bubbleRenderFingerprint(row);
         return bubble;
       };
       const renderActiveMessagesFromPayload = (messagesPayload) => {
@@ -5639,19 +5666,46 @@
             messagesWrap.appendChild(bubble);
           });
         } else {
-          messagesWrap.innerHTML = "";
-          let renderedCount = 0;
-          messagesPayload.forEach((row) => {
-            const bubble = createMessageBubbleNode(row);
-            if (!(bubble instanceof HTMLElement)) return;
-            messagesWrap.appendChild(bubble);
-            renderedCount += 1;
+          const existingById = new Map();
+          existingBubbleNodes.forEach((node) => {
+            if (!(node instanceof HTMLElement)) return;
+            const messageId = Number(node.getAttribute("data-message-id") || 0);
+            if (messageId <= 0) return;
+            existingById.set(messageId, node);
           });
-          if (renderedCount <= 0) {
+          const nextNodes = [];
+          payloadRenderableRows.forEach((item) => {
+            const messageId = Number(item.messageId || 0);
+            if (messageId <= 0) return;
+            const nextFingerprint = bubbleRenderFingerprint(item.row);
+            const existingNode = existingById.get(messageId);
+            const existingFingerprint = (
+              existingNode instanceof HTMLElement
+                ? String(existingNode.dataset.renderFingerprint || "")
+                : ""
+            );
+            if (existingNode instanceof HTMLElement && existingFingerprint === nextFingerprint) {
+              nextNodes.push(existingNode);
+              existingById.delete(messageId);
+              return;
+            }
+            const nextBubble = createMessageBubbleNode(item.row);
+            if (!(nextBubble instanceof HTMLElement)) return;
+            nextBubble.dataset.renderFingerprint = nextFingerprint;
+            nextNodes.push(nextBubble);
+            existingById.delete(messageId);
+          });
+          messagesWrap.innerHTML = "";
+          if (nextNodes.length <= 0) {
             const emptyNode = document.createElement("div");
             emptyNode.className = "empty";
             emptyNode.textContent = "В этом чате пока нет сообщений.";
             messagesWrap.appendChild(emptyNode);
+          } else {
+            nextNodes.forEach((node) => {
+              if (!(node instanceof HTMLElement)) return;
+              messagesWrap.appendChild(node);
+            });
           }
         }
 
