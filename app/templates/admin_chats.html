@@ -1854,6 +1854,9 @@
 
     @media (max-width: 900px) {
       .app { grid-template-columns: 1fr; }
+      .chat-list {
+        grid-template-rows: auto auto auto minmax(0, 1fr);
+      }
       .chat-list,
       .chat-screen {
         height: var(--layout-height);
