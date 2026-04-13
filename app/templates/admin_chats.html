@@ -3876,13 +3876,7 @@
         // Thread action menu button sits inside <a.thread>; do not treat it as navigation click.
         if (event.target instanceof Element && event.target.closest("[data-thread-menu-btn]")) return;
         if (event.target instanceof Element && event.target.closest("[data-thread-select]")) {
-          event.preventDefault();
-          event.stopPropagation();
-          const checkbox = event.target.closest("[data-thread-select]");
-          if (checkbox instanceof HTMLInputElement && !checkbox.disabled) {
-            checkbox.checked = !checkbox.checked;
-            checkbox.dispatchEvent(new Event("change", { bubbles: true }));
-          }
+          // Let native checkbox toggle + change event run.
           return;
         }
         if (
@@ -4209,16 +4203,7 @@
         if (event.target instanceof Element) {
           const checkboxTarget = event.target.closest("input[data-thread-select]");
           if (checkboxTarget instanceof HTMLInputElement) {
-            event.preventDefault();
-            event.stopPropagation();
-            const conversationId = Number(checkboxTarget.getAttribute("data-thread-select-id") || 0);
-            if (conversationId <= 0 || checkboxTarget.disabled) return;
-            if (selectedConversationIds.has(conversationId)) {
-              selectedConversationIds.delete(conversationId);
-            } else {
-              selectedConversationIds.add(conversationId);
-            }
-            syncThreadSelectionFromState();
+            // Let native checkbox toggle + change event run.
             return;
           }
           if (event.target.closest("[data-thread-menu-btn]")) {
