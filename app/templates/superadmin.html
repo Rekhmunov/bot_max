@@ -729,16 +729,28 @@
                 <tr>
                   <td>{{ item }}</td>
                   <td>
-                    <form method="post" action="/app/superadmin/backups/delete">
-                      <input type="hidden" name="backup_name" value="{{ item }}" />
-                      <button
-                        class="btn danger icon-btn"
-                        type="submit"
-                        title="Удалить резервную копию"
-                        aria-label="Удалить резервную копию {{ item }}"
-                        onclick="return confirm('Удалить резервную копию {{ item }}?')"
-                      >🗑</button>
-                    </form>
+                    <div class="row-actions">
+                      <form method="post" action="/app/superadmin/restore">
+                        <input type="hidden" name="backup_name" value="{{ item }}" />
+                        <button
+                          class="btn"
+                          type="submit"
+                          title="Восстановить из резервной копии"
+                          aria-label="Восстановить резервную копию {{ item }}"
+                          onclick="return confirm('Восстановить базу из копии {{ item }}? Текущая база будет перезаписана.')"
+                        >Восстановить</button>
+                      </form>
+                      <form method="post" action="/app/superadmin/backups/delete">
+                        <input type="hidden" name="backup_name" value="{{ item }}" />
+                        <button
+                          class="btn danger icon-btn"
+                          type="submit"
+                          title="Удалить резервную копию"
+                          aria-label="Удалить резервную копию {{ item }}"
+                          onclick="return confirm('Удалить резервную копию {{ item }}?')"
+                        >🗑</button>
+                      </form>
+                    </div>
                   </td>
                 </tr>
               {% endfor %}
