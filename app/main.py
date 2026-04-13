@@ -2034,6 +2034,21 @@ def _build_superadmin_context(
         settings_by_workspace: dict[int, BotSettings] = {
             int(row.workspace_id): row for row in settings_rows
         }
+        owner_rows = (
+            db.query(ServiceUser)
+            .filter(
+                ServiceUser.workspace_id.in_([ws.id for ws in workspaces]),
+                ServiceUser.role.in_(["admin", "owner"]),
+            )
+            .order_by(ServiceUser.workspace_id.asc(), ServiceUser.id.asc())
+            .all()
+        )
+        owner_login_by_workspace: dict[int, str] = {}
+        for owner in owner_rows:
+            workspace_key = int(owner.workspace_id or 0)
+            if workspace_key <= 0 or workspace_key in owner_login_by_workspace:
+                continue
+            owner_login_by_workspace[workspace_key] = str(owner.username or "").strip() or "—"
         plans_by_code: dict[str, TariffPlan] = {
             _normalize_tariff_plan_code(row.code): row
             for row in db.query(TariffPlan).order_by(TariffPlan.id.asc()).all()
@@ -2100,7 +2115,7 @@ def _build_superadmin_context(
                         if bool(plan.is_active)
                     ],
                     "sub_status": sub.status,
-                    "owner_username": "—",
+                    "owner_username": owner_login_by_workspace.get(int(ws.id), "—"),
                     "managers_active": int(m.get("managers_active", 0)),
                     "dialogs_total": int(m.get("dialogs_total", 0)),
                     "messages_month": int(m.get("messages_month", 0)),

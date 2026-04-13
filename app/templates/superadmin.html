@@ -205,6 +205,78 @@
       font: inherit;
       background: #fff;
     }
+    .tariff-row-summary {
+      cursor: pointer;
+    }
+    .tariff-row-details {
+      display: none;
+      background: #f8faff;
+    }
+    .tariff-row-details.is-open {
+      display: table-row;
+    }
+    .plans-filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: end;
+      margin-bottom: 10px;
+    }
+    .plans-filters label {
+      display: grid;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .plans-filters input,
+    .plans-filters select {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      min-width: 160px;
+      font: inherit;
+      background: #fff;
+    }
+    .modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 20, 40, 0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 40;
+      padding: 16px;
+    }
+    .modal.active {
+      display: flex;
+    }
+    .modal-card {
+      width: min(980px, 100%);
+      max-height: calc(100vh - 32px);
+      overflow: auto;
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      padding: 14px;
+    }
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .close-btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      cursor: pointer;
+      width: 32px;
+      height: 32px;
+      font-size: 18px;
+      line-height: 1;
+    }
     @media (max-width: 980px) {
       .layout {
         grid-template-columns: 1fr;
@@ -420,26 +492,14 @@
 
       {% if section == "plans" %}
         <section class="card">
-          <h2>Тарифная сетка (по умолчанию для новых клиентов)</h2>
-          <form class="inline-form" method="post" action="/app/superadmin/tariffs" style="margin-bottom:12px;">
-            <div><label>Код тарифа</label><input name="code" value="" placeholder="basic-pro" required /></div>
-            <div><label>Название</label><input name="name" value="" placeholder="Базовый+" required /></div>
-            <div><label>Описание</label><input name="description" value="" placeholder="Краткое описание" /></div>
-            <div><label>Менеджеры</label><input type="number" min="1" name="manager_limit" value="3" required /></div>
-            <div><label>Диалоги</label><input type="number" min="1" name="dialogs_limit" value="500" required /></div>
-            <div><label>Сообщения/мес</label><input type="number" min="1" name="messages_per_month_limit" value="5000" required /></div>
-            <div><label>Быстрые ответы</label><input type="number" min="1" name="quick_replies_limit" value="10" required /></div>
-            <div><label>Папки</label><input type="number" min="1" name="folders_limit" value="10" required /></div>
-            <div><label>Закрепленные чаты</label><input type="number" min="1" name="pinned_chats_limit" value="5" required /></div>
-            <div><label>billing_product_code</label><input name="billing_product_code" value="" placeholder="prod_xxx" /></div>
-            <div><label>billing_price_code</label><input name="billing_price_code" value="" placeholder="price_xxx" /></div>
-            <div><button class="btn primary" type="submit">Создать тариф</button></div>
-          </form>
+          <div class="row-actions" style="margin-bottom:10px;">
+            <button class="btn primary" type="button" data-open-modal="create-tariff">Создать тариф</button>
+          </div>
           <table>
-            <thead><tr><th>Код</th><th>Название</th><th>Описание</th><th>По умолчанию</th><th>Статус</th><th>Лимиты</th><th>Billing коды</th><th>Управление</th></tr></thead>
+            <thead><tr><th>Код</th><th>Название</th><th>Описание</th><th>По умолчанию</th><th>Статус</th><th>Лимиты</th><th>Платежные коды</th></tr></thead>
             <tbody>
               {% for plan in tariff_rows %}
-                <tr>
+                <tr class="tariff-row-summary" data-tariff-toggle data-target-id="tariff-{{ plan.id }}" aria-expanded="false">
                   <td><code>{{ plan.code }}</code></td>
                   <td>{{ plan.name }}</td>
                   <td>{{ plan.description or "—" }}</td>
@@ -460,13 +520,15 @@
                     {% endif %}
                   </td>
                   <td>
-                    M: {{ plan.manager_limit }} · D: {{ plan.dialogs_limit }} · Msg: {{ plan.messages_per_month_limit }}<br />
-                    QR: {{ plan.quick_replies_limit }} · F: {{ plan.folders_limit }} · Pin: {{ plan.pinned_chats_limit }}
+                    Менеджеры: {{ plan.manager_limit }} · Диалоги: {{ plan.dialogs_limit }} · Сообщения: {{ plan.messages_per_month_limit }}<br />
+                    Быстрые ответы: {{ plan.quick_replies_limit }} · Папки: {{ plan.folders_limit }} · Закрепленные чаты: {{ plan.pinned_chats_limit }}
                   </td>
                   <td>
-                    product: <code>{{ plan.billing_product_code or "—" }}</code><br />
-                    price: <code>{{ plan.billing_price_code or "—" }}</code>
+                    Продукт: <code>{{ plan.billing_product_code or "—" }}</code><br />
+                    Цена: <code>{{ plan.billing_price_code or "—" }}</code>
                   </td>
+                </tr>
+                <tr id="tariff-{{ plan.id }}" class="tariff-row-details">
                   <td>
                     <form class="inline-form" method="post" action="/app/superadmin/tariffs/{{ plan.id }}" style="margin-bottom:6px;">
                       <div><label>Название</label><input name="name" value="{{ plan.name }}" /></div>
@@ -477,8 +539,8 @@
                       <div><label>Быстрые ответы</label><input type="number" min="1" name="quick_replies_limit" value="{{ plan.quick_replies_limit }}" /></div>
                       <div><label>Папки</label><input type="number" min="1" name="folders_limit" value="{{ plan.folders_limit }}" /></div>
                       <div><label>Закрепленные чаты</label><input type="number" min="1" name="pinned_chats_limit" value="{{ plan.pinned_chats_limit }}" /></div>
-                      <div><label>billing_product_code</label><input name="billing_product_code" value="{{ plan.billing_product_code }}" /></div>
-                      <div><label>billing_price_code</label><input name="billing_price_code" value="{{ plan.billing_price_code }}" /></div>
+                      <div><label>Код продукта оплаты</label><input name="billing_product_code" value="{{ plan.billing_product_code }}" /></div>
+                      <div><label>Код цены оплаты</label><input name="billing_price_code" value="{{ plan.billing_price_code }}" /></div>
                       <div>
                         <label>Статус</label>
                         <select name="is_active">
@@ -502,13 +564,45 @@
           <div class="muted" style="margin-bottom:8px;">
             Основа для будущей автосмены тарифа после оплаты: у клиента хранится код тарифа, который можно менять вручную или автоматически биллинг-событием.
           </div>
+          <div class="plans-filters" data-plan-filters>
+            <label>
+              Логин клиента
+              <input type="text" data-plan-filter="login" placeholder="Поиск по логину" />
+            </label>
+            <label>
+              Текущий тариф
+              <select data-plan-filter="current_tariff">
+                <option value="">Все тарифы</option>
+                {% for plan in tariff_rows %}
+                  <option value="{{ plan.code|lower }}">{{ plan.name }} ({{ plan.code }})</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Статус подписки
+              <select data-plan-filter="subscription_status">
+                <option value="">Все статусы</option>
+                <option value="active">Активна</option>
+                <option value="trial">Триал</option>
+                <option value="past_due">Просрочена оплата</option>
+                <option value="paused">На паузе</option>
+                <option value="cancelled">Отменена</option>
+              </select>
+            </label>
+          </div>
           <table>
-            <thead><tr><th>Клиент</th><th>Текущий тариф</th><th>Статус подписки</th><th>Назначить тариф</th></tr></thead>
+            <thead><tr><th>Клиент</th><th>Логин клиента</th><th>Текущий тариф</th><th>Статус подписки</th><th>Назначить тариф</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
                 {% if row.workspace.id != 1 %}
-                <tr>
+                <tr
+                  data-plan-workspace-row
+                  data-login="{{ (row.owner_username or '')|lower }}"
+                  data-tariff-code="{{ (row.plan_code or '')|lower }}"
+                  data-subscription-status="{{ (row.subscription.status or '')|lower }}"
+                >
                   <td>{{ row.workspace.id }} · {{ row.workspace.name }}</td>
+                  <td>{{ row.owner_username or "—" }}</td>
                   <td>{{ row.plan_name or row.plan_code }}</td>
                   <td>{{ subscription_status_labels.get(row.subscription.status, row.subscription.status) }}</td>
                   <td>
@@ -733,7 +827,94 @@
           <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
         </section>
       {% endif %}
+
+      {% if section == "plans" %}
+        <div class="modal" id="modal-create-tariff">
+          <div class="modal-card">
+            <div class="modal-head">
+              <h3 style="margin:0;">Создать тариф</h3>
+              <button type="button" class="close-btn" data-close-modal aria-label="Закрыть">✕</button>
+            </div>
+            <form class="inline-form" method="post" action="/app/superadmin/tariffs">
+              <div><label>Код тарифа</label><input name="code" value="" placeholder="basic-pro" required /></div>
+              <div><label>Название</label><input name="name" value="" placeholder="Базовый+" required /></div>
+              <div><label>Описание</label><input name="description" value="" placeholder="Краткое описание" /></div>
+              <div><label>Лимит менеджеров</label><input type="number" min="1" name="manager_limit" value="3" required /></div>
+              <div><label>Лимит диалогов</label><input type="number" min="1" name="dialogs_limit" value="500" required /></div>
+              <div><label>Лимит сообщений в месяц</label><input type="number" min="1" name="messages_per_month_limit" value="5000" required /></div>
+              <div><label>Лимит быстрых ответов</label><input type="number" min="1" name="quick_replies_limit" value="10" required /></div>
+              <div><label>Лимит папок</label><input type="number" min="1" name="folders_limit" value="10" required /></div>
+              <div><label>Лимит закрепленных чатов</label><input type="number" min="1" name="pinned_chats_limit" value="5" required /></div>
+              <div><label>Код продукта оплаты</label><input name="billing_product_code" value="" placeholder="prod_xxx" /></div>
+              <div><label>Код цены оплаты</label><input name="billing_price_code" value="" placeholder="price_xxx" /></div>
+              <div class="row-actions">
+                <button class="btn primary" type="submit">Сохранить тариф</button>
+                <button class="btn" type="button" data-close-modal>Отмена</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      {% endif %}
     </main>
   </div>
+  <script>
+    (() => {
+      const modal = document.getElementById("modal-create-tariff");
+      if (modal instanceof HTMLElement) {
+        const openBtns = Array.from(document.querySelectorAll("[data-open-modal='create-tariff']"));
+        const closeBtns = Array.from(modal.querySelectorAll("[data-close-modal]"));
+        const openModal = () => modal.classList.add("active");
+        const closeModal = () => modal.classList.remove("active");
+        openBtns.forEach((btn) => btn.addEventListener("click", openModal));
+        closeBtns.forEach((btn) => btn.addEventListener("click", closeModal));
+        modal.addEventListener("click", (event) => {
+          if (event.target === modal) closeModal();
+        });
+      }
+
+      const summaryRows = Array.from(document.querySelectorAll("[data-tariff-toggle]"));
+      summaryRows.forEach((row) => {
+        row.addEventListener("click", () => {
+          const targetId = row.getAttribute("data-target-id");
+          if (!targetId) return;
+          const details = document.getElementById(targetId);
+          if (!(details instanceof HTMLElement)) return;
+          const opened = details.classList.toggle("is-open");
+          row.setAttribute("aria-expanded", opened ? "true" : "false");
+        });
+      });
+
+      const loginFilter = document.querySelector("[data-plan-filter='login']");
+      const tariffFilter = document.querySelector("[data-plan-filter='current_tariff']");
+      const statusFilter = document.querySelector("[data-plan-filter='subscription_status']");
+      const rows = Array.from(document.querySelectorAll("[data-plan-workspace-row]"));
+
+      const applyFilters = () => {
+        const loginValue = String(loginFilter instanceof HTMLInputElement ? loginFilter.value : "").trim().toLowerCase();
+        const tariffValue = String(tariffFilter instanceof HTMLSelectElement ? tariffFilter.value : "").trim().toLowerCase();
+        const statusValue = String(statusFilter instanceof HTMLSelectElement ? statusFilter.value : "").trim().toLowerCase();
+        rows.forEach((row) => {
+          if (!(row instanceof HTMLElement)) return;
+          const rowLogin = String(row.getAttribute("data-login") || "").toLowerCase();
+          const rowTariff = String(row.getAttribute("data-tariff-code") || "").toLowerCase();
+          const rowStatus = String(row.getAttribute("data-subscription-status") || "").toLowerCase();
+          const matchLogin = !loginValue || rowLogin.includes(loginValue);
+          const matchTariff = !tariffValue || rowTariff === tariffValue;
+          const matchStatus = !statusValue || rowStatus === statusValue;
+          row.style.display = (matchLogin && matchTariff && matchStatus) ? "" : "none";
+        });
+      };
+
+      if (loginFilter instanceof HTMLInputElement) {
+        loginFilter.addEventListener("input", applyFilters);
+      }
+      if (tariffFilter instanceof HTMLSelectElement) {
+        tariffFilter.addEventListener("change", applyFilters);
+      }
+      if (statusFilter instanceof HTMLSelectElement) {
+        statusFilter.addEventListener("change", applyFilters);
+      }
+    })();
+  </script>
 </body>
 </html>
