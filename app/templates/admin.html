@@ -1846,8 +1846,8 @@
           setExpanded(!expandedNow);
         };
 
-        // Keep the submitted block open after save. Others stay collapsed by default.
-        const shouldStartExpanded = Boolean(blockKey && savedOpenBlock === blockKey);
+        // Settings sections should be expanded by default.
+        const shouldStartExpanded = true;
         setExpanded(shouldStartExpanded, { animate: false });
         toggleBtn.addEventListener("click", (event) => {
           event.preventDefault();
