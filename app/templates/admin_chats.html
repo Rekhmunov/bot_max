@@ -4206,8 +4206,24 @@
           ? event.target.closest(".thread[data-thread-id]")
           : null;
         if (!(threadNode instanceof HTMLElement)) return;
-        if (event.target instanceof Element && event.target.closest("[data-thread-menu-btn], [data-thread-select]")) {
-          return;
+        if (event.target instanceof Element) {
+          const checkboxTarget = event.target.closest("input[data-thread-select]");
+          if (checkboxTarget instanceof HTMLInputElement) {
+            event.preventDefault();
+            event.stopPropagation();
+            const conversationId = Number(checkboxTarget.getAttribute("data-thread-select-id") || 0);
+            if (conversationId <= 0 || checkboxTarget.disabled) return;
+            if (selectedConversationIds.has(conversationId)) {
+              selectedConversationIds.delete(conversationId);
+            } else {
+              selectedConversationIds.add(conversationId);
+            }
+            syncThreadSelectionFromState();
+            return;
+          }
+          if (event.target.closest("[data-thread-menu-btn]")) {
+            return;
+          }
         }
         event.preventDefault();
         event.stopPropagation();
