@@ -15,7 +15,7 @@ from urllib.parse import quote_plus, urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import func
+from sqlalchemy import and_, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -4567,15 +4567,24 @@ def load_chat_threads(
                     continue
                 profile_by_customer_id[key] = row
 
-        last_msg_ids = (
-            db.query(func.max(ChatMessage.id), ChatMessage.conversation_id)
-            .filter(
-                ChatMessage.workspace_id == workspace_id,
-                ChatMessage.conversation_id.in_(conversation_ids),
-            )
-            .group_by(ChatMessage.conversation_id)
-            .all()
+        hidden_template_texts = [
+            str(get_template_text(db, template_key, workspace_id=workspace_id) or "").strip()
+            for template_key in (TEMPLATE_PRESTART, TEMPLATE_START, TEMPLATE_AFTER_PHONE)
+        ]
+        hidden_template_texts = [item for item in hidden_template_texts if item]
+        latest_message_query = db.query(func.max(ChatMessage.id), ChatMessage.conversation_id).filter(
+            ChatMessage.workspace_id == workspace_id,
+            ChatMessage.conversation_id.in_(conversation_ids),
         )
+        if hidden_template_texts:
+            latest_message_query = latest_message_query.filter(
+                ~and_(
+                    ChatMessage.direction == "bot",
+                    ChatMessage.source == "bot_system",
+                    ChatMessage.text.in_(hidden_template_texts),
+                )
+            )
+        last_msg_ids = latest_message_query.group_by(ChatMessage.conversation_id).all()
         latest_chat_message_ids = [
             int(row[0]) for row in last_msg_ids if row and int(row[0] or 0) > 0
         ]
@@ -6288,21 +6297,49 @@ def load_chat_messages(
     query = db.query(ChatMessage).filter(ChatMessage.conversation_id == conversation_id)
     if workspace_id is not None:
         query = query.filter(ChatMessage.workspace_id == workspace_id)
+    hidden_template_texts: set[str] = set()
+    if workspace_id is not None:
+        for template_key in (TEMPLATE_PRESTART, TEMPLATE_START, TEMPLATE_AFTER_PHONE):
+            template_text = str(get_template_text(db, template_key, workspace_id=workspace_id) or "").strip()
+            if template_text:
+                hidden_template_texts.add(template_text)
+    for default_text in DEFAULT_TEMPLATES.values():
+        normalized_default = str(default_text or "").strip()
+        if normalized_default:
+            hidden_template_texts.add(normalized_default)
+    hidden_template_texts_normalized = {
+        re.sub(r"\s+", " ", item).strip().lower() for item in hidden_template_texts if item
+    }
+    hidden_template_markers = (
+        "нажмите start/начать",
+        "поделиться номером",
+        "номер подтвержден",
+    )
     limit_value = int(limit or 0)
-    if limit_value > 0:
-        rows = (
-            query
-            .order_by(ChatMessage.id.desc())
-            .limit(limit_value)
-            .all()
-        )
-        rows.reverse()
-        return rows
-    return (
+    rows = (
         query
         .order_by(ChatMessage.id.asc())
         .all()
     )
+    if hidden_template_texts_normalized:
+        filtered_rows: list[ChatMessage] = []
+        for row in rows:
+            if str(getattr(row, "direction", "") or "").strip().lower() != "bot":
+                filtered_rows.append(row)
+                continue
+            text_normalized = re.sub(r"\s+", " ", str(getattr(row, "text", "") or "")).strip().lower()
+            if not text_normalized:
+                filtered_rows.append(row)
+                continue
+            if text_normalized in hidden_template_texts_normalized:
+                continue
+            if any(marker in text_normalized for marker in hidden_template_markers):
+                continue
+            filtered_rows.append(row)
+        rows = filtered_rows
+    if limit_value > 0:
+        return rows[-limit_value:]
+    return rows
 
 
 def get_conversation_by_id(

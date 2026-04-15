@@ -13,9 +13,14 @@ from app.database import SessionLocal, init_db
 from app.main import app
 from app.manager_bridge import (
     DEFAULT_TEMPLATES,
+    TEMPLATE_AFTER_PHONE,
+    TEMPLATE_PRESTART,
+    TEMPLATE_START,
     _claim_outbox_item_for_send,
     _dispatch_outbox,
     _enqueue_outbox_message,
+    get_template_text,
+    load_chat_messages,
 )
 from app.services import get_or_create_settings
 from app.models import (
