@@ -781,11 +781,14 @@
       position: fixed;
       inset: 0;
       background: rgba(15, 23, 42, 0.48);
-      display: flex;
+      display: none;
       align-items: center;
       justify-content: center;
       padding: 16px;
       z-index: 10000;
+    }
+    .modal-overlay.active {
+      display: flex;
     }
     .modal-card {
       width: min(420px, 100%);
@@ -795,11 +798,33 @@
       box-shadow: var(--shadow);
       padding: 14px;
     }
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
     .modal-title {
-      margin: 0 0 8px;
+      margin: 0;
       font-size: 17px;
       font-weight: 800;
       color: #1f2937;
+    }
+    .modal-close-icon {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #334155;
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
     }
     .modal-text {
       margin: 0;
@@ -1797,10 +1822,13 @@
     role="dialog"
     aria-modal="true"
     aria-labelledby="token-required-modal-title"
-    hidden
+    aria-hidden="true"
   >
     <div class="modal-card">
-      <h3 id="token-required-modal-title" class="modal-title">Нужно добавить токен</h3>
+      <div class="modal-head">
+        <h3 id="token-required-modal-title" class="modal-title">Нужно добавить токен</h3>
+        <button type="button" id="token-required-modal-close-x" class="modal-close-icon" aria-label="Закрыть окно">✕</button>
+      </div>
       <p class="modal-text">Перед сохранением настроек нажмите «Ввести токен», вставьте токен и нажмите «Добавить».</p>
       <div class="modal-actions">
         <button type="button" id="token-required-modal-close" class="btn secondary modal-close-btn">Понятно</button>
@@ -2102,11 +2130,13 @@
       const tokenDraftInput = document.getElementById("bot_token_input");
       const tokenModal = document.getElementById("token-required-modal");
       const tokenModalClose = document.getElementById("token-required-modal-close");
+      const tokenModalCloseX = document.getElementById("token-required-modal-close-x");
       if (
         !(settingsForm instanceof HTMLFormElement) ||
         !(tokenHiddenInput instanceof HTMLInputElement) ||
         !(tokenModal instanceof HTMLElement) ||
-        !(tokenModalClose instanceof HTMLButtonElement)
+        !(tokenModalClose instanceof HTMLButtonElement) ||
+        !(tokenModalCloseX instanceof HTMLButtonElement)
       ) {
         return;
       }
@@ -2117,13 +2147,21 @@
       };
       const hasDraftToken = () => String(tokenHiddenInput.value || "").trim().length > 0;
       const openModal = () => {
-        tokenModal.hidden = false;
+        tokenModal.classList.add("active");
+        tokenModal.setAttribute("aria-hidden", "false");
       };
       const closeModal = () => {
-        tokenModal.hidden = true;
+        tokenModal.classList.remove("active");
+        tokenModal.setAttribute("aria-hidden", "true");
       };
 
       tokenModalClose.addEventListener("click", () => {
+        closeModal();
+        if (tokenDraftInput instanceof HTMLInputElement) {
+          tokenDraftInput.focus();
+        }
+      });
+      tokenModalCloseX.addEventListener("click", () => {
         closeModal();
         if (tokenDraftInput instanceof HTMLInputElement) {
           tokenDraftInput.focus();
@@ -2135,7 +2173,7 @@
         }
       });
       document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && !tokenModal.hidden) {
+        if (event.key === "Escape" && tokenModal.classList.contains("active")) {
           closeModal();
         }
       });
