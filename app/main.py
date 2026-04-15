@@ -7524,8 +7524,6 @@ def app_superadmin_delete_workspace(
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
     _require_superadmin(current_user)
-    if workspace_id == DEFAULT_WORKSPACE_ID:
-        return RedirectResponse(url="/app/superadmin/workspaces", status_code=302)
     ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
     if ws is None:
         return RedirectResponse(url="/app/superadmin/workspaces", status_code=302)
