@@ -304,7 +304,13 @@
   </style>
 </head>
 <body>
-  {% set role_labels = {"superadmin": "Суперадмин", "owner": "Владелец", "admin": "Администратор", "manager": "Менеджер"} %}
+  {% set role_labels = {
+    "superadmin": "Суперадмин",
+    "user": "Пользователь",
+    "owner": "Пользователь",
+    "admin": "Пользователь",
+    "manager": "Менеджер"
+  } %}
   {% set subscription_status_labels = {
     "active": "Активна",
     "basic": "Начальный",

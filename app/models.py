@@ -24,7 +24,7 @@ class ServiceUser(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     workspace_id: Mapped[int | None] = mapped_column(ForeignKey("workspaces.id"), nullable=True, index=True)
-    role: Mapped[str] = mapped_column(String(32), default="owner", index=True)
+    role: Mapped[str] = mapped_column(String(32), default="user", index=True)
     username: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(512), default="")
     display_name: Mapped[str] = mapped_column(String(255), default="")

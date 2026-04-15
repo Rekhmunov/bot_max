@@ -650,7 +650,7 @@ def run() -> None:
                 .first()
             )
             assert created_user is not None
-            assert created_user.role == "admin"
+            assert created_user.role == "user"
         with SessionLocal() as db:
             workspace_count_before = db.query(Workspace).count()
             user_count_before = db.query(ServiceUser).count()

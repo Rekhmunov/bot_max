@@ -488,7 +488,7 @@
               <a class="link-btn" href="/app/settings">Настройки</a>
               <a class="link-btn" href="/app/chats">Чаты</a>
             {% endif %}
-            {% if current_user.role in ["owner", "admin"] %}
+            {% if current_user.role in ["user", "owner", "admin"] %}
               <a class="link-btn" href="/app/managers">Менеджеры</a>
             {% endif %}
             {% if current_user.role == "superadmin" %}

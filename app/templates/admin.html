@@ -1610,7 +1610,7 @@
             <td data-label="Последний вход">{{ row.last_login_at }}</td>
             <td data-label="Действия">
               <div class="manager-actions">
-                {% if ui_mode == "app" and current_user and current_user.role in ["owner", "admin"] and row.has_service_user %}
+                {% if ui_mode == "app" and current_user and current_user.role in ["user", "owner", "admin"] and row.has_service_user %}
                   <button
                     type="button"
                     class="manager-delete-permission-btn {% if row.can_delete_chats %}is-enabled{% else %}is-disabled{% endif %}"

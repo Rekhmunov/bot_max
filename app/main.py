@@ -184,6 +184,8 @@ _SUPERADMIN_TABS = (
 )
 _SUPERADMIN_AUDIT_PAGE_SIZE = 50
 _SUBSCRIPTION_STATUS_OPTIONS = {"active", "basic", "trial", "past_due", "paused", "cancelled"}
+_WORKSPACE_USER_ROLES = {"user", "owner", "admin"}
+_WORKSPACE_QUICK_REPLY_ROLES = _WORKSPACE_USER_ROLES | {"manager"}
 
 
 def _require_superadmin(user: ServiceUser) -> None:
@@ -886,7 +888,7 @@ def _user_can_delete_chats(user: ServiceUser | None) -> bool:
     if user is None:
         return False
     role_value = str(getattr(user, "role", "") or "").strip().lower()
-    if role_value in {"owner", "admin", "superadmin"}:
+    if role_value in _WORKSPACE_USER_ROLES or role_value == "superadmin":
         return True
     return bool(getattr(user, "can_delete_chats", False))
 
@@ -1982,7 +1984,7 @@ def _superadmin_dashboard_snapshot(db: Session) -> dict:
     inactive = sum(1 for ws in workspaces if not ws.is_active)
     roles = {
         "superadmin": sum(1 for u in users if u.role == "superadmin"),
-        "admin": sum(1 for u in users if u.role == "admin"),
+        "user": sum(1 for u in users if str(u.role or "").strip().lower() in _WORKSPACE_USER_ROLES),
         "manager": sum(1 for u in users if u.role == "manager"),
     }
     return {
@@ -2044,7 +2046,7 @@ def _build_superadmin_context(
             db.query(ServiceUser)
             .filter(
                 ServiceUser.workspace_id.in_([ws.id for ws in workspaces]),
-                ServiceUser.role.in_(["admin", "owner"]),
+                ServiceUser.role.in_(["user", "admin", "owner"]),
             )
             .order_by(ServiceUser.workspace_id.asc(), ServiceUser.id.asc())
             .all()
@@ -3560,7 +3562,7 @@ def app_storage_health(
         scope="app_settings",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in _WORKSPACE_USER_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     health = get_storage_health()
     status_code = 200 if bool(health.get("ok", False)) else 503
@@ -5733,7 +5735,7 @@ async def app_create_quick_reply(
         scope="app_ops",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin", "manager"}:
+    if current_user.role not in _WORKSPACE_QUICK_REPLY_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     quick_replies_limit_value = _quick_reply_limit_for_workspace(db, workspace_id=workspace_id)
@@ -5811,7 +5813,7 @@ async def app_update_quick_reply(
         scope="app_ops",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin", "manager"}:
+    if current_user.role not in _WORKSPACE_QUICK_REPLY_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
@@ -5855,7 +5857,7 @@ def app_delete_quick_reply(
         scope="app_ops",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin", "manager"}:
+    if current_user.role not in _WORKSPACE_QUICK_REPLY_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
@@ -6001,7 +6003,7 @@ def app_managers_page(
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     managers = list_workspace_managers(db, workspace_id=workspace_id)
     workspace = db.query(Workspace).filter(Workspace.id == workspace_id).first()
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in _WORKSPACE_USER_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
 
     links: list[dict[str, str]] = []
@@ -6053,7 +6055,7 @@ def app_create_manager(
         scope="app_manager_create",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in _WORKSPACE_USER_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     ok_ws, ws_err = ensure_workspace_limits_and_state(db, workspace_id=workspace_id)
@@ -6158,7 +6160,7 @@ async def app_update_settings(
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in _WORKSPACE_USER_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     form_data = await request.form()
     settings_section = str(form_data.get("settings_section", "general") or "general").strip().lower()
@@ -6272,7 +6274,7 @@ async def app_delete_bot_token(
         scope="app_settings",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in _WORKSPACE_USER_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     settings_row = get_or_create_settings(db, workspace_id=workspace_id)
@@ -6317,7 +6319,7 @@ def app_settings_business_hours_preview(
         scope="app_settings",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in _WORKSPACE_USER_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     evaluation = evaluate_workspace_business_hours(db, workspace_id=workspace_id)
@@ -6352,7 +6354,7 @@ async def app_copy_manager_link(
         scope="app_settings",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in _WORKSPACE_USER_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     target_manager_id = (copy_manager_id or "").strip()
@@ -6406,7 +6408,7 @@ async def app_remove_manager(
         scope="app_settings",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in _WORKSPACE_USER_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     target_manager_id = (remove_manager_id or "").strip()
@@ -6483,7 +6485,7 @@ async def app_settings_toggle_manager_delete_permission(
         scope="app_settings",
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in _WORKSPACE_USER_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
     manager_id = str(manager_max_account_id or "").strip()
@@ -6547,7 +6549,7 @@ def app_add_intro_step(
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in _WORKSPACE_USER_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     value = (text or "").strip()
     if not value:
@@ -6593,7 +6595,7 @@ def app_delete_intro_step(
         limit=max(1, int(settings.rate_limit_login_per_minute) * 3),
     )
     workspace_id = current_user.workspace_id or DEFAULT_WORKSPACE_ID
-    if current_user.role not in {"owner", "admin"}:
+    if current_user.role not in _WORKSPACE_USER_ROLES:
         raise HTTPException(status_code=403, detail="Недостаточно прав")
     row = (
         db.query(IntroStep)
