@@ -4042,6 +4042,20 @@ async def handle_customer_event(
 ) -> dict:
     workspace_id = settings.workspace_id or DEFAULT_WORKSPACE_ID
     require_phone = bool(getattr(settings, "request_customer_phone", True))
+    existing_customer_conversation_before = (
+        db.query(Conversation)
+        .filter(
+            Conversation.workspace_id == int(workspace_id),
+            Conversation.customer_account_id == str(event.sender_id or "").strip(),
+        )
+        .order_by(Conversation.id.desc())
+        .first()
+    )
+    chat_session_rotated = bool(
+        existing_customer_conversation_before is not None
+        and str(getattr(existing_customer_conversation_before, "chat_id", "") or "").strip()
+        != str(event.chat_id or "").strip()
+    )
     try:
         conversation = _get_or_create_conversation(
             db,
@@ -4086,6 +4100,18 @@ async def handle_customer_event(
             "flow": "duplicate_customer_event",
             "conversation_id": int(conversation.id),
         }
+
+    if chat_session_rotated:
+        # Customer can remove bot/chat in MAX and start again.
+        # Re-open onboarding flags for the new chat session while preserving
+        # existing conversation history in operator timeline.
+        meta.start_prompt_sent = False
+        meta.intro_sent = False
+        if require_phone:
+            meta.phone_verified = False
+        db.add(meta)
+        db.commit()
+        db.refresh(meta)
 
     db.add(
         MessageLog(
@@ -4236,6 +4262,8 @@ async def handle_customer_event(
             has_substantive_customer_history = True
             break
         if meta.start_prompt_sent and has_substantive_customer_history:
+            return {"ok": True, "flow": "start_ignored_active_dialog"}
+        if require_phone and meta.start_prompt_sent and not meta.phone_verified:
             return {"ok": True, "flow": "start_ignored_active_dialog"}
         can_send_first_start_without_phone = True
         if not require_phone:
