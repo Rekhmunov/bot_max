@@ -521,6 +521,49 @@ def _render_offhours_message(template_text: str, evaluation: dict[str, object]) 
     return text
 
 
+async def _send_customer_text_direct(
+    *,
+    client: MaxClient,
+    chat_id: str,
+    user_id: str | None,
+    text: str,
+    text_format: str | None = "markdown",
+) -> dict:
+    text_value = str(text or "").strip()
+    if not text_value:
+        return {"success": True, "skipped": "empty_text"}
+    try:
+        send_result = await asyncio.wait_for(
+            client.send_text(
+                chat_id=chat_id,
+                text=text_value,
+                text_format=text_format,
+            ),
+            timeout=5.0,
+        )
+    except TimeoutError:
+        send_result = {"success": False, "error": "direct_send_timeout"}
+    if bool(send_result.get("success", True) or send_result.get("message")):
+        return send_result
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return send_result
+    try:
+        fallback_result = await asyncio.wait_for(
+            client.send_text_to_user(
+                user_id=normalized_user_id,
+                text=text_value,
+                text_format=text_format,
+            ),
+            timeout=5.0,
+        )
+    except TimeoutError:
+        fallback_result = {"success": False, "error": "direct_send_timeout"}
+    if bool(fallback_result.get("success", True) or fallback_result.get("message")):
+        return fallback_result
+    return send_result
+
+
 async def maybe_send_offhours_autoreply(
     db: Session,
     *,
@@ -1649,6 +1692,34 @@ def _claim_phone_optional_start_once(
         db.add(meta)
         db.commit()
     return True
+
+
+async def _send_system_message_direct(
+    *,
+    client: MaxClient,
+    chat_id: str,
+    user_id: str | None,
+    text: str,
+    attachments: list[dict] | None = None,
+    text_format: str | None = "markdown",
+    timeout_seconds: float = 5.0,
+) -> dict:
+    try:
+        result = await asyncio.wait_for(
+            client.send_message(
+                chat_id=chat_id,
+                user_id=user_id,
+                text=text,
+                attachments=attachments or None,
+                text_format=text_format,
+            ),
+            timeout=max(1.0, float(timeout_seconds or 5.0)),
+        )
+    except TimeoutError:
+        result = {"success": False, "error": "system_message_send_timeout"}
+    if bool(result.get("success", True) or result.get("message")):
+        return result
+    return {"success": False, **result}
 
 
 def _mark_outbox_sent(item: OutboxMessage, result: dict) -> None:
@@ -3549,8 +3620,6 @@ def _is_start_intent_event(event: MaxWebhookEvent) -> bool:
 
 
 async def _send_contact_request_prompt(
-    db: Session,
-    conversation_id: int,
     client: MaxClient,
     chat_id: str,
     user_id: str | None,
@@ -3572,39 +3641,19 @@ async def _send_contact_request_prompt(
             },
         }
     ]
-    msg = _store_chat_message(
-        db,
-        conversation_id=conversation_id,
-        direction="bot",
-        source="bot_system",
+    return await _send_system_message_direct(
+        client=client,
+        chat_id=chat_id,
+        user_id=user_id,
         text=full_text,
-        delivery_state="queued",
-        delivery_error="",
-        delivery_retry_count=0,
-        delivery_next_retry_at=_as_naive_utc(_utc_now()),
+        attachments=attachments,
+        text_format="markdown",
+        timeout_seconds=5.0,
     )
-    item = _enqueue_outbox_message(
-        db,
-        conversation_id=conversation_id,
-        chat_message_id=msg.id,
-        target_chat_id=chat_id,
-        target_user_id=user_id,
-        operation="send_message",
-        payload={"text": full_text, "attachments": attachments, "format": "markdown"},
-    )
-    claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
-    if claimed_item is None:
-        return {"success": False, "error": "outbox_claim_failed"}
-    ok, _, result = await _dispatch_outbox(db, client=client, item=claimed_item)
-    if ok:
-        return result
-    return {"success": False, **result}
 
 
 async def _send_start_fallback_prompt(
-    db: Session,
     *,
-    conversation_id: int,
     client: MaxClient,
     chat_id: str,
     user_id: str | None,
@@ -3626,33 +3675,33 @@ async def _send_start_fallback_prompt(
             },
         }
     ]
-    msg = _store_chat_message(
-        db,
-        conversation_id=conversation_id,
-        direction="bot",
-        source="bot_system",
+    return await _send_system_message_direct(
+        client=client,
+        chat_id=chat_id,
+        user_id=user_id,
         text=text,
-        delivery_state="queued",
-        delivery_error="",
-        delivery_retry_count=0,
-        delivery_next_retry_at=_as_naive_utc(_utc_now()),
+        attachments=attachments,
+        text_format="markdown",
+        timeout_seconds=5.0,
     )
-    item = _enqueue_outbox_message(
-        db,
-        conversation_id=conversation_id,
-        chat_message_id=msg.id,
-        target_chat_id=chat_id,
-        target_user_id=user_id,
-        operation="send_message",
-        payload={"text": text, "attachments": attachments, "format": "markdown"},
+
+
+async def _send_after_phone_direct(
+    *,
+    client: MaxClient,
+    chat_id: str,
+    user_id: str | None,
+    text: str,
+) -> dict:
+    return await _send_system_message_direct(
+        client=client,
+        chat_id=chat_id,
+        user_id=user_id,
+        text=text,
+        attachments=None,
+        text_format="markdown",
+        timeout_seconds=5.0,
     )
-    claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
-    if claimed_item is None:
-        return {"success": False, "error": "outbox_claim_failed"}
-    ok, _, result = await _dispatch_outbox(db, client=client, item=claimed_item)
-    if ok:
-        return result
-    return {"success": False, **result}
 
 
 def _ensure_blocked_folder(
@@ -3998,8 +4047,6 @@ async def handle_customer_event(
         prestart_text = get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id)
         if prestart_text:
             await _send_start_fallback_prompt(
-                db,
-                conversation_id=conversation.id,
                 client=client,
                 chat_id=event.chat_id,
                 user_id=event.sender_id,
@@ -4079,8 +4126,6 @@ async def handle_customer_event(
                 db.commit()
                 start_text = get_template_text(db, TEMPLATE_START, workspace_id=workspace_id)
                 await _send_contact_request_prompt(
-                    db=db,
-                    conversation_id=conversation.id,
                     client=client,
                     chat_id=event.chat_id,
                     user_id=event.sender_id,
@@ -4094,22 +4139,14 @@ async def handle_customer_event(
                 meta.status = "waiting_manager"
             db.add(meta)
             db.commit()
-            await queue_only_send_text(
-                db,
-                conversation_id=conversation.id,
-                target_chat_id=event.chat_id,
-                target_user_id=event.sender_id,
+            await _send_system_message_direct(
+                client=client,
+                chat_id=event.chat_id,
+                user_id=event.sender_id,
                 text=after_phone_text,
-                source="bot_system",
                 text_format="markdown",
+                timeout_seconds=5.0,
             )
-            _dedupe_after_phone_bot_messages(
-                db,
-                workspace_id=workspace_id,
-                conversation_id=int(conversation.id),
-                after_phone_text=after_phone_text,
-            )
-            await process_outbox_queue(db, limit=20)
             return {"ok": True, "flow": "start_prompt_skipped_phone"}
         else:
             if not meta.phone_verified:
@@ -4118,22 +4155,14 @@ async def handle_customer_event(
                     meta.status = "waiting_manager"
                 db.add(meta)
                 db.commit()
-            await queue_only_send_text(
-                db,
-                conversation_id=conversation.id,
-                target_chat_id=event.chat_id,
-                target_user_id=event.sender_id,
+            await _send_system_message_direct(
+                client=client,
+                chat_id=event.chat_id,
+                user_id=event.sender_id,
                 text=after_phone_text,
-                source="bot_system",
                 text_format="markdown",
+                timeout_seconds=5.0,
             )
-            _dedupe_after_phone_bot_messages(
-                db,
-                workspace_id=workspace_id,
-                conversation_id=int(conversation.id),
-                after_phone_text=after_phone_text,
-            )
-            await process_outbox_queue(db, limit=20)
             return {"ok": True, "flow": "start_prompt_phone_not_required"}
 
     if phone_just_verified:
@@ -4166,20 +4195,11 @@ async def handle_customer_event(
             db.add(meta)
             db.commit()
         else:
-            await queue_only_send_text(
-                db,
-                conversation_id=conversation.id,
-                target_chat_id=event.chat_id,
-                target_user_id=event.sender_id,
+            await _send_after_phone_direct(
+                client=client,
+                chat_id=event.chat_id,
+                user_id=event.sender_id,
                 text=after_phone_text,
-                source="bot_system",
-                text_format="markdown",
-            )
-            _dedupe_after_phone_bot_messages(
-                db,
-                workspace_id=workspace_id,
-                conversation_id=int(conversation.id),
-                after_phone_text=after_phone_text,
             )
         await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "phone_verified"}
