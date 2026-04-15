@@ -521,49 +521,6 @@ def _render_offhours_message(template_text: str, evaluation: dict[str, object]) 
     return text
 
 
-async def _send_customer_text_direct(
-    *,
-    client: MaxClient,
-    chat_id: str,
-    user_id: str | None,
-    text: str,
-    text_format: str | None = "markdown",
-) -> dict:
-    text_value = str(text or "").strip()
-    if not text_value:
-        return {"success": True, "skipped": "empty_text"}
-    try:
-        send_result = await asyncio.wait_for(
-            client.send_text(
-                chat_id=chat_id,
-                text=text_value,
-                text_format=text_format,
-            ),
-            timeout=5.0,
-        )
-    except TimeoutError:
-        send_result = {"success": False, "error": "direct_send_timeout"}
-    if bool(send_result.get("success", True) or send_result.get("message")):
-        return send_result
-    normalized_user_id = str(user_id or "").strip()
-    if not normalized_user_id:
-        return send_result
-    try:
-        fallback_result = await asyncio.wait_for(
-            client.send_text_to_user(
-                user_id=normalized_user_id,
-                text=text_value,
-                text_format=text_format,
-            ),
-            timeout=5.0,
-        )
-    except TimeoutError:
-        fallback_result = {"success": False, "error": "direct_send_timeout"}
-    if bool(fallback_result.get("success", True) or fallback_result.get("message")):
-        return fallback_result
-    return send_result
-
-
 async def maybe_send_offhours_autoreply(
     db: Session,
     *,
