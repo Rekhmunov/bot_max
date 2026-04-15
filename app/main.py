@@ -1990,7 +1990,9 @@ def _superadmin_dashboard_snapshot(db: Session) -> dict:
             normalized_role.in_(list(_WORKSPACE_USER_ROLES)),
         )
         .all()
-        if row.workspace_id is not None and int(row.workspace_id) > 0
+        if row.workspace_id is not None
+        and int(row.workspace_id) > 0
+        and int(row.workspace_id) != int(DEFAULT_WORKSPACE_ID)
     }
     workspaces = (
         db.query(Workspace)
@@ -2002,7 +2004,11 @@ def _superadmin_dashboard_snapshot(db: Session) -> dict:
     )
     users = (
         db.query(ServiceUser)
-        .filter(normalized_role.in_(list(_WORKSPACE_USER_ROLES)))
+        .filter(
+            normalized_role.in_(list(_WORKSPACE_USER_ROLES)),
+            ServiceUser.workspace_id.isnot(None),
+            ServiceUser.workspace_id != int(DEFAULT_WORKSPACE_ID),
+        )
         .order_by(ServiceUser.id.asc())
         .all()
     )
@@ -2052,7 +2058,9 @@ def _build_superadmin_context(
                 normalized_role.in_(list(_WORKSPACE_USER_ROLES)),
             )
             .all()
-            if row.workspace_id is not None and int(row.workspace_id) > 0
+            if row.workspace_id is not None
+            and int(row.workspace_id) > 0
+            and int(row.workspace_id) != int(DEFAULT_WORKSPACE_ID)
         }
         workspaces = (
             db.query(Workspace)
@@ -2181,7 +2189,11 @@ def _build_superadmin_context(
     if active_tab == "users":
         users = (
             db.query(ServiceUser)
-            .filter(normalized_role.in_(list(_WORKSPACE_USER_ROLES)))
+            .filter(
+                normalized_role.in_(list(_WORKSPACE_USER_ROLES)),
+                ServiceUser.workspace_id.isnot(None),
+                ServiceUser.workspace_id != int(DEFAULT_WORKSPACE_ID),
+            )
             .order_by(ServiceUser.id.asc())
             .all()
         )
@@ -2242,7 +2254,14 @@ def _build_superadmin_context(
         "total_count": 0,
     }
     if active_tab in {"audit"}:
-        audit_total_count = db.query(AuditLog).count()
+        audit_total_count = (
+            db.query(AuditLog)
+            .filter(
+                (AuditLog.workspace_id != int(DEFAULT_WORKSPACE_ID))
+                | (AuditLog.workspace_id.is_(None))
+            )
+            .count()
+        )
         audit_pagination = _build_audit_pagination(
             total_count=audit_total_count,
             requested_page=request.query_params.get("page"),
@@ -2250,6 +2269,10 @@ def _build_superadmin_context(
         )
         latest_audits = (
             db.query(AuditLog)
+            .filter(
+                (AuditLog.workspace_id != int(DEFAULT_WORKSPACE_ID))
+                | (AuditLog.workspace_id.is_(None))
+            )
             .order_by(AuditLog.id.desc())
             .offset(int(audit_pagination["offset"]))
             .limit(int(audit_pagination["page_size"]))
