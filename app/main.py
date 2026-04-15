@@ -1260,9 +1260,6 @@ async def _auto_subscribe_workspace_webhook(settings_row: BotSettings) -> tuple[
             "message_created",
             "message_callback",
             "bot_started",
-            "message_read",
-            "read",
-            "seen",
         ],
         secret=webhook_secret_value,
     )
