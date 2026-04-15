@@ -1632,16 +1632,47 @@ def _onboarding_template_texts_normalized(db: Session, *, workspace_id: int) -> 
     }
 
 
+def _has_recent_bot_system_template_message(
+    db: Session,
+    *,
+    workspace_id: int,
+    conversation_id: int,
+    template_text: str,
+    window_seconds: int = 60,
+) -> bool:
+    normalized_template = _normalize_template_like_text(template_text)
+    if not normalized_template:
+        return False
+    latest_row = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.workspace_id == int(workspace_id),
+            ChatMessage.conversation_id == int(conversation_id),
+            ChatMessage.direction == "bot",
+            ChatMessage.source == "bot_system",
+        )
+        .order_by(ChatMessage.id.desc())
+        .first()
+    )
+    if latest_row is None:
+        return False
+    latest_text = _normalize_template_like_text(str(getattr(latest_row, "text", "") or ""))
+    if latest_text != normalized_template:
+        return False
+    # Legacy snapshots can miss created_at, so keep conservative id-neighbor fallback.
+    created_at = getattr(latest_row, "created_at", None)
+    if isinstance(created_at, datetime):
+        delta = _as_naive_utc(_utc_now()) - _as_naive_utc(created_at)
+        return delta.total_seconds() <= max(1, int(window_seconds or 60))
+    return True
+
+
 def _is_onboarding_template_echo_event(
     db: Session,
     *,
     workspace_id: int,
     event: MaxWebhookEvent,
 ) -> bool:
-    if str(getattr(event, "message_mid", "") or "").strip():
-        return False
-    if str(getattr(event, "link_mid", "") or "").strip():
-        return False
     if str(getattr(event, "contact_phone", "") or "").strip():
         return False
     incoming_images = [
@@ -1654,10 +1685,29 @@ def _is_onboarding_template_echo_event(
     incoming_text = _normalize_template_like_text(str(getattr(event, "text", "") or ""))
     if not incoming_text:
         return False
-    return incoming_text in _onboarding_template_texts_normalized(
+    template_texts_normalized = _onboarding_template_texts_normalized(
         db,
         workspace_id=int(workspace_id),
     )
+    if not template_texts_normalized:
+        return False
+    if incoming_text in template_texts_normalized:
+        return True
+    onboarding_markers = (
+        "нажмите кнопку \"поделиться номером\"",
+        "поделиться номером",
+        "номер подтвержден",
+        "аккаунт менеджера на крайний случай",
+        "заявок много, пожалуйста, ожидайте",
+    )
+    if any(marker in incoming_text for marker in onboarding_markers):
+        return True
+    if len(incoming_text) < 24:
+        return False
+    for template_text in template_texts_normalized:
+        if incoming_text in template_text:
+            return True
+    return False
 
 
 def _is_probable_duplicate_customer_event(
@@ -4211,10 +4261,12 @@ async def handle_customer_event(
                 after_phone_text=after_phone_text,
             )
             return {"ok": True, "flow": "start_ignored_active_dialog"}
-        meta.start_prompt_sent = True
         if require_phone:
             if not event.contact_phone:
-                # Force explicit confirmation each time Start is pressed.
+                # Do not resend START template on duplicate bot_started bursts.
+                if meta.start_prompt_sent and not meta.phone_verified:
+                    return {"ok": True, "flow": "start_ignored_active_dialog"}
+                meta.start_prompt_sent = True
                 meta.phone_verified = False
                 db.add(meta)
                 db.commit()
@@ -4229,6 +4281,7 @@ async def handle_customer_event(
             # If contact is already available in Start event payload, treat as verified.
             meta.phone_verified = True
             meta.phone_number = event.contact_phone
+            meta.start_prompt_sent = True
             if meta.status == "new":
                 meta.status = "waiting_manager"
             db.add(meta)
@@ -4249,6 +4302,9 @@ async def handle_customer_event(
                     meta.status = "waiting_manager"
                 db.add(meta)
                 db.commit()
+            meta.start_prompt_sent = True
+            db.add(meta)
+            db.commit()
             await _send_system_message_direct(
                 client=client,
                 chat_id=event.chat_id,

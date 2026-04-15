@@ -2112,6 +2112,21 @@ def run() -> None:
         # webhook may resolve into the legacy workspace. Still verify checkbox
         # persistence in the target workspace and core flow integrity.
         assert with_phone_start.json().get("flow") in {"start_prompt", "start_prompt_phone_not_required"}
+        with_phone_start_repeat = client.post(
+            "/webhook/max/phonewskey",
+            json={
+                "update_type": "bot_started",
+                "chat_id": phone_chat_yes,
+                "sender_id": phone_buyer_yes,
+                "text": "",
+            },
+        )
+        assert with_phone_start_repeat.status_code == 200
+        assert with_phone_start_repeat.json().get("flow") in {
+            "start_ignored_active_dialog",
+            "start_prompt",
+            "start_prompt_phone_not_required",
+        }
         with SessionLocal() as db:
             phone_toggle_user = db.query(ServiceUser).filter(ServiceUser.username == phone_toggle_email).first()
             assert phone_toggle_user is not None
