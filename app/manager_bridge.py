@@ -102,6 +102,7 @@ BLOCKED_NOTICE_COOLDOWN_SECONDS = 30
 DEFAULT_OFFHOURS_MESSAGE = "Сейчас мы вне рабочего времени. Мы ответим в рабочие часы."
 DEFAULT_OFFHOURS_COOLDOWN_SECONDS = 6 * 60 * 60
 DEFAULT_BUSINESS_TIMEZONE = "UTC"
+START_INTENT_DEDUPE_SECONDS = 5
 
 logger = logging.getLogger(__name__)
 
@@ -1815,6 +1816,106 @@ def _claim_phone_optional_start_once(
         db.add(meta)
         db.commit()
     return True
+
+
+def _has_substantive_customer_history(
+    db: Session,
+    *,
+    workspace_id: int,
+    conversation_id: int,
+) -> bool:
+    customer_history_rows = (
+        db.query(ChatMessage.text, ChatMessage.max_message_mid, ChatMessage.link_mid)
+        .filter(
+            ChatMessage.workspace_id == int(workspace_id),
+            ChatMessage.conversation_id == int(conversation_id),
+            ChatMessage.direction == "customer",
+        )
+        .all()
+    )
+    for row in customer_history_rows:
+        row_text = str((row[0] if row else "") or "").strip().lower()
+        has_service_marker = bool((row[1] if row else None) or (row[2] if row else None))
+        if row_text in {"", "/start", "start", "bot_started", "bot_start"}:
+            continue
+        # Contact share can arrive with empty text + service marker.
+        if has_service_marker and not row_text:
+            continue
+        return True
+    return False
+
+
+def _is_duplicate_start_intent(
+    meta: ConversationMeta,
+    *,
+    stage: str,
+    now: datetime,
+) -> bool:
+    last_stage = str(getattr(meta, "last_start_intent_stage", "") or "").strip().lower()
+    if last_stage != str(stage or "").strip().lower():
+        return False
+    last_at = getattr(meta, "last_start_intent_at", None)
+    if not isinstance(last_at, datetime):
+        return False
+    delta = _as_naive_utc(now) - _as_naive_utc(last_at)
+    return delta.total_seconds() <= max(1, int(START_INTENT_DEDUPE_SECONDS))
+
+
+async def _process_start_intent(
+    db: Session,
+    *,
+    client: MaxClient,
+    event: MaxWebhookEvent,
+    meta: ConversationMeta,
+    workspace_id: int,
+    require_phone: bool,
+) -> dict:
+    has_contact = bool(str(getattr(event, "contact_phone", "") or "").strip())
+    stage = "awaiting_phone" if require_phone and not has_contact else "ready"
+    now = _as_naive_utc(_utc_now())
+
+    if _is_duplicate_start_intent(meta, stage=stage, now=now):
+        return {"ok": True, "flow": "start_ignored_active_dialog"}
+
+    meta.last_start_intent_at = now
+    meta.last_start_intent_stage = stage
+
+    if require_phone and not has_contact:
+        meta.start_prompt_sent = True
+        meta.phone_verified = False
+        meta.intro_sent = False
+        db.add(meta)
+        db.commit()
+        start_text = get_template_text(db, TEMPLATE_START, workspace_id=workspace_id)
+        await _send_contact_request_prompt(
+            client=client,
+            chat_id=event.chat_id,
+            user_id=event.sender_id,
+            text=start_text,
+        )
+        return {"ok": True, "flow": "start_prompt"}
+
+    if has_contact:
+        meta.phone_verified = True
+        meta.phone_number = str(getattr(event, "contact_phone", "") or "").strip()
+    elif not require_phone:
+        meta.phone_verified = True
+    if str(meta.status or "").strip().lower() == "new":
+        meta.status = "waiting_manager"
+    meta.start_prompt_sent = True
+    db.add(meta)
+    db.commit()
+
+    after_phone_text = get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id)
+    await _send_after_phone_direct(
+        client=client,
+        chat_id=event.chat_id,
+        user_id=event.sender_id,
+        text=after_phone_text,
+    )
+    if require_phone:
+        return {"ok": True, "flow": "start_prompt_skipped_phone"}
+    return {"ok": True, "flow": "start_prompt_phone_not_required"}
 
 
 async def _send_system_message_direct(
@@ -4107,6 +4208,8 @@ async def handle_customer_event(
         # existing conversation history in operator timeline.
         meta.start_prompt_sent = False
         meta.intro_sent = False
+        meta.last_start_intent_at = None
+        meta.last_start_intent_stage = ""
         if require_phone:
             meta.phone_verified = False
         db.add(meta)
@@ -4224,124 +4327,27 @@ async def handle_customer_event(
             )
         return {"ok": True, "flow": "prestart"}
 
-    # Start event should run onboarding only once for active dialog.
-    # Re-run is allowed only when customer history contains only system/service
-    # markers (bot_started, empty text, contact share), which is typical for
-    # bot reinstall/new chat lifecycle before real customer messages.
+    # Unified and deterministic start flow for both bot_started and /start.
     if is_bot_started:
-        after_phone_text = get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id)
-        if not require_phone and meta.start_prompt_sent and meta.phone_verified:
-            _dedupe_after_phone_bot_messages(
+        if (
+            not chat_session_rotated
+            and bool(meta.phone_verified)
+            and _has_substantive_customer_history(
                 db,
-                workspace_id=workspace_id,
+                workspace_id=int(workspace_id),
                 conversation_id=int(conversation.id),
-                after_phone_text=after_phone_text,
             )
-            # When phone confirmation is disabled, repeated bot_started updates
-            # (which can arrive as duplicates) must not enqueue duplicate
-            # "after phone" onboarding messages for managers/operators.
+        ):
+            # Active dialogue should not be restarted by duplicate start signals.
             return {"ok": True, "flow": "start_ignored_active_dialog"}
-        customer_history_rows = (
-            db.query(ChatMessage.text, ChatMessage.max_message_mid, ChatMessage.link_mid)
-            .filter(
-                ChatMessage.workspace_id == workspace_id,
-                ChatMessage.conversation_id == conversation.id,
-                ChatMessage.direction == "customer",
-            )
-            .all()
+        return await _process_start_intent(
+            db,
+            client=client,
+            event=event,
+            meta=meta,
+            workspace_id=int(workspace_id),
+            require_phone=bool(require_phone),
         )
-        has_substantive_customer_history = False
-        for row in customer_history_rows:
-            row_text = str((row[0] if row else "") or "").strip().lower()
-            has_service_marker = bool((row[1] if row else None) or (row[2] if row else None))
-            if row_text in {"", "/start", "start", "bot_started", "bot_start"}:
-                continue
-            # Contact share can arrive with empty text + service marker.
-            if has_service_marker and not row_text:
-                continue
-            has_substantive_customer_history = True
-            break
-        if meta.start_prompt_sent and has_substantive_customer_history:
-            return {"ok": True, "flow": "start_ignored_active_dialog"}
-        if require_phone and meta.start_prompt_sent and not meta.phone_verified:
-            return {"ok": True, "flow": "start_ignored_active_dialog"}
-        can_send_first_start_without_phone = True
-        if not require_phone:
-            # Atomic guard against concurrent duplicate bot_started updates on first launch.
-            # Only one request is allowed to switch this conversation from
-            # start_prompt_sent=False to True and enqueue after-phone text.
-            claimed_first_start = (
-                db.query(ConversationMeta)
-                .filter(
-                    ConversationMeta.id == int(meta.id),
-                    ConversationMeta.start_prompt_sent.is_(False),
-                )
-                .update({ConversationMeta.start_prompt_sent: True}, synchronize_session=False)
-            )
-            db.commit()
-            can_send_first_start_without_phone = int(claimed_first_start or 0) > 0
-            db.refresh(meta)
-        if not require_phone and not can_send_first_start_without_phone:
-            _dedupe_after_phone_bot_messages(
-                db,
-                workspace_id=workspace_id,
-                conversation_id=int(conversation.id),
-                after_phone_text=after_phone_text,
-            )
-            return {"ok": True, "flow": "start_ignored_active_dialog"}
-        if require_phone:
-            if not event.contact_phone:
-                # Do not resend START template on duplicate bot_started bursts.
-                if meta.start_prompt_sent and not meta.phone_verified:
-                    return {"ok": True, "flow": "start_ignored_active_dialog"}
-                meta.start_prompt_sent = True
-                meta.phone_verified = False
-                db.add(meta)
-                db.commit()
-                start_text = get_template_text(db, TEMPLATE_START, workspace_id=workspace_id)
-                await _send_contact_request_prompt(
-                    client=client,
-                    chat_id=event.chat_id,
-                    user_id=event.sender_id,
-                    text=start_text,
-                )
-                return {"ok": True, "flow": "start_prompt"}
-            # If contact is already available in Start event payload, treat as verified.
-            meta.phone_verified = True
-            meta.phone_number = event.contact_phone
-            meta.start_prompt_sent = True
-            if meta.status == "new":
-                meta.status = "waiting_manager"
-            db.add(meta)
-            db.commit()
-            await _send_system_message_direct(
-                client=client,
-                chat_id=event.chat_id,
-                user_id=event.sender_id,
-                text=after_phone_text,
-                text_format="markdown",
-                timeout_seconds=5.0,
-            )
-            return {"ok": True, "flow": "start_prompt_skipped_phone"}
-        else:
-            if not meta.phone_verified:
-                meta.phone_verified = True
-                if meta.status == "new":
-                    meta.status = "waiting_manager"
-                db.add(meta)
-                db.commit()
-            meta.start_prompt_sent = True
-            db.add(meta)
-            db.commit()
-            await _send_system_message_direct(
-                client=client,
-                chat_id=event.chat_id,
-                user_id=event.sender_id,
-                text=after_phone_text,
-                text_format="markdown",
-                timeout_seconds=5.0,
-            )
-            return {"ok": True, "flow": "start_prompt_phone_not_required"}
 
     if phone_just_verified:
         intro_steps = (

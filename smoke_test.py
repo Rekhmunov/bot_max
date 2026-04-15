@@ -2127,6 +2127,67 @@ def run() -> None:
             "start_prompt",
             "start_prompt_phone_not_required",
         }
+        # Re-engagement regression: if customer removes chat on MAX side and
+        # receives a new chat_id, start flow must run again (not remain frozen).
+        rotated_chat_yes = f"chat_with_phone_rot_{uuid4().hex[:6]}"
+        with_phone_reengage = client.post(
+            "/webhook/max/phonewskey",
+            json={
+                "update_type": "bot_started",
+                "chat_id": rotated_chat_yes,
+                "sender_id": phone_buyer_yes,
+                "text": "",
+            },
+        )
+        assert with_phone_reengage.status_code == 200
+        assert with_phone_reengage.json().get("flow") == "start_prompt"
+        with SessionLocal() as db:
+            rotated_conv_yes = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == ws_id, Conversation.customer_account_id == phone_buyer_yes)
+                .first()
+            )
+            assert rotated_conv_yes is not None
+            assert str(rotated_conv_yes.chat_id or "") == rotated_chat_yes
+            start_template = str(get_template_text(db, TEMPLATE_START, workspace_id=ws_id) or "")
+            after_template = str(get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=ws_id) or "")
+            onboarding_rows_yes = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == ws_id,
+                    ChatMessage.conversation_id == int(rotated_conv_yes.id),
+                    ChatMessage.direction == "bot",
+                    ChatMessage.source == "bot_system",
+                    ChatMessage.text.in_([start_template, after_template]),
+                )
+                .count()
+            )
+            assert int(onboarding_rows_yes) == 0
+
+        # Same re-engagement check for phone-optional mode.
+        rotated_chat_no = f"chat_no_phone_rot_{uuid4().hex[:6]}"
+        no_phone_reengage = client.post(
+            "/webhook/max/phonewskey",
+            json={
+                "update_type": "bot_started",
+                "chat_id": rotated_chat_no,
+                "sender_id": phone_buyer_no,
+                "text": "",
+            },
+        )
+        assert no_phone_reengage.status_code == 200
+        assert no_phone_reengage.json().get("flow") in {
+            "start_prompt_phone_not_required",
+            "start_prompt_skipped_phone",
+        }
+        with SessionLocal() as db:
+            rotated_conv_no = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == ws_id, Conversation.customer_account_id == phone_buyer_no)
+                .first()
+            )
+            assert rotated_conv_no is not None
+            assert str(rotated_conv_no.chat_id or "") == rotated_chat_no
         with SessionLocal() as db:
             phone_toggle_user = db.query(ServiceUser).filter(ServiceUser.username == phone_toggle_email).first()
             assert phone_toggle_user is not None
