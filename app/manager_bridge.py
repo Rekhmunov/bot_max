@@ -1607,6 +1607,59 @@ def _dedupe_after_phone_bot_messages(
     return removed
 
 
+def _normalize_template_like_text(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).strip().lower()
+
+
+def _onboarding_template_texts(db: Session, *, workspace_id: int) -> set[str]:
+    texts: set[str] = set()
+    for template_key in (TEMPLATE_PRESTART, TEMPLATE_START, TEMPLATE_AFTER_PHONE):
+        text_value = str(get_template_text(db, template_key, workspace_id=workspace_id) or "").strip()
+        if text_value:
+            texts.add(text_value)
+    for default_text in DEFAULT_TEMPLATES.values():
+        value = str(default_text or "").strip()
+        if value:
+            texts.add(value)
+    return texts
+
+
+def _onboarding_template_texts_normalized(db: Session, *, workspace_id: int) -> set[str]:
+    return {
+        _normalize_template_like_text(text_value)
+        for text_value in _onboarding_template_texts(db, workspace_id=workspace_id)
+        if _normalize_template_like_text(text_value)
+    }
+
+
+def _is_onboarding_template_echo_event(
+    db: Session,
+    *,
+    workspace_id: int,
+    event: MaxWebhookEvent,
+) -> bool:
+    if str(getattr(event, "message_mid", "") or "").strip():
+        return False
+    if str(getattr(event, "link_mid", "") or "").strip():
+        return False
+    if str(getattr(event, "contact_phone", "") or "").strip():
+        return False
+    incoming_images = [
+        str(url).strip()
+        for url in (getattr(event, "image_urls", []) or [])
+        if str(url).strip()
+    ]
+    if incoming_images:
+        return False
+    incoming_text = _normalize_template_like_text(str(getattr(event, "text", "") or ""))
+    if not incoming_text:
+        return False
+    return incoming_text in _onboarding_template_texts_normalized(
+        db,
+        workspace_id=int(workspace_id),
+    )
+
+
 def _is_probable_duplicate_customer_event(
     db: Session,
     *,
@@ -1624,11 +1677,6 @@ def _is_probable_duplicate_customer_event(
     - only if the latest timeline row in the same conversation is
       an identical customer message.
     """
-    update_type = str(getattr(event, "update_type", "") or "").strip().lower()
-    if update_type not in {"", "message_created", "new_message"}:
-        return False
-    if _is_start_intent_event(event):
-        return False
     if str(getattr(event, "message_mid", "") or "").strip():
         return False
     if str(getattr(event, "link_mid", "") or "").strip():
@@ -1643,7 +1691,7 @@ def _is_probable_duplicate_customer_event(
     if incoming_images:
         return False
 
-    incoming_text = str(getattr(event, "text", "") or "").strip()
+    incoming_text = _normalize_template_like_text(str(getattr(event, "text", "") or ""))
     if not incoming_text:
         return False
     latest_row = (
@@ -1671,7 +1719,8 @@ def _is_probable_duplicate_customer_event(
     )
     if latest_images:
         return False
-    return str(getattr(latest_row, "text", "") or "").strip() == incoming_text
+    latest_text = _normalize_template_like_text(str(getattr(latest_row, "text", "") or ""))
+    return latest_text == incoming_text
 
 
 def _claim_phone_optional_start_once(
@@ -3966,6 +4015,16 @@ async def handle_customer_event(
         phone_number=event.contact_phone,
         workspace_id=workspace_id,
     )
+    if _is_onboarding_template_echo_event(
+        db,
+        workspace_id=int(workspace_id),
+        event=event,
+    ):
+        return {
+            "ok": True,
+            "flow": "onboarding_template_echo_ignored",
+            "conversation_id": int(conversation.id),
+        }
     if _is_probable_duplicate_customer_event(
         db,
         workspace_id=int(workspace_id),
@@ -6375,24 +6434,12 @@ def load_chat_messages(
     query = db.query(ChatMessage).filter(ChatMessage.conversation_id == conversation_id)
     if workspace_id is not None:
         query = query.filter(ChatMessage.workspace_id == workspace_id)
-    hidden_template_texts: set[str] = set()
+    hidden_template_texts_normalized: set[str] = set()
     if workspace_id is not None:
-        for template_key in (TEMPLATE_PRESTART, TEMPLATE_START, TEMPLATE_AFTER_PHONE):
-            template_text = str(get_template_text(db, template_key, workspace_id=workspace_id) or "").strip()
-            if template_text:
-                hidden_template_texts.add(template_text)
-    for default_text in DEFAULT_TEMPLATES.values():
-        normalized_default = str(default_text or "").strip()
-        if normalized_default:
-            hidden_template_texts.add(normalized_default)
-    hidden_template_texts_normalized = {
-        re.sub(r"\s+", " ", item).strip().lower() for item in hidden_template_texts if item
-    }
-    hidden_template_markers = (
-        "нажмите start/начать",
-        "поделиться номером",
-        "номер подтвержден",
-    )
+        hidden_template_texts_normalized = _onboarding_template_texts_normalized(
+            db,
+            workspace_id=int(workspace_id),
+        )
     limit_value = int(limit or 0)
     rows = (
         query
@@ -6405,13 +6452,11 @@ def load_chat_messages(
             if str(getattr(row, "direction", "") or "").strip().lower() != "bot":
                 filtered_rows.append(row)
                 continue
-            text_normalized = re.sub(r"\s+", " ", str(getattr(row, "text", "") or "")).strip().lower()
+            text_normalized = _normalize_template_like_text(str(getattr(row, "text", "") or ""))
             if not text_normalized:
                 filtered_rows.append(row)
                 continue
             if text_normalized in hidden_template_texts_normalized:
-                continue
-            if any(marker in text_normalized for marker in hidden_template_markers):
                 continue
             filtered_rows.append(row)
         rows = filtered_rows

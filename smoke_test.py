@@ -2044,6 +2044,43 @@ def run() -> None:
                 .count()
             )
             assert after_dup_rows == before_dup_rows + 1
+        # If provider echoes onboarding template text as incoming customer event,
+        # it must not pollute operator chat timeline.
+        with SessionLocal() as db:
+            echoed_after_phone = str(
+                get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=ws_id) or ""
+            ).strip()
+        assert echoed_after_phone
+        onboarding_echo = client.post(
+            "/webhook/max/phonewskey",
+            json={
+                "update_type": "message_created",
+                "chat_id": phone_chat_no,
+                "sender_id": phone_buyer_no,
+                "text": echoed_after_phone,
+            },
+        )
+        assert onboarding_echo.status_code == 200
+        assert onboarding_echo.json().get("flow") == "onboarding_template_echo_ignored"
+        with SessionLocal() as db:
+            conv_dup = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == ws_id, Conversation.chat_id == phone_chat_no)
+                .first()
+            )
+            assert conv_dup is not None
+            echoed_rows = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == ws_id,
+                    ChatMessage.conversation_id == int(conv_dup.id),
+                    ChatMessage.direction == "customer",
+                    ChatMessage.source == "customer",
+                    ChatMessage.text == echoed_after_phone,
+                )
+                .count()
+            )
+            assert int(echoed_rows) == 0
 
         # Enable phone request (checkbox present).
         save_with_phone = client.post(
