@@ -4788,23 +4788,39 @@ def load_chat_threads(
                     continue
                 profile_by_customer_id[key] = row
 
-        hidden_template_texts = [
-            str(get_template_text(db, template_key, workspace_id=workspace_id) or "").strip()
-            for template_key in (TEMPLATE_PRESTART, TEMPLATE_START, TEMPLATE_AFTER_PHONE)
-        ]
-        hidden_template_texts = [item for item in hidden_template_texts if item]
+        hidden_template_texts = list(_onboarding_template_texts_normalized(db, workspace_id=workspace_id))
         latest_message_query = db.query(func.max(ChatMessage.id), ChatMessage.conversation_id).filter(
             ChatMessage.workspace_id == workspace_id,
             ChatMessage.conversation_id.in_(conversation_ids),
         )
         if hidden_template_texts:
-            latest_message_query = latest_message_query.filter(
-                ~and_(
-                    ChatMessage.direction == "bot",
-                    ChatMessage.source == "bot_system",
-                    ChatMessage.text.in_(hidden_template_texts),
+            latest_message_ids_desc = (
+                db.query(ChatMessage.id, ChatMessage.conversation_id, ChatMessage.direction, ChatMessage.text)
+                .filter(
+                    ChatMessage.workspace_id == workspace_id,
+                    ChatMessage.conversation_id.in_(conversation_ids),
                 )
+                .order_by(ChatMessage.id.desc())
+                .all()
             )
+            latest_allowed_ids: set[int] = set()
+            seen_conversations: set[int] = set()
+            for msg_id, conv_id, direction, text in latest_message_ids_desc:
+                conv_key = int(conv_id or 0)
+                if conv_key <= 0 or conv_key in seen_conversations:
+                    continue
+                is_hidden_bot_template = (
+                    str(direction or "").strip().lower() == "bot"
+                    and _normalize_template_like_text(str(text or "")) in hidden_template_texts
+                )
+                if is_hidden_bot_template:
+                    continue
+                latest_allowed_ids.add(int(msg_id))
+                seen_conversations.add(conv_key)
+            if latest_allowed_ids:
+                latest_message_query = latest_message_query.filter(ChatMessage.id.in_(latest_allowed_ids))
+            else:
+                latest_message_query = latest_message_query.filter(ChatMessage.id < 0)
         last_msg_ids = latest_message_query.group_by(ChatMessage.conversation_id).all()
         latest_chat_message_ids = [
             int(row[0]) for row in last_msg_ids if row and int(row[0] or 0) > 0
@@ -6533,14 +6549,12 @@ def load_chat_messages(
     if hidden_template_texts_normalized:
         filtered_rows: list[ChatMessage] = []
         for row in rows:
-            if str(getattr(row, "direction", "") or "").strip().lower() != "bot":
-                filtered_rows.append(row)
-                continue
             text_normalized = _normalize_template_like_text(str(getattr(row, "text", "") or ""))
             if not text_normalized:
                 filtered_rows.append(row)
                 continue
-            if text_normalized in hidden_template_texts_normalized:
+            row_source = str(getattr(row, "source", "") or "").strip().lower()
+            if text_normalized in hidden_template_texts_normalized and row_source in {"bot_system", "customer"}:
                 continue
             filtered_rows.append(row)
         rows = filtered_rows
