@@ -414,6 +414,7 @@
             <thead><tr><th>ID</th><th>Название</th><th>Код клиента</th><th>Статус</th><th>План</th><th>Менеджеры/Диалоги/Сообщения</th><th>Действия</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
+                {% if row.workspace.id != 1 %}
                 <tr>
                   <td>{{ row.workspace.id }}</td>
                   <td>{{ row.workspace.name }}</td>
@@ -445,6 +446,7 @@
                     </div>
                   </td>
                 </tr>
+                {% endif %}
               {% endfor %}
             </tbody>
           </table>
@@ -610,6 +612,7 @@
             <thead><tr><th>Клиент</th><th>Логин клиента</th><th>Текущий тариф</th><th>Статус подписки</th><th>Назначить тариф</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
+                {% if row.workspace.id != 1 %}
                 <tr
                   data-plan-workspace-row
                   data-login="{{ (row.owner_username or '')|lower }}"
@@ -648,6 +651,7 @@
                     </form>
                   </td>
                 </tr>
+                {% endif %}
               {% endfor %}
             </tbody>
           </table>
