@@ -1981,16 +1981,38 @@ def _drop_legacy_template_unique_index(db: Session) -> None:
 
 
 def _superadmin_dashboard_snapshot(db: Session) -> dict:
-    workspaces = db.query(Workspace).order_by(Workspace.id.asc()).all()
-    users = db.query(ServiceUser).order_by(ServiceUser.id.asc()).all()
+    registered_workspace_ids = {
+        int(row.workspace_id)
+        for row in db.query(ServiceUser.workspace_id)
+        .filter(
+            ServiceUser.workspace_id.isnot(None),
+            ServiceUser.role.in_(list(_WORKSPACE_USER_ROLES)),
+        )
+        .all()
+        if row.workspace_id is not None and int(row.workspace_id) > 0
+    }
+    workspaces = (
+        db.query(Workspace)
+        .filter(Workspace.id.in_(sorted(registered_workspace_ids)))
+        .order_by(Workspace.id.asc())
+        .all()
+        if registered_workspace_ids
+        else []
+    )
+    users = (
+        db.query(ServiceUser)
+        .filter(ServiceUser.role.in_(list(_WORKSPACE_USER_ROLES)))
+        .order_by(ServiceUser.id.asc())
+        .all()
+    )
     sessions = db.query(UserSession).filter(UserSession.is_revoked.is_(False)).count()
     alerts_total = db.query(TenantAlert).filter(TenantAlert.is_resolved.is_(False)).count()
     suspended = sum(1 for ws in workspaces if ws.is_suspended)
     inactive = sum(1 for ws in workspaces if not ws.is_active)
     roles = {
-        "superadmin": sum(1 for u in users if u.role == "superadmin"),
+        "superadmin": 0,
         "user": sum(1 for u in users if str(u.role or "").strip().lower() in _WORKSPACE_USER_ROLES),
-        "manager": sum(1 for u in users if u.role == "manager"),
+        "manager": 0,
     }
     return {
         "workspaces_total": len(workspaces),
@@ -2020,7 +2042,24 @@ def _build_superadmin_context(
     workspace_rows: list[dict] = []
     tariff_rows: list[dict[str, object]] = []
     if active_tab in {"workspaces", "plans", "monitoring"}:
-        workspaces = db.query(Workspace).order_by(Workspace.id.asc()).all()
+        registered_workspace_ids = {
+            int(row.workspace_id)
+            for row in db.query(ServiceUser.workspace_id)
+            .filter(
+                ServiceUser.workspace_id.isnot(None),
+                ServiceUser.role.in_(list(_WORKSPACE_USER_ROLES)),
+            )
+            .all()
+            if row.workspace_id is not None and int(row.workspace_id) > 0
+        }
+        workspaces = (
+            db.query(Workspace)
+            .filter(Workspace.id.in_(sorted(registered_workspace_ids)))
+            .order_by(Workspace.id.asc())
+            .all()
+            if registered_workspace_ids
+            else []
+        )
         subs = {
             row.workspace_id: row
             for row in db.query(Subscription).order_by(Subscription.id.asc()).all()
@@ -2138,7 +2177,12 @@ def _build_superadmin_context(
 
     user_rows: list[dict] = []
     if active_tab == "users":
-        users = db.query(ServiceUser).order_by(ServiceUser.id.asc()).all()
+        users = (
+            db.query(ServiceUser)
+            .filter(ServiceUser.role.in_(list(_WORKSPACE_USER_ROLES)))
+            .order_by(ServiceUser.id.asc())
+            .all()
+        )
         for u in users:
             user_rows.append(
                 {
