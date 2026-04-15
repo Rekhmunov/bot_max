@@ -1981,12 +1981,13 @@ def _drop_legacy_template_unique_index(db: Session) -> None:
 
 
 def _superadmin_dashboard_snapshot(db: Session) -> dict:
+    normalized_role = func.lower(func.trim(ServiceUser.role))
     registered_workspace_ids = {
         int(row.workspace_id)
         for row in db.query(ServiceUser.workspace_id)
         .filter(
             ServiceUser.workspace_id.isnot(None),
-            ServiceUser.role.in_(list(_WORKSPACE_USER_ROLES)),
+            normalized_role.in_(list(_WORKSPACE_USER_ROLES)),
         )
         .all()
         if row.workspace_id is not None and int(row.workspace_id) > 0
@@ -2001,7 +2002,7 @@ def _superadmin_dashboard_snapshot(db: Session) -> dict:
     )
     users = (
         db.query(ServiceUser)
-        .filter(ServiceUser.role.in_(list(_WORKSPACE_USER_ROLES)))
+        .filter(normalized_role.in_(list(_WORKSPACE_USER_ROLES)))
         .order_by(ServiceUser.id.asc())
         .all()
     )
@@ -2039,6 +2040,7 @@ def _build_superadmin_context(
 ) -> dict:
     active_tab = tab if tab in _SUPERADMIN_TABS else "dashboard"
     dashboard = _superadmin_dashboard_snapshot(db)
+    normalized_role = func.lower(func.trim(ServiceUser.role))
     workspace_rows: list[dict] = []
     tariff_rows: list[dict[str, object]] = []
     if active_tab in {"workspaces", "plans", "monitoring"}:
@@ -2047,7 +2049,7 @@ def _build_superadmin_context(
             for row in db.query(ServiceUser.workspace_id)
             .filter(
                 ServiceUser.workspace_id.isnot(None),
-                ServiceUser.role.in_(list(_WORKSPACE_USER_ROLES)),
+                normalized_role.in_(list(_WORKSPACE_USER_ROLES)),
             )
             .all()
             if row.workspace_id is not None and int(row.workspace_id) > 0
@@ -2090,7 +2092,7 @@ def _build_superadmin_context(
             db.query(ServiceUser)
             .filter(
                 ServiceUser.workspace_id.in_([ws.id for ws in workspaces]),
-                ServiceUser.role.in_(["user", "admin", "owner"]),
+                normalized_role.in_(["user", "admin", "owner"]),
             )
             .order_by(ServiceUser.workspace_id.asc(), ServiceUser.id.asc())
             .all()
@@ -2179,7 +2181,7 @@ def _build_superadmin_context(
     if active_tab == "users":
         users = (
             db.query(ServiceUser)
-            .filter(ServiceUser.role.in_(list(_WORKSPACE_USER_ROLES)))
+            .filter(normalized_role.in_(list(_WORKSPACE_USER_ROLES)))
             .order_by(ServiceUser.id.asc())
             .all()
         )
