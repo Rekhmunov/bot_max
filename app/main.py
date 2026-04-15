@@ -2207,6 +2207,7 @@ def _build_superadmin_context(
             "tariff_default_delete": "Нельзя удалить тариф по умолчанию.",
             "workspace_missing": "Клиент не найден.",
             "backup_missing": "Резервная копия не найдена.",
+            "superadmin_protected": "Удаление пользователя с ролью superadmin запрещено.",
         }
         mapped = error_map.get(query_error)
         if mapped and not error:
@@ -7360,6 +7361,8 @@ def app_superadmin_delete_user(
     user = db.query(ServiceUser).filter(ServiceUser.id == user_id).first()
     if user is None:
         return RedirectResponse(url="/app/superadmin/users", status_code=302)
+    if str(user.role or "").strip().lower() == "superadmin":
+        return RedirectResponse(url="/app/superadmin/users?error=superadmin_protected", status_code=302)
     workspace_id = user.workspace_id
     username = user.username
     db.query(UserSession).filter(UserSession.user_id == user_id).delete(synchronize_session=False)
