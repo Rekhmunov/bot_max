@@ -7600,10 +7600,13 @@ def app_superadmin_delete_workspace(
     db.query(ServiceUser).filter(ServiceUser.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(AuditLog).filter(AuditLog.workspace_id == workspace_id).delete(synchronize_session=False)
     db.delete(ws)
+    actor_deleted_with_workspace = False
+    if current_user is not None and current_user.workspace_id is not None:
+        actor_deleted_with_workspace = int(current_user.workspace_id) == int(workspace_id)
     db.add(
         AuditLog(
             workspace_id=None,
-            actor_user_id=current_user.id,
+            actor_user_id=(None if actor_deleted_with_workspace else current_user.id),
             action="workspace_deleted",
             object_type="workspace",
             object_id=str(workspace_id),

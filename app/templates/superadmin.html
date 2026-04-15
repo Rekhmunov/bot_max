@@ -523,10 +523,8 @@
                   </td>
                   <td>{{ user.last_login_at or "-" }}</td>
                   <td>
-                    {% if user.role == "superadmin" %}
-                      <span class="muted">Недоступно для владельца (суперадмина)</span>
-                    {% else %}
-                      <div class="row-actions">
+                    <div class="row-actions">
+                      {% if user.role != "superadmin" %}
                         <form method="post" action="/app/superadmin/users/{{ user.id }}/toggle-block">
                           <button class="btn {% if user.is_blocked %}primary{% else %}danger{% endif %}" type="submit">
                             {% if user.is_blocked %}Разблокировать{% else %}Заблокировать{% endif %}
@@ -535,17 +533,17 @@
                         <form method="post" action="/app/superadmin/users/{{ user.id }}/revoke-sessions">
                           <button class="btn" type="submit">Сбросить сессии</button>
                         </form>
-                        <form method="post" action="/app/superadmin/users/{{ user.id }}/delete">
-                          <button
-                            class="btn danger"
-                            type="submit"
-                            data-confirm-delete
-                            data-confirm-title="Удаление пользователя"
-                            data-confirm-text="Удалить пользователя {{ user.username }} (ID: {{ user.id }})? Это действие необратимо."
-                          >Удалить пользователя</button>
-                        </form>
-                      </div>
-                    {% endif %}
+                      {% endif %}
+                      <form method="post" action="/app/superadmin/users/{{ user.id }}/delete">
+                        <button
+                          class="btn danger"
+                          type="submit"
+                          data-confirm-delete
+                          data-confirm-title="Удаление пользователя"
+                          data-confirm-text="Удалить пользователя {{ user.username }} (ID: {{ user.id }})? Это действие необратимо."
+                        >Удалить пользователя</button>
+                      </form>
+                    </div>
                   </td>
                 </tr>
               {% endfor %}

@@ -510,7 +510,7 @@ def run() -> None:
             )
             assert superadmin_row is not None
             superadmin_user_id = int(superadmin_row.id)
-        assert f"/app/superadmin/users/{superadmin_user_id}/delete" not in superadmin_users.text
+        assert f"/app/superadmin/users/{superadmin_user_id}/delete" in superadmin_users.text
 
         # User deletion from superadmin panel.
         delete_temp_email = f"delete_{uuid4().hex[:8]}@example.com"
