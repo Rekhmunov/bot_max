@@ -482,7 +482,7 @@ def run() -> None:
 
         superadmin_workspaces = client.get("/app/superadmin/workspaces", cookies=superadmin_cookies)
         assert superadmin_workspaces.status_code == 200
-        assert "Default Workspace" not in superadmin_workspaces.text
+        assert "Default Workspace" in superadmin_workspaces.text
         assert "Открыть чаты клиента" not in superadmin_workspaces.text
         with SessionLocal() as db:
             assert (

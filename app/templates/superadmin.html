@@ -183,6 +183,44 @@
       gap: 6px;
     }
     .row-actions form { display: inline-block; margin: 0; }
+    .confirm-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 20, 40, 0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 60;
+      padding: 16px;
+    }
+    .confirm-modal.active {
+      display: flex;
+    }
+    .confirm-modal-card {
+      width: min(420px, 100%);
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      padding: 14px;
+      box-shadow: 0 10px 40px rgba(10, 20, 40, 0.2);
+    }
+    .confirm-modal-title {
+      margin: 0 0 8px;
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .confirm-modal-text {
+      margin: 0 0 12px;
+      color: var(--muted);
+      line-height: 1.35;
+      font-size: 13px;
+    }
+    .confirm-modal-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
     .badge {
       display: inline-block;
       padding: 2px 7px;
@@ -437,7 +475,15 @@
                         <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/suspend"><button class="btn danger" type="submit">Приостановить</button></form>
                       {% endif %}
                       <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/revoke-sessions"><button class="btn" type="submit">Сбросить сессии</button></form>
-                      <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/delete"><button class="btn danger" type="submit">Удалить клиента</button></form>
+                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/delete">
+                          <button
+                            class="btn danger"
+                            type="submit"
+                            data-confirm-delete
+                            data-confirm-title="Удаление клиента"
+                            data-confirm-text="Удалить клиента {{ row.workspace.name }} (ID: {{ row.workspace.id }})? Это действие необратимо."
+                          >Удалить клиента</button>
+                        </form>
                     </div>
                   </td>
                 </tr>
@@ -490,7 +536,13 @@
                           <button class="btn" type="submit">Сбросить сессии</button>
                         </form>
                         <form method="post" action="/app/superadmin/users/{{ user.id }}/delete">
-                          <button class="btn danger" type="submit">Удалить пользователя</button>
+                          <button
+                            class="btn danger"
+                            type="submit"
+                            data-confirm-delete
+                            data-confirm-title="Удаление пользователя"
+                            data-confirm-text="Удалить пользователя {{ user.username }} (ID: {{ user.id }})? Это действие необратимо."
+                          >Удалить пользователя</button>
                         </form>
                       </div>
                     {% endif %}
@@ -893,6 +945,16 @@
       {% endif %}
     </main>
   </div>
+  <div class="confirm-modal" id="confirm-delete-modal" aria-hidden="true">
+    <div class="confirm-modal-card" role="dialog" aria-modal="true" aria-labelledby="confirm-delete-title">
+      <h3 class="confirm-modal-title" id="confirm-delete-title">Подтвердите действие</h3>
+      <p class="confirm-modal-text" id="confirm-delete-text">Это действие необратимо.</p>
+      <div class="confirm-modal-actions">
+        <button type="button" class="btn" id="confirm-delete-cancel">Нет</button>
+        <button type="button" class="btn danger" id="confirm-delete-accept">Да</button>
+      </div>
+    </div>
+  </div>
   <script>
     (() => {
       const modal = document.getElementById("modal-create-tariff");
@@ -949,6 +1011,57 @@
       }
       if (statusFilter instanceof HTMLSelectElement) {
         statusFilter.addEventListener("change", applyFilters);
+      }
+
+      const confirmModal = document.getElementById("confirm-delete-modal");
+      const confirmTitle = document.getElementById("confirm-delete-title");
+      const confirmText = document.getElementById("confirm-delete-text");
+      const confirmCancel = document.getElementById("confirm-delete-cancel");
+      const confirmAccept = document.getElementById("confirm-delete-accept");
+      let pendingDeleteForm = null;
+      const closeConfirmModal = () => {
+        if (!(confirmModal instanceof HTMLElement)) return;
+        confirmModal.classList.remove("active");
+        confirmModal.setAttribute("aria-hidden", "true");
+        pendingDeleteForm = null;
+      };
+      if (
+        confirmModal instanceof HTMLElement &&
+        confirmTitle instanceof HTMLElement &&
+        confirmText instanceof HTMLElement &&
+        confirmCancel instanceof HTMLButtonElement &&
+        confirmAccept instanceof HTMLButtonElement
+      ) {
+        document.addEventListener("click", (event) => {
+          const target = event.target;
+          if (!(target instanceof Element)) return;
+          const trigger = target.closest("[data-confirm-delete]");
+          if (!(trigger instanceof HTMLButtonElement)) return;
+          const form = trigger.closest("form");
+          if (!(form instanceof HTMLFormElement)) return;
+          event.preventDefault();
+          pendingDeleteForm = form;
+          confirmTitle.textContent = String(
+            trigger.getAttribute("data-confirm-title") || "Подтвердите действие"
+          ).trim() || "Подтвердите действие";
+          confirmText.textContent = String(
+            trigger.getAttribute("data-confirm-text") || "Это действие необратимо."
+          ).trim() || "Это действие необратимо.";
+          confirmModal.classList.add("active");
+          confirmModal.setAttribute("aria-hidden", "false");
+        });
+        confirmCancel.addEventListener("click", closeConfirmModal);
+        confirmAccept.addEventListener("click", () => {
+          if (pendingDeleteForm instanceof HTMLFormElement) {
+            pendingDeleteForm.submit();
+          }
+          closeConfirmModal();
+        });
+        confirmModal.addEventListener("click", (event) => {
+          if (event.target === confirmModal) {
+            closeConfirmModal();
+          }
+        });
       }
     })();
   </script>

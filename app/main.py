@@ -112,13 +112,17 @@ from app.models import (
     BillingEvent,
     BotSettings,
     ChatMessage,
+    ChatMessageMedia,
     ChatFolder,
     Conversation,
+    ConversationFolderLink,
+    ConversationPin,
     ConversationMeta,
     CustomerProfile,
     IntroStep,
     ManagerInvite,
     ManagerDispatch,
+    MediaAsset,
     MessageLog,
     MessageTemplate,
     OutboxMessage,
@@ -133,6 +137,10 @@ from app.models import (
     UserSession,
     WebhookEvent,
     Workspace,
+    WorkspaceBusinessException,
+    WorkspaceBusinessHours,
+    WorkspaceBusinessSlot,
+    WorkspaceRetentionPolicy,
 )
 from app.ops import (
     apply_billing_hook,
@@ -7304,11 +7312,10 @@ def app_superadmin_delete_user(
     user = db.query(ServiceUser).filter(ServiceUser.id == user_id).first()
     if user is None:
         return RedirectResponse(url="/app/superadmin/users", status_code=302)
-    if user.role == "superadmin":
-        return RedirectResponse(url="/app/superadmin/users", status_code=302)
     workspace_id = user.workspace_id
     username = user.username
     db.query(UserSession).filter(UserSession.user_id == user_id).delete(synchronize_session=False)
+    db.query(ConversationPin).filter(ConversationPin.service_user_id == user_id).delete(synchronize_session=False)
     db.query(ManagerInvite).filter(ManagerInvite.used_by_user_id == user_id).update(
         {ManagerInvite.used_by_user_id: None},
         synchronize_session=False,
@@ -7321,7 +7328,7 @@ def app_superadmin_delete_user(
     db.add(
         AuditLog(
             workspace_id=workspace_id,
-            actor_user_id=current_user.id,
+            actor_user_id=(None if int(current_user.id) == int(user_id) else current_user.id),
             action="user_deleted",
             object_type="service_user",
             object_id=str(user_id),
@@ -7540,10 +7547,30 @@ def app_superadmin_delete_workspace(
             {AuditLog.actor_user_id: None},
             synchronize_session=False,
         )
+        db.query(ConversationPin).filter(ConversationPin.service_user_id.in_(user_ids)).delete(
+            synchronize_session=False
+        )
     db.query(ManagerInvite).filter(ManagerInvite.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(OutboxMessage).filter(OutboxMessage.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(ManagerDispatch).filter(ManagerDispatch.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(WorkspaceBusinessSlot).filter(WorkspaceBusinessSlot.workspace_id == workspace_id).delete(
+        synchronize_session=False
+    )
+    db.query(WorkspaceBusinessException).filter(
+        WorkspaceBusinessException.workspace_id == workspace_id
+    ).delete(synchronize_session=False)
+    db.query(WorkspaceBusinessHours).filter(WorkspaceBusinessHours.workspace_id == workspace_id).delete(
+        synchronize_session=False
+    )
+    db.query(WorkspaceRetentionPolicy).filter(
+        WorkspaceRetentionPolicy.workspace_id == workspace_id
+    ).delete(synchronize_session=False)
+    db.query(ConversationFolderLink).filter(
+        ConversationFolderLink.workspace_id == workspace_id
+    ).delete(synchronize_session=False)
+    db.query(ConversationPin).filter(ConversationPin.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(ConversationMeta).filter(ConversationMeta.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(ChatMessageMedia).filter(ChatMessageMedia.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(MessageLog).filter(MessageLog.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(ChatMessage).filter(ChatMessage.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(Conversation).filter(Conversation.workspace_id == workspace_id).delete(synchronize_session=False)
@@ -7560,7 +7587,14 @@ def app_superadmin_delete_workspace(
         db.query(QuickReplyMedia).filter(
             QuickReplyMedia.quick_reply_id.in_(workspace_reply_ids)
         ).delete(synchronize_session=False)
+        db.query(QuickReplyMediaAssetLink).filter(
+            QuickReplyMediaAssetLink.quick_reply_id.in_(workspace_reply_ids)
+        ).delete(synchronize_session=False)
     db.query(QuickReply).filter(QuickReply.workspace_id == workspace_id).delete(synchronize_session=False)
+    db.query(QuickReplyMediaAssetLink).filter(
+        QuickReplyMediaAssetLink.workspace_id == workspace_id
+    ).delete(synchronize_session=False)
+    db.query(MediaAsset).filter(MediaAsset.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(MessageTemplate).filter(MessageTemplate.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(BotSettings).filter(BotSettings.workspace_id == workspace_id).delete(synchronize_session=False)
     db.query(Subscription).filter(Subscription.workspace_id == workspace_id).delete(synchronize_session=False)
