@@ -1607,6 +1607,50 @@ def _dedupe_after_phone_bot_messages(
     return removed
 
 
+def _claim_phone_optional_start_once(
+    db: Session,
+    *,
+    workspace_id: int,
+    conversation_id: int,
+) -> bool:
+    """
+    Atomically mark the first bot_started onboarding for phone-optional flow.
+    Prevents duplicate after-phone messages when provider delivers concurrent
+    duplicate bot_started events for the same first dialog.
+    """
+    claimed = (
+        db.query(ConversationMeta)
+        .filter(
+            ConversationMeta.workspace_id == int(workspace_id),
+            ConversationMeta.conversation_id == int(conversation_id),
+            ConversationMeta.start_prompt_sent.is_(False),
+        )
+        .update(
+            {
+                ConversationMeta.start_prompt_sent: True,
+                ConversationMeta.phone_verified: True,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    if int(claimed or 0) <= 0:
+        return False
+    meta = (
+        db.query(ConversationMeta)
+        .filter(
+            ConversationMeta.workspace_id == int(workspace_id),
+            ConversationMeta.conversation_id == int(conversation_id),
+        )
+        .first()
+    )
+    if meta is not None and str(meta.status or "").strip().lower() == "new":
+        meta.status = "waiting_manager"
+        db.add(meta)
+        db.commit()
+    return True
+
+
 def _mark_outbox_sent(item: OutboxMessage, result: dict) -> None:
     item.state = "sent"
     item.is_permanent_failure = False
@@ -4001,6 +4045,30 @@ async def handle_customer_event(
             has_substantive_customer_history = True
             break
         if meta.start_prompt_sent and has_substantive_customer_history:
+            return {"ok": True, "flow": "start_ignored_active_dialog"}
+        can_send_first_start_without_phone = True
+        if not require_phone:
+            # Atomic guard against concurrent duplicate bot_started updates on first launch.
+            # Only one request is allowed to switch this conversation from
+            # start_prompt_sent=False to True and enqueue after-phone text.
+            claimed_first_start = (
+                db.query(ConversationMeta)
+                .filter(
+                    ConversationMeta.id == int(meta.id),
+                    ConversationMeta.start_prompt_sent.is_(False),
+                )
+                .update({ConversationMeta.start_prompt_sent: True}, synchronize_session=False)
+            )
+            db.commit()
+            can_send_first_start_without_phone = int(claimed_first_start or 0) > 0
+            db.refresh(meta)
+        if not require_phone and not can_send_first_start_without_phone:
+            _dedupe_after_phone_bot_messages(
+                db,
+                workspace_id=workspace_id,
+                conversation_id=int(conversation.id),
+                after_phone_text=after_phone_text,
+            )
             return {"ok": True, "flow": "start_ignored_active_dialog"}
         meta.start_prompt_sent = True
         if require_phone:

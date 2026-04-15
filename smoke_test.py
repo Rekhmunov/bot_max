@@ -3,6 +3,7 @@ from pathlib import Path
 from urllib.parse import quote_plus, urlsplit
 from uuid import uuid4
 
+import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import func
 from unittest.mock import AsyncMock, patch
