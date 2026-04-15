@@ -1570,6 +1570,43 @@ def _pick_manager_for_workspace(db: Session, *, workspace_id: int, settings: Bot
     return manager_id or None
 
 
+def _dedupe_after_phone_bot_messages(
+    db: Session,
+    *,
+    workspace_id: int,
+    conversation_id: int,
+    after_phone_text: str,
+) -> int:
+    normalized_text = str(after_phone_text or "").strip()
+    if not normalized_text:
+        return 0
+    duplicate_rows = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.workspace_id == int(workspace_id),
+            ChatMessage.conversation_id == int(conversation_id),
+            ChatMessage.direction == "bot",
+            ChatMessage.text == normalized_text,
+            ChatMessage.source == "bot_system",
+        )
+        .order_by(ChatMessage.id.desc())
+        .all()
+    )
+    if len(duplicate_rows) <= 1:
+        return 0
+    removed = 0
+    for row in duplicate_rows[1:]:
+        db.query(OutboxMessage).filter(
+            OutboxMessage.chat_message_id == int(row.id),
+            OutboxMessage.workspace_id == int(workspace_id),
+        ).delete(synchronize_session=False)
+        db.delete(row)
+        removed += 1
+    if removed > 0:
+        db.commit()
+    return removed
+
+
 def _mark_outbox_sent(item: OutboxMessage, result: dict) -> None:
     item.state = "sent"
     item.is_permanent_failure = False
@@ -3931,7 +3968,14 @@ async def handle_customer_event(
     # markers (bot_started, empty text, contact share), which is typical for
     # bot reinstall/new chat lifecycle before real customer messages.
     if is_bot_started:
+        after_phone_text = get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id)
         if not require_phone and meta.start_prompt_sent and meta.phone_verified:
+            _dedupe_after_phone_bot_messages(
+                db,
+                workspace_id=workspace_id,
+                conversation_id=int(conversation.id),
+                after_phone_text=after_phone_text,
+            )
             # When phone confirmation is disabled, repeated bot_started updates
             # (which can arrive as duplicates) must not enqueue duplicate
             # "after phone" onboarding messages for managers/operators.
@@ -3987,7 +4031,7 @@ async def handle_customer_event(
                 conversation_id=conversation.id,
                 target_chat_id=event.chat_id,
                 target_user_id=event.sender_id,
-                text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
+                text=after_phone_text,
                 source="bot_system",
                 text_format="markdown",
             )
@@ -4005,7 +4049,7 @@ async def handle_customer_event(
                 conversation_id=conversation.id,
                 target_chat_id=event.chat_id,
                 target_user_id=event.sender_id,
-                text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
+                text=after_phone_text,
                 source="bot_system",
                 text_format="markdown",
             )
@@ -4047,7 +4091,7 @@ async def handle_customer_event(
                 conversation_id=conversation.id,
                 target_chat_id=event.chat_id,
                 target_user_id=event.sender_id,
-                text=get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id),
+                text=after_phone_text,
                 source="bot_system",
                 text_format="markdown",
             )

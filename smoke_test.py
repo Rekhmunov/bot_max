@@ -1999,6 +1999,56 @@ def run() -> None:
             # Repeated bot_started updates must not duplicate after-phone message
             # in manager/operator thread when phone confirmation is disabled.
             assert len(after_phone_rows) == 1
+            # If legacy duplicates already existed before fix deployment,
+            # repeated bot_started should clean them up to a single message.
+            if after_phone_rows:
+                newest = max(after_phone_rows, key=lambda item: int(item.id))
+                legacy_dupe = ChatMessage(
+                    workspace_id=ws_id,
+                    conversation_id=int(started_conv_no_phone.id),
+                    direction="bot",
+                    source="bot_system",
+                    text=no_phone_after_text,
+                    delivery_state="sent",
+                )
+                db.add(legacy_dupe)
+                db.commit()
+                db.refresh(legacy_dupe)
+                assert int(legacy_dupe.id) > int(newest.id)
+        no_phone_start_cleanup = client.post(
+            "/webhook/max/phonewskey",
+            json={
+                "update_type": "bot_started",
+                "chat_id": phone_chat_no,
+                "sender_id": phone_buyer_no,
+                "text": "",
+            },
+        )
+        assert no_phone_start_cleanup.status_code == 200
+        assert no_phone_start_cleanup.json().get("flow") in {
+            "start_ignored_active_dialog",
+            "start_prompt_phone_not_required",
+            "start_prompt",
+        }
+        with SessionLocal() as db:
+            started_conv_no_phone = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == ws_id, Conversation.chat_id == phone_chat_no)
+                .first()
+            )
+            assert started_conv_no_phone is not None
+            no_phone_after_text = get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=ws_id)
+            after_phone_rows = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == ws_id,
+                    ChatMessage.conversation_id == int(started_conv_no_phone.id),
+                    ChatMessage.direction == "bot",
+                    ChatMessage.text == no_phone_after_text,
+                )
+                .all()
+            )
+            assert len(after_phone_rows) == 1
 
         # Enable phone request (checkbox present).
         save_with_phone = client.post(
