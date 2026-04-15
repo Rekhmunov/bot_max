@@ -1963,6 +1963,42 @@ def run() -> None:
         )
         assert no_phone_start.status_code == 200
         assert no_phone_start.json().get("flow") in {"start_prompt_phone_not_required", "start_prompt"}
+        no_phone_start_repeat = client.post(
+            "/webhook/max/phonewskey",
+            json={
+                "update_type": "bot_started",
+                "chat_id": phone_chat_no,
+                "sender_id": phone_buyer_no,
+                "text": "",
+            },
+        )
+        assert no_phone_start_repeat.status_code == 200
+        assert no_phone_start_repeat.json().get("flow") in {
+            "start_ignored_active_dialog",
+            "start_prompt_phone_not_required",
+            "start_prompt",
+        }
+        with SessionLocal() as db:
+            started_conv_no_phone = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == ws_id, Conversation.chat_id == phone_chat_no)
+                .first()
+            )
+            assert started_conv_no_phone is not None
+            no_phone_after_text = get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=ws_id)
+            after_phone_rows = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == ws_id,
+                    ChatMessage.conversation_id == int(started_conv_no_phone.id),
+                    ChatMessage.direction == "bot",
+                    ChatMessage.text == no_phone_after_text,
+                )
+                .all()
+            )
+            # Repeated bot_started updates must not duplicate after-phone message
+            # in manager/operator thread when phone confirmation is disabled.
+            assert len(after_phone_rows) == 1
 
         # Enable phone request (checkbox present).
         save_with_phone = client.post(

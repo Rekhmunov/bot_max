@@ -3931,6 +3931,11 @@ async def handle_customer_event(
     # markers (bot_started, empty text, contact share), which is typical for
     # bot reinstall/new chat lifecycle before real customer messages.
     if is_bot_started:
+        if not require_phone and meta.start_prompt_sent and meta.phone_verified:
+            # When phone confirmation is disabled, repeated bot_started updates
+            # (which can arrive as duplicates) must not enqueue duplicate
+            # "after phone" onboarding messages for managers/operators.
+            return {"ok": True, "flow": "start_ignored_active_dialog"}
         customer_history_rows = (
             db.query(ChatMessage.text, ChatMessage.max_message_mid, ChatMessage.link_mid)
             .filter(
