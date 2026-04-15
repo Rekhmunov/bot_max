@@ -6227,7 +6227,14 @@ async def app_update_settings(
                 )
             )
     elif not existing_token:
-        raise HTTPException(status_code=400, detail="Укажите токен вашего бота Max.")
+        page = _render_app_settings_page(
+            request,
+            db=db,
+            current_user=current_user,
+            error="Укажите токен вашего бота Max.",
+        )
+        page.status_code = 400
+        return page
     _ensure_workspace_webhook_key(settings_row)
     should_sync_webhook = bool(token_clean) or not previous_webhook_key
     if should_sync_webhook:

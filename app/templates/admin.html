@@ -777,6 +777,46 @@
       gap: 8px;
       align-items: center;
     }
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.48);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 10000;
+    }
+    .modal-card {
+      width: min(420px, 100%);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+    .modal-title {
+      margin: 0 0 8px;
+      font-size: 17px;
+      font-weight: 800;
+      color: #1f2937;
+    }
+    .modal-text {
+      margin: 0;
+      font-size: 14px;
+      color: #4b5563;
+      line-height: 1.4;
+    }
+    .modal-actions {
+      margin-top: 12px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .modal-close-btn {
+      margin-top: 0;
+      min-width: 96px;
+    }
     .settings-row-checkbox {
       display: flex;
       align-items: center;
@@ -1103,7 +1143,7 @@
             <span class="card-head-kicker">Конфигурация</span>
           </div>
         </div>
-        <form method="post" action="{{ settings_action or '/admin/settings' }}">
+        <form id="bot-settings-form" method="post" action="{{ settings_action or '/admin/settings' }}">
           {% if ui_mode == "app" %}
           <div class="hint" style="margin-bottom:8px;"><strong>Подключение вашего бота Max</strong></div>
           <div class="hint token-line" style="margin-bottom:8px;">
@@ -1751,6 +1791,22 @@
     {% endif %}
 
   </div>
+  <div
+    id="token-required-modal"
+    class="modal-overlay"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="token-required-modal-title"
+    hidden
+  >
+    <div class="modal-card">
+      <h3 id="token-required-modal-title" class="modal-title">Нужно добавить токен</h3>
+      <p class="modal-text">Перед сохранением настроек нажмите «Ввести токен», вставьте токен и нажмите «Добавить».</p>
+      <div class="modal-actions">
+        <button type="button" id="token-required-modal-close" class="btn secondary modal-close-btn">Понятно</button>
+      </div>
+    </div>
+  </div>
   <script>
     (() => {
       const settingsUiMode = "{{ ui_mode }}";
@@ -2035,6 +2091,59 @@
           tokenWrap.hidden = true;
         });
       }
+    })();
+
+    (() => {
+      const uiMode = "{{ ui_mode }}";
+      if (uiMode !== "app") return;
+      const settingsForm = document.getElementById("bot-settings-form");
+      const tokenHiddenInput = document.getElementById("bot_token");
+      const tokenMaskValue = document.getElementById("token-mask-value");
+      const tokenDraftInput = document.getElementById("bot_token_input");
+      const tokenModal = document.getElementById("token-required-modal");
+      const tokenModalClose = document.getElementById("token-required-modal-close");
+      if (
+        !(settingsForm instanceof HTMLFormElement) ||
+        !(tokenHiddenInput instanceof HTMLInputElement) ||
+        !(tokenModal instanceof HTMLElement) ||
+        !(tokenModalClose instanceof HTMLButtonElement)
+      ) {
+        return;
+      }
+
+      const hasSavedToken = () => {
+        if (!(tokenMaskValue instanceof HTMLElement)) return false;
+        return String(tokenMaskValue.textContent || "").trim().length > 0;
+      };
+      const hasDraftToken = () => String(tokenHiddenInput.value || "").trim().length > 0;
+      const openModal = () => {
+        tokenModal.hidden = false;
+      };
+      const closeModal = () => {
+        tokenModal.hidden = true;
+      };
+
+      tokenModalClose.addEventListener("click", () => {
+        closeModal();
+        if (tokenDraftInput instanceof HTMLInputElement) {
+          tokenDraftInput.focus();
+        }
+      });
+      tokenModal.addEventListener("click", (event) => {
+        if (event.target === tokenModal) {
+          closeModal();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !tokenModal.hidden) {
+          closeModal();
+        }
+      });
+      settingsForm.addEventListener("submit", (event) => {
+        if (hasDraftToken() || hasSavedToken()) return;
+        event.preventDefault();
+        openModal();
+      });
     })();
 
     (() => {
