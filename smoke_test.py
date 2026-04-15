@@ -2005,6 +2005,46 @@ def run() -> None:
             # Start templates should no longer pollute operator timeline.
             assert len(after_phone_rows) == 0
 
+        # Duplicate customer updates without stable message id must be
+        # suppressed to avoid triple echoes in operator timeline.
+        with SessionLocal() as db:
+            conv_dup = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == ws_id, Conversation.chat_id == phone_chat_no)
+                .first()
+            )
+            assert conv_dup is not None
+            before_dup_rows = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.workspace_id == ws_id, ChatMessage.conversation_id == int(conv_dup.id))
+                .count()
+            )
+        duplicate_payload = {
+            "update_type": "message_created",
+            "chat_id": phone_chat_no,
+            "sender_id": phone_buyer_no,
+            "text": "dup-test-no-mid",
+        }
+        duplicate_first = client.post("/webhook/max/phonewskey", json=duplicate_payload)
+        assert duplicate_first.status_code == 200
+        assert duplicate_first.json().get("ok") is True
+        duplicate_second = client.post("/webhook/max/phonewskey", json=duplicate_payload)
+        assert duplicate_second.status_code == 200
+        assert duplicate_second.json().get("flow") == "duplicate_customer_event"
+        with SessionLocal() as db:
+            conv_dup = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == ws_id, Conversation.chat_id == phone_chat_no)
+                .first()
+            )
+            assert conv_dup is not None
+            after_dup_rows = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.workspace_id == ws_id, ChatMessage.conversation_id == int(conv_dup.id))
+                .count()
+            )
+            assert after_dup_rows == before_dup_rows + 1
+
         # Enable phone request (checkbox present).
         save_with_phone = client.post(
             "/app/settings",

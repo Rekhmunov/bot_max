@@ -1607,6 +1607,73 @@ def _dedupe_after_phone_bot_messages(
     return removed
 
 
+def _is_probable_duplicate_customer_event(
+    db: Session,
+    *,
+    workspace_id: int,
+    conversation_id: int,
+    event: MaxWebhookEvent,
+) -> bool:
+    """
+    Best-effort dedupe for upstream duplicate customer events that arrive
+    without stable message identifiers (message_mid/update_id).
+
+    Scope is intentionally narrow:
+    - only text-only customer events without message/link mids;
+    - only for regular incoming message updates (not /start lifecycle events);
+    - only if the latest timeline row in the same conversation is
+      an identical customer message.
+    """
+    update_type = str(getattr(event, "update_type", "") or "").strip().lower()
+    if update_type not in {"", "message_created", "new_message"}:
+        return False
+    if _is_start_intent_event(event):
+        return False
+    if str(getattr(event, "message_mid", "") or "").strip():
+        return False
+    if str(getattr(event, "link_mid", "") or "").strip():
+        return False
+    if str(getattr(event, "contact_phone", "") or "").strip():
+        return False
+    incoming_images = [
+        str(url).strip()
+        for url in (getattr(event, "image_urls", []) or [])
+        if str(url).strip()
+    ]
+    if incoming_images:
+        return False
+
+    incoming_text = str(getattr(event, "text", "") or "").strip()
+    if not incoming_text:
+        return False
+    latest_row = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.workspace_id == int(workspace_id),
+            ChatMessage.conversation_id == int(conversation_id),
+        )
+        .order_by(ChatMessage.id.desc())
+        .first()
+    )
+    if latest_row is None:
+        return False
+    if str(getattr(latest_row, "direction", "") or "").strip().lower() != "customer":
+        return False
+    if str(getattr(latest_row, "source", "") or "").strip().lower() != "customer":
+        return False
+    if str(getattr(latest_row, "max_message_mid", "") or "").strip():
+        return False
+    if str(getattr(latest_row, "link_mid", "") or "").strip():
+        return False
+    latest_images = _parse_image_urls_json(
+        getattr(latest_row, "image_urls_json", None),
+        fallback_image_url=getattr(latest_row, "image_url", None),
+    )
+    if latest_images:
+        return False
+    return str(getattr(latest_row, "text", "") or "").strip() == incoming_text
+
+
 def _claim_phone_optional_start_once(
     db: Session,
     *,
@@ -3899,6 +3966,17 @@ async def handle_customer_event(
         phone_number=event.contact_phone,
         workspace_id=workspace_id,
     )
+    if _is_probable_duplicate_customer_event(
+        db,
+        workspace_id=int(workspace_id),
+        conversation_id=int(conversation.id),
+        event=event,
+    ):
+        return {
+            "ok": True,
+            "flow": "duplicate_customer_event",
+            "conversation_id": int(conversation.id),
+        }
 
     db.add(
         MessageLog(
