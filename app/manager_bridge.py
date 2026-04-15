@@ -4035,6 +4035,12 @@ async def handle_customer_event(
                 source="bot_system",
                 text_format="markdown",
             )
+            _dedupe_after_phone_bot_messages(
+                db,
+                workspace_id=workspace_id,
+                conversation_id=int(conversation.id),
+                after_phone_text=after_phone_text,
+            )
             await process_outbox_queue(db, limit=20)
             return {"ok": True, "flow": "start_prompt_skipped_phone"}
         else:
@@ -4052,6 +4058,12 @@ async def handle_customer_event(
                 text=after_phone_text,
                 source="bot_system",
                 text_format="markdown",
+            )
+            _dedupe_after_phone_bot_messages(
+                db,
+                workspace_id=workspace_id,
+                conversation_id=int(conversation.id),
+                after_phone_text=after_phone_text,
             )
             await process_outbox_queue(db, limit=20)
             return {"ok": True, "flow": "start_prompt_phone_not_required"}
@@ -4094,6 +4106,12 @@ async def handle_customer_event(
                 text=after_phone_text,
                 source="bot_system",
                 text_format="markdown",
+            )
+            _dedupe_after_phone_bot_messages(
+                db,
+                workspace_id=workspace_id,
+                conversation_id=int(conversation.id),
+                after_phone_text=after_phone_text,
             )
         await process_outbox_queue(db, limit=20)
         return {"ok": True, "flow": "phone_verified"}
