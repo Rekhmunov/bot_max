@@ -408,7 +408,6 @@
             <thead><tr><th>ID</th><th>Название</th><th>Код клиента</th><th>Статус</th><th>План</th><th>Менеджеры/Диалоги/Сообщения</th><th>Действия</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
-                {% if row.workspace.id != 1 %}
                 <tr>
                   <td>{{ row.workspace.id }}</td>
                   <td>{{ row.workspace.name }}</td>
@@ -426,7 +425,7 @@
                   <td>{{ row.metrics.managers_active }} / {{ row.metrics.dialogs_total }} / {{ row.metrics.messages_month }}</td>
                   <td>
                     <div class="row-actions">
-                      {% if row.workspace.id != 1 %}
+                      {% if row.workspace.id > 1 %}
                         {% if row.workspace.is_suspended %}
                           <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/resume"><button class="btn" type="submit">Возобновить</button></form>
                         {% else %}
@@ -440,7 +439,6 @@
                     </div>
                   </td>
                 </tr>
-                {% endif %}
               {% endfor %}
             </tbody>
           </table>
@@ -606,7 +604,6 @@
             <thead><tr><th>Клиент</th><th>Логин клиента</th><th>Текущий тариф</th><th>Статус подписки</th><th>Назначить тариф</th></tr></thead>
             <tbody>
               {% for row in workspace_rows %}
-                {% if row.workspace.id != 1 %}
                 <tr
                   data-plan-workspace-row
                   data-login="{{ (row.owner_username or '')|lower }}"
@@ -635,11 +632,16 @@
                           {% endfor %}
                         </select>
                       </div>
-                      <div><button class="btn primary" type="submit">Назначить</button></div>
+                      <div>
+                        {% if row.workspace.id > 1 %}
+                          <button class="btn primary" type="submit">Назначить</button>
+                        {% else %}
+                          <span class="muted">Системный клиент</span>
+                        {% endif %}
+                      </div>
                     </form>
                   </td>
                 </tr>
-                {% endif %}
               {% endfor %}
             </tbody>
           </table>
