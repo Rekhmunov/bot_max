@@ -763,24 +763,7 @@ def _get_or_create_conversation(
     *,
     workspace_id: int = DEFAULT_WORKSPACE_ID,
 ) -> Conversation:
-    can_dialog, _ = can_create_dialog(db, workspace_id=workspace_id)
-    if not can_dialog:
-        # Keep deterministic behavior for callers: stop creating new rows over quota.
-        existing = (
-            db.query(Conversation)
-            .filter(
-                Conversation.workspace_id == workspace_id,
-                Conversation.chat_id == chat_id,
-            )
-            .first()
-        )
-        if existing:
-            return existing
-        raise ValueError("dialogs_limit_exceeded")
-    # chat_id is globally unique in the current schema.
-    # If we find a legacy row in another workspace for the same customer/chat,
-    # rebind it to the resolved workspace to keep tenant routing consistent.
-    conversation = (
+    existing = (
         db.query(Conversation)
         .filter(
             Conversation.workspace_id == workspace_id,
@@ -788,6 +771,13 @@ def _get_or_create_conversation(
         )
         .first()
     )
+    if existing:
+        return existing
+
+    # chat_id is globally unique in the current schema.
+    # If we find a legacy row in another workspace for the same customer/chat,
+    # rebind it to the resolved workspace to keep tenant routing consistent.
+    conversation = None
     if conversation is None:
         conversation = db.query(Conversation).filter(Conversation.chat_id == chat_id).first()
         if conversation is not None:
@@ -808,6 +798,31 @@ def _get_or_create_conversation(
                 db.refresh(conversation)
     if conversation:
         return conversation
+
+    existing_customer_conversation = (
+        db.query(Conversation)
+        .filter(
+            Conversation.workspace_id == workspace_id,
+            Conversation.customer_account_id == customer_id,
+        )
+        .order_by(Conversation.id.desc())
+        .first()
+    )
+    if existing_customer_conversation is not None:
+        # Keep existing customer communication alive even when chat id is rotated
+        # by messenger side and dialog quota is already full.
+        if str(existing_customer_conversation.chat_id or "").strip() != str(chat_id or "").strip():
+            existing_customer_conversation.chat_id = chat_id
+            existing_customer_conversation.is_active = True
+            db.add(existing_customer_conversation)
+            db.commit()
+            db.refresh(existing_customer_conversation)
+        return existing_customer_conversation
+
+    can_dialog, _ = can_create_dialog(db, workspace_id=workspace_id)
+    if not can_dialog:
+        raise ValueError("dialogs_limit_exceeded")
+
     conversation = Conversation(
         workspace_id=workspace_id,
         chat_id=chat_id,
