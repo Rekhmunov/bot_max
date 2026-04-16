@@ -1949,6 +1949,8 @@ async def _process_start_intent(
             db.commit()
             start_text = get_template_text(db, TEMPLATE_START, workspace_id=workspace_id)
             await _send_contact_request_prompt(
+                db=db,
+                conversation_id=int(conversation.id),
                 client=client,
                 chat_id=event.chat_id,
                 user_id=event.sender_id,
@@ -1979,6 +1981,8 @@ async def _process_start_intent(
 
         after_phone_text = get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id)
         await _send_after_phone_direct(
+            db=db,
+            conversation_id=int(conversation.id),
             client=client,
             chat_id=event.chat_id,
             user_id=event.sender_id,
@@ -2031,6 +2035,8 @@ async def _process_start_intent(
         db.commit()
     else:
         await _send_after_phone_direct(
+            db=db,
+            conversation_id=int(conversation.id),
             client=client,
             chat_id=event.chat_id,
             user_id=event.sender_id,
@@ -3966,6 +3972,9 @@ def _is_start_intent_event(event: MaxWebhookEvent) -> bool:
 
 
 async def _send_contact_request_prompt(
+    *,
+    db: Session,
+    conversation_id: int,
     client: MaxClient,
     chat_id: str,
     user_id: str | None,
@@ -3987,7 +3996,7 @@ async def _send_contact_request_prompt(
             },
         }
     ]
-    return await _send_system_message_direct(
+    result = await _send_system_message_direct(
         client=client,
         chat_id=chat_id,
         user_id=user_id,
@@ -3996,10 +4005,24 @@ async def _send_contact_request_prompt(
         text_format="markdown",
         timeout_seconds=5.0,
     )
+    send_ok = bool(result.get("success", True) or result.get("message"))
+    _store_chat_message(
+        db,
+        conversation_id=int(conversation_id),
+        direction="bot",
+        source="bot_system",
+        text=full_text,
+        max_message_mid=_extract_sent_mid(result),
+        delivery_state=("sent" if send_ok else "failed"),
+        delivery_error=("" if send_ok else _format_delivery_error(result)),
+    )
+    return result
 
 
 async def _send_start_fallback_prompt(
     *,
+    db: Session,
+    conversation_id: int,
     client: MaxClient,
     chat_id: str,
     user_id: str | None,
@@ -4021,7 +4044,7 @@ async def _send_start_fallback_prompt(
             },
         }
     ]
-    return await _send_system_message_direct(
+    result = await _send_system_message_direct(
         client=client,
         chat_id=chat_id,
         user_id=user_id,
@@ -4030,16 +4053,30 @@ async def _send_start_fallback_prompt(
         text_format="markdown",
         timeout_seconds=5.0,
     )
+    send_ok = bool(result.get("success", True) or result.get("message"))
+    _store_chat_message(
+        db,
+        conversation_id=int(conversation_id),
+        direction="bot",
+        source="bot_system",
+        text=text,
+        max_message_mid=_extract_sent_mid(result),
+        delivery_state=("sent" if send_ok else "failed"),
+        delivery_error=("" if send_ok else _format_delivery_error(result)),
+    )
+    return result
 
 
 async def _send_after_phone_direct(
     *,
+    db: Session,
+    conversation_id: int,
     client: MaxClient,
     chat_id: str,
     user_id: str | None,
     text: str,
 ) -> dict:
-    return await _send_system_message_direct(
+    result = await _send_system_message_direct(
         client=client,
         chat_id=chat_id,
         user_id=user_id,
@@ -4048,6 +4085,18 @@ async def _send_after_phone_direct(
         text_format="markdown",
         timeout_seconds=5.0,
     )
+    send_ok = bool(result.get("success", True) or result.get("message"))
+    _store_chat_message(
+        db,
+        conversation_id=int(conversation_id),
+        direction="bot",
+        source="bot_system",
+        text=text,
+        max_message_mid=_extract_sent_mid(result),
+        delivery_state=("sent" if send_ok else "failed"),
+        delivery_error=("" if send_ok else _format_delivery_error(result)),
+    )
+    return result
 
 
 def _ensure_blocked_folder(
@@ -4428,6 +4477,8 @@ async def handle_customer_event(
         prestart_text = get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id)
         if prestart_text:
             await _send_start_fallback_prompt(
+                db=db,
+                conversation_id=int(conversation.id),
                 client=client,
                 chat_id=event.chat_id,
                 user_id=event.sender_id,
@@ -4857,39 +4908,10 @@ def load_chat_threads(
                     continue
                 profile_by_customer_id[key] = row
 
-        hidden_template_texts = list(_onboarding_template_texts_normalized(db, workspace_id=workspace_id))
         latest_message_query = db.query(func.max(ChatMessage.id), ChatMessage.conversation_id).filter(
             ChatMessage.workspace_id == workspace_id,
             ChatMessage.conversation_id.in_(conversation_ids),
         )
-        if hidden_template_texts:
-            latest_message_ids_desc = (
-                db.query(ChatMessage.id, ChatMessage.conversation_id, ChatMessage.direction, ChatMessage.text)
-                .filter(
-                    ChatMessage.workspace_id == workspace_id,
-                    ChatMessage.conversation_id.in_(conversation_ids),
-                )
-                .order_by(ChatMessage.id.desc())
-                .all()
-            )
-            latest_allowed_ids: set[int] = set()
-            seen_conversations: set[int] = set()
-            for msg_id, conv_id, direction, text in latest_message_ids_desc:
-                conv_key = int(conv_id or 0)
-                if conv_key <= 0 or conv_key in seen_conversations:
-                    continue
-                is_hidden_bot_template = (
-                    str(direction or "").strip().lower() == "bot"
-                    and _normalize_template_like_text(str(text or "")) in hidden_template_texts
-                )
-                if is_hidden_bot_template:
-                    continue
-                latest_allowed_ids.add(int(msg_id))
-                seen_conversations.add(conv_key)
-            if latest_allowed_ids:
-                latest_message_query = latest_message_query.filter(ChatMessage.id.in_(latest_allowed_ids))
-            else:
-                latest_message_query = latest_message_query.filter(ChatMessage.id < 0)
         last_msg_ids = latest_message_query.group_by(ChatMessage.conversation_id).all()
         latest_chat_message_ids = [
             int(row[0]) for row in last_msg_ids if row and int(row[0] or 0) > 0
@@ -6603,30 +6625,12 @@ def load_chat_messages(
     query = db.query(ChatMessage).filter(ChatMessage.conversation_id == conversation_id)
     if workspace_id is not None:
         query = query.filter(ChatMessage.workspace_id == workspace_id)
-    hidden_template_texts_normalized: set[str] = set()
-    if workspace_id is not None:
-        hidden_template_texts_normalized = _onboarding_template_texts_normalized(
-            db,
-            workspace_id=int(workspace_id),
-        )
     limit_value = int(limit or 0)
     rows = (
         query
         .order_by(ChatMessage.id.asc())
         .all()
     )
-    if hidden_template_texts_normalized:
-        filtered_rows: list[ChatMessage] = []
-        for row in rows:
-            text_normalized = _normalize_template_like_text(str(getattr(row, "text", "") or ""))
-            if not text_normalized:
-                filtered_rows.append(row)
-                continue
-            row_source = str(getattr(row, "source", "") or "").strip().lower()
-            if text_normalized in hidden_template_texts_normalized and row_source in {"bot_system", "customer"}:
-                continue
-            filtered_rows.append(row)
-        rows = filtered_rows
     if limit_value > 0:
         return rows[-limit_value:]
     return rows

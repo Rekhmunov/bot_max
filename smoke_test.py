@@ -2013,8 +2013,8 @@ def run() -> None:
                 )
                 .all()
             )
-            # Start templates should no longer pollute operator timeline.
-            assert len(after_phone_rows) == 0
+            # Start templates are visible in operator timeline.
+            assert len(after_phone_rows) >= 1
 
         # Duplicate customer updates without stable message id must be
         # suppressed to avoid triple echoes in operator timeline.
@@ -2208,7 +2208,7 @@ def run() -> None:
                 )
                 .count()
             )
-            assert int(onboarding_rows_yes) == 0
+            assert int(onboarding_rows_yes) >= 1
 
         # Same re-engagement check for phone-optional mode.
         rotated_chat_no = f"chat_no_phone_rot_{uuid4().hex[:6]}"
