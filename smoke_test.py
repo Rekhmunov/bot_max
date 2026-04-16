@@ -839,6 +839,25 @@ def run() -> None:
         )
         assert webhook_ws2_start_stale_key.status_code == 200
         assert webhook_ws2_start_stale_key.json().get("ignored") == "unknown_webhook_key"
+        # Critical regression guard:
+        # unknown key must be rejected before event_uid dedupe persistence,
+        # otherwise it can "poison" duplicate_event check for valid key.
+        poison_chat = f"chat_poison_{uuid4().hex[:6]}"
+        poison_sender = f"buyer_poison_{uuid4().hex[:6]}"
+        poison_mid = f"mid_poison_{uuid4().hex[:8]}"
+        poison_payload = {
+            "update_type": "message_created",
+            "chat_id": poison_chat,
+            "sender_id": poison_sender,
+            "text": "poison-check",
+            "message_mid": poison_mid,
+        }
+        poison_unknown = client.post("/webhook/max/old-stale-key", json=poison_payload)
+        assert poison_unknown.status_code == 200
+        assert poison_unknown.json().get("ignored") == "unknown_webhook_key"
+        poison_valid = client.post("/webhook/max/ws2key", json=poison_payload)
+        assert poison_valid.status_code == 200
+        assert poison_valid.json().get("ignored") != "duplicate_event"
         with SessionLocal() as db:
             ws2_settings = get_or_create_settings(db, workspace_id=2)
             ws2_settings.webhook_key = "ws2-old-key"
