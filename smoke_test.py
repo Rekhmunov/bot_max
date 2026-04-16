@@ -1984,6 +1984,17 @@ def run() -> None:
             "start_prompt_phone_not_required",
             "start_prompt",
         }
+        # Regression: repeated identical start payload (provider retry without stable
+        # update/message id) must not re-trigger onboarding in same chat session.
+        no_phone_start_retry_payload = {
+            "update_type": "bot_started",
+            "chat_id": phone_chat_no,
+            "sender_id": phone_buyer_no,
+            "text": "",
+        }
+        no_phone_start_retry = client.post("/webhook/max/phonewskey", json=no_phone_start_retry_payload)
+        assert no_phone_start_retry.status_code == 200
+        assert no_phone_start_retry.json().get("flow") == "start_ignored_active_dialog"
         with SessionLocal() as db:
             started_conv_no_phone = (
                 db.query(Conversation)
@@ -2127,6 +2138,41 @@ def run() -> None:
             "start_prompt",
             "start_prompt_phone_not_required",
         }
+        with_phone_start_retry_payload = {
+            "update_type": "bot_started",
+            "chat_id": phone_chat_yes,
+            "sender_id": phone_buyer_yes,
+            "text": "",
+        }
+        with_phone_start_retry = client.post("/webhook/max/phonewskey", json=with_phone_start_retry_payload)
+        assert with_phone_start_retry.status_code == 200
+        assert with_phone_start_retry.json().get("flow") == "start_ignored_active_dialog"
+        # After explicit contact confirmation, duplicate delivery must not
+        # resend after-phone onboarding.
+        with_phone_verify = client.post(
+            "/webhook/max/phonewskey",
+            json={
+                "update_type": "message_created",
+                "chat_id": phone_chat_yes,
+                "sender_id": phone_buyer_yes,
+                "text": "",
+                "contact_phone": "+79995554433",
+            },
+        )
+        assert with_phone_verify.status_code == 200
+        assert with_phone_verify.json().get("flow") in {"phone_verified", "start_ignored_active_dialog"}
+        with_phone_verify_retry = client.post(
+            "/webhook/max/phonewskey",
+            json={
+                "update_type": "message_created",
+                "chat_id": phone_chat_yes,
+                "sender_id": phone_buyer_yes,
+                "text": "",
+                "contact_phone": "+79995554433",
+            },
+        )
+        assert with_phone_verify_retry.status_code == 200
+        assert with_phone_verify_retry.json().get("flow") == "start_ignored_active_dialog"
         # Re-engagement regression: if customer removes chat on MAX side and
         # receives a new chat_id, start flow must run again (not remain frozen).
         rotated_chat_yes = f"chat_with_phone_rot_{uuid4().hex[:6]}"

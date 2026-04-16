@@ -361,6 +361,7 @@ class ConversationMeta(Base):
     intro_sent: Mapped[bool] = mapped_column(Boolean, default=False)
     last_start_intent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_start_intent_stage: Mapped[str] = mapped_column(String(32), default="")
+    last_start_intent_chat_id: Mapped[str] = mapped_column(String(255), default="", index=True)
     phone_number: Mapped[str | None] = mapped_column(String(64), nullable=True)
     unread_errors_count: Mapped[int] = mapped_column(Integer, default=0)
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)

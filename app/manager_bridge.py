@@ -15,7 +15,7 @@ from urllib.parse import quote_plus, urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -102,8 +102,6 @@ BLOCKED_NOTICE_COOLDOWN_SECONDS = 30
 DEFAULT_OFFHOURS_MESSAGE = "Сейчас мы вне рабочего времени. Мы ответим в рабочие часы."
 DEFAULT_OFFHOURS_COOLDOWN_SECONDS = 6 * 60 * 60
 DEFAULT_BUSINESS_TIMEZONE = "UTC"
-START_INTENT_DEDUPE_SECONDS = 5
-
 logger = logging.getLogger(__name__)
 
 
@@ -1845,20 +1843,44 @@ def _has_substantive_customer_history(
     return False
 
 
-def _is_duplicate_start_intent(
-    meta: ConversationMeta,
+def _claim_start_stage_once(
+    db: Session,
     *,
+    meta_id: int,
+    workspace_id: int,
+    conversation_id: int,
+    chat_id: str,
     stage: str,
     now: datetime,
 ) -> bool:
-    last_stage = str(getattr(meta, "last_start_intent_stage", "") or "").strip().lower()
-    if last_stage != str(stage or "").strip().lower():
+    normalized_stage = str(stage or "").strip().lower()
+    normalized_chat_id = str(chat_id or "").strip()
+    if not normalized_stage or not normalized_chat_id:
         return False
-    last_at = getattr(meta, "last_start_intent_at", None)
-    if not isinstance(last_at, datetime):
-        return False
-    delta = _as_naive_utc(now) - _as_naive_utc(last_at)
-    return delta.total_seconds() <= max(1, int(START_INTENT_DEDUPE_SECONDS))
+    claimed = (
+        db.query(ConversationMeta)
+        .filter(
+            ConversationMeta.id == int(meta_id),
+            ConversationMeta.workspace_id == int(workspace_id),
+            ConversationMeta.conversation_id == int(conversation_id),
+            or_(
+                ConversationMeta.last_start_intent_stage.is_(None),
+                ConversationMeta.last_start_intent_stage != normalized_stage,
+                ConversationMeta.last_start_intent_chat_id.is_(None),
+                ConversationMeta.last_start_intent_chat_id != normalized_chat_id,
+            ),
+        )
+        .update(
+            {
+                ConversationMeta.last_start_intent_at: _as_naive_utc(now),
+                ConversationMeta.last_start_intent_stage: normalized_stage,
+                ConversationMeta.last_start_intent_chat_id: normalized_chat_id,
+            },
+            synchronize_session=False,
+        )
+    )
+    db.commit()
+    return int(claimed or 0) > 0
 
 
 async def _process_start_intent(
@@ -1866,56 +1888,156 @@ async def _process_start_intent(
     *,
     client: MaxClient,
     event: MaxWebhookEvent,
+    conversation: Conversation,
     meta: ConversationMeta,
     workspace_id: int,
     require_phone: bool,
-) -> dict:
-    has_contact = bool(str(getattr(event, "contact_phone", "") or "").strip())
-    stage = "awaiting_phone" if require_phone and not has_contact else "ready"
-    now = _as_naive_utc(_utc_now())
-
-    if _is_duplicate_start_intent(meta, stage=stage, now=now):
-        return {"ok": True, "flow": "start_ignored_active_dialog"}
-
-    meta.last_start_intent_at = now
-    meta.last_start_intent_stage = stage
-
-    if require_phone and not has_contact:
-        meta.start_prompt_sent = True
-        meta.phone_verified = False
+    chat_session_rotated: bool,
+    is_start_intent: bool,
+    phone_just_verified: bool,
+) -> dict | None:
+    current_chat_id = str(event.chat_id or "").strip()
+    if chat_session_rotated:
+        # New MAX chat session for the same customer must re-open onboarding.
+        meta.start_prompt_sent = False
         meta.intro_sent = False
+        meta.last_start_intent_at = None
+        meta.last_start_intent_stage = ""
+        meta.last_start_intent_chat_id = current_chat_id
+        if require_phone:
+            meta.phone_verified = False
         db.add(meta)
         db.commit()
-        start_text = get_template_text(db, TEMPLATE_START, workspace_id=workspace_id)
-        await _send_contact_request_prompt(
+        db.refresh(meta)
+
+    if not is_start_intent and not phone_just_verified:
+        return None
+
+    if (
+        is_start_intent
+        and not chat_session_rotated
+        and bool(meta.phone_verified)
+        and _has_substantive_customer_history(
+            db,
+            workspace_id=int(workspace_id),
+            conversation_id=int(conversation.id),
+        )
+    ):
+        # Existing active dialog: ignore repeated start intent.
+        return {"ok": True, "flow": "start_ignored_active_dialog"}
+
+    now = _as_naive_utc(_utc_now())
+    has_contact = bool(str(getattr(event, "contact_phone", "") or "").strip())
+    ready_stage = "ready"
+
+    if is_start_intent:
+        if require_phone and not has_contact:
+            if not _claim_start_stage_once(
+                db,
+                meta_id=int(meta.id),
+                workspace_id=int(workspace_id),
+                conversation_id=int(conversation.id),
+                chat_id=current_chat_id,
+                stage="awaiting_phone",
+                now=now,
+            ):
+                return {"ok": True, "flow": "start_ignored_active_dialog"}
+            meta.start_prompt_sent = True
+            meta.phone_verified = False
+            meta.intro_sent = False
+            db.add(meta)
+            db.commit()
+            start_text = get_template_text(db, TEMPLATE_START, workspace_id=workspace_id)
+            await _send_contact_request_prompt(
+                client=client,
+                chat_id=event.chat_id,
+                user_id=event.sender_id,
+                text=start_text,
+            )
+            return {"ok": True, "flow": "start_prompt"}
+
+        if not _claim_start_stage_once(
+            db,
+            meta_id=int(meta.id),
+            workspace_id=int(workspace_id),
+            conversation_id=int(conversation.id),
+            chat_id=current_chat_id,
+            stage=ready_stage,
+            now=now,
+        ):
+            return {"ok": True, "flow": "start_ignored_active_dialog"}
+        if has_contact:
+            meta.phone_verified = True
+            meta.phone_number = str(getattr(event, "contact_phone", "") or "").strip()
+        elif not require_phone:
+            meta.phone_verified = True
+        if str(meta.status or "").strip().lower() == "new":
+            meta.status = "waiting_manager"
+        meta.start_prompt_sent = True
+        db.add(meta)
+        db.commit()
+
+        after_phone_text = get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id)
+        await _send_after_phone_direct(
             client=client,
             chat_id=event.chat_id,
             user_id=event.sender_id,
-            text=start_text,
+            text=after_phone_text,
         )
-        return {"ok": True, "flow": "start_prompt"}
+        if require_phone:
+            return {"ok": True, "flow": "start_prompt_skipped_phone"}
+        return {"ok": True, "flow": "start_prompt_phone_not_required"}
 
-    if has_contact:
-        meta.phone_verified = True
-        meta.phone_number = str(getattr(event, "contact_phone", "") or "").strip()
-    elif not require_phone:
-        meta.phone_verified = True
-    if str(meta.status or "").strip().lower() == "new":
-        meta.status = "waiting_manager"
-    meta.start_prompt_sent = True
-    db.add(meta)
-    db.commit()
+    # Post-contact verification in a separate event must also be idempotent.
+    if not _claim_start_stage_once(
+        db,
+        meta_id=int(meta.id),
+        workspace_id=int(workspace_id),
+        conversation_id=int(conversation.id),
+        chat_id=current_chat_id,
+        stage=ready_stage,
+        now=now,
+    ):
+        return {"ok": True, "flow": "start_ignored_active_dialog"}
 
     after_phone_text = get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id)
-    await _send_after_phone_direct(
-        client=client,
-        chat_id=event.chat_id,
-        user_id=event.sender_id,
-        text=after_phone_text,
+    intro_steps = (
+        db.query(IntroStep)
+        .filter(
+            IntroStep.workspace_id == workspace_id,
+            IntroStep.is_active.is_(True),
+        )
+        .order_by(IntroStep.step_order.asc(), IntroStep.id.asc())
+        .all()
     )
-    if require_phone:
-        return {"ok": True, "flow": "start_prompt_skipped_phone"}
-    return {"ok": True, "flow": "start_prompt_phone_not_required"}
+    if intro_steps:
+        for step in intro_steps:
+            if step.delay_seconds > 0:
+                await asyncio.sleep(min(step.delay_seconds, 30))
+            text_value = (step.text or "").strip()
+            if not text_value:
+                continue
+            await queue_only_send_text(
+                db,
+                conversation_id=conversation.id,
+                target_chat_id=event.chat_id,
+                target_user_id=event.sender_id,
+                text=text_value,
+                source="bot_system",
+                text_format="markdown",
+            )
+        meta.intro_sent = True
+        db.add(meta)
+        db.commit()
+    else:
+        await _send_after_phone_direct(
+            client=client,
+            chat_id=event.chat_id,
+            user_id=event.sender_id,
+            text=after_phone_text,
+        )
+    await process_outbox_queue(db, limit=20)
+    return {"ok": True, "flow": "phone_verified"}
 
 
 async def _send_system_message_direct(
@@ -4202,20 +4324,6 @@ async def handle_customer_event(
             "conversation_id": int(conversation.id),
         }
 
-    if chat_session_rotated:
-        # Customer can remove bot/chat in MAX and start again.
-        # Re-open onboarding flags for the new chat session while preserving
-        # existing conversation history in operator timeline.
-        meta.start_prompt_sent = False
-        meta.intro_sent = False
-        meta.last_start_intent_at = None
-        meta.last_start_intent_stage = ""
-        if require_phone:
-            meta.phone_verified = False
-        db.add(meta)
-        db.commit()
-        db.refresh(meta)
-
     db.add(
         MessageLog(
             workspace_id=workspace_id,
@@ -4327,66 +4435,21 @@ async def handle_customer_event(
             )
         return {"ok": True, "flow": "prestart"}
 
-    # Unified and deterministic start flow for both bot_started and /start.
-    if is_bot_started:
-        if (
-            not chat_session_rotated
-            and bool(meta.phone_verified)
-            and _has_substantive_customer_history(
-                db,
-                workspace_id=int(workspace_id),
-                conversation_id=int(conversation.id),
-            )
-        ):
-            # Active dialogue should not be restarted by duplicate start signals.
-            return {"ok": True, "flow": "start_ignored_active_dialog"}
-        return await _process_start_intent(
-            db,
-            client=client,
-            event=event,
-            meta=meta,
-            workspace_id=int(workspace_id),
-            require_phone=bool(require_phone),
-        )
-
-    if phone_just_verified:
-        intro_steps = (
-            db.query(IntroStep)
-            .filter(
-                IntroStep.workspace_id == workspace_id,
-                IntroStep.is_active.is_(True),
-            )
-            .order_by(IntroStep.step_order.asc(), IntroStep.id.asc())
-            .all()
-        )
-        if intro_steps:
-            for step in intro_steps:
-                if step.delay_seconds > 0:
-                    await asyncio.sleep(min(step.delay_seconds, 30))
-                text_value = (step.text or "").strip()
-                if not text_value:
-                    continue
-                await queue_only_send_text(
-                    db,
-                    conversation_id=conversation.id,
-                    target_chat_id=event.chat_id,
-                    target_user_id=event.sender_id,
-                    text=text_value,
-                    source="bot_system",
-                    text_format="markdown",
-                )
-            meta.intro_sent = True
-            db.add(meta)
-            db.commit()
-        else:
-            await _send_after_phone_direct(
-                client=client,
-                chat_id=event.chat_id,
-                user_id=event.sender_id,
-                text=after_phone_text,
-            )
-        await process_outbox_queue(db, limit=20)
-        return {"ok": True, "flow": "phone_verified"}
+    # Unified deterministic start/onboarding flow in one helper.
+    start_flow_result = await _process_start_intent(
+        db,
+        client=client,
+        event=event,
+        conversation=conversation,
+        meta=meta,
+        workspace_id=int(workspace_id),
+        require_phone=bool(require_phone),
+        chat_session_rotated=bool(chat_session_rotated),
+        is_start_intent=bool(is_bot_started),
+        phone_just_verified=bool(phone_just_verified),
+    )
+    if start_flow_result is not None:
+        return start_flow_result
 
     if require_phone and not meta.phone_verified and event.text.strip():
         return {"ok": True, "flow": "waiting_contact_confirmation"}

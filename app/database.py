@@ -158,6 +158,10 @@ def _ensure_lightweight_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE conversation_meta ADD COLUMN last_start_intent_stage VARCHAR(32) DEFAULT ''")
                 )
+            if "last_start_intent_chat_id" not in meta_columns:
+                conn.execute(
+                    text("ALTER TABLE conversation_meta ADD COLUMN last_start_intent_chat_id VARCHAR(255) DEFAULT ''")
+                )
 
         if "workspace_business_hours" not in table_names:
             conn.execute(
