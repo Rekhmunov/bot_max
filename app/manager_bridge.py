@@ -1924,11 +1924,7 @@ async def _process_start_intent(
         )
     ):
         # Existing active dialog: ignore repeated start intent.
-        return {
-            "ok": True,
-            "flow": "start_ignored_active_dialog",
-            "start_intent_action": "active_dialog_ignored",
-        }
+        return {"ok": True, "flow": "start_ignored_active_dialog"}
 
     now = _as_naive_utc(_utc_now())
     has_contact = bool(str(getattr(event, "contact_phone", "") or "").strip())
@@ -1945,12 +1941,7 @@ async def _process_start_intent(
                 stage="awaiting_phone",
                 now=now,
             ):
-                return {
-                    "ok": True,
-                    "flow": "start_ignored_active_dialog",
-                    "start_intent_action": "duplicate_start_ignored",
-                    "start_intent_stage": "awaiting_phone",
-                }
+                return {"ok": True, "flow": "start_ignored_active_dialog"}
             meta.start_prompt_sent = True
             meta.phone_verified = False
             meta.intro_sent = False
@@ -1963,12 +1954,7 @@ async def _process_start_intent(
                 user_id=event.sender_id,
                 text=start_text,
             )
-            return {
-                "ok": True,
-                "flow": "start_prompt",
-                "start_intent_action": "first_start_processed",
-                "start_intent_stage": "awaiting_phone",
-            }
+            return {"ok": True, "flow": "start_prompt"}
 
         if not _claim_start_stage_once(
             db,
@@ -1979,12 +1965,7 @@ async def _process_start_intent(
             stage=ready_stage,
             now=now,
         ):
-            return {
-                "ok": True,
-                "flow": "start_ignored_active_dialog",
-                "start_intent_action": "duplicate_start_ignored",
-                "start_intent_stage": ready_stage,
-            }
+            return {"ok": True, "flow": "start_ignored_active_dialog"}
         if has_contact:
             meta.phone_verified = True
             meta.phone_number = str(getattr(event, "contact_phone", "") or "").strip()
@@ -2004,35 +1985,8 @@ async def _process_start_intent(
             text=after_phone_text,
         )
         if require_phone:
-            return {
-                "ok": True,
-                "flow": "start_prompt_skipped_phone",
-                "start_intent_action": "first_start_processed",
-                "start_intent_stage": ready_stage,
-            }
-        return {
-            "ok": True,
-            "flow": "start_prompt_phone_not_required",
-            "start_intent_action": "first_start_processed",
-            "start_intent_stage": ready_stage,
-        }
-
-    if phone_just_verified:
-        meta.phone_verified = True
-        meta.phone_number = str(getattr(event, "contact_phone", "") or "").strip()
-        if str(meta.status or "").strip().lower() == "new":
-            meta.status = "waiting_manager"
-        db.add(meta)
-        db.commit()
-        _upsert_customer_profile(
-            db=db,
-            customer_id=event.sender_id,
-            chat_id=event.chat_id,
-            first_name=event.sender_first_name,
-            username=event.sender_username,
-            phone_number=meta.phone_number,
-            workspace_id=workspace_id,
-        )
+            return {"ok": True, "flow": "start_prompt_skipped_phone"}
+        return {"ok": True, "flow": "start_prompt_phone_not_required"}
 
     # Post-contact verification in a separate event must also be idempotent.
     if not _claim_start_stage_once(
@@ -2044,7 +1998,7 @@ async def _process_start_intent(
         stage=ready_stage,
         now=now,
     ):
-        return {"ok": True, "flow": "phone_verified_duplicate_ignored"}
+        return {"ok": True, "flow": "start_ignored_active_dialog"}
 
     after_phone_text = get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=workspace_id)
     intro_steps = (
@@ -2084,29 +2038,6 @@ async def _process_start_intent(
         )
     await process_outbox_queue(db, limit=20)
     return {"ok": True, "flow": "phone_verified"}
-
-
-def _store_start_intent_marker(
-    db: Session,
-    *,
-    workspace_id: int,
-    conversation_id: int,
-    sender_id: str,
-    chat_id: str,
-    stage: str,
-) -> None:
-    marker_stage = str(stage or "").strip().lower() or "unknown"
-    marker_chat = str(chat_id or "").strip()
-    db.add(
-        MessageLog(
-            workspace_id=int(workspace_id),
-            conversation_id=int(conversation_id),
-            sender_account_id=str(sender_id or "").strip(),
-            message_text=f"[start_intent] stage={marker_stage} chat_id={marker_chat}",
-            message_type="start_intent",
-        )
-    )
-    db.commit()
 
 
 async def _send_system_message_direct(
@@ -4393,75 +4324,6 @@ async def handle_customer_event(
             "conversation_id": int(conversation.id),
         }
 
-    update_type = (event.update_type or "").strip().lower()
-    is_bot_started = _is_start_intent_event(event)
-    is_message_event = update_type in {"", "message_created", "message_callback", "new_message"}
-    phone_just_verified = bool(
-        str(getattr(event, "contact_phone", "") or "").strip()
-        and not bool(meta.phone_verified)
-    )
-
-    if bool(meta.is_blocked):
-        last_notice = meta.blocked_notice_sent_at
-        should_notify = True
-        if isinstance(last_notice, datetime):
-            delta = _as_naive_utc(_utc_now()) - _as_naive_utc(last_notice)
-            should_notify = delta.total_seconds() >= BLOCKED_NOTICE_COOLDOWN_SECONDS
-        if should_notify:
-            await queue_only_send_text(
-                db,
-                conversation_id=conversation.id,
-                target_chat_id=event.chat_id,
-                target_user_id=event.sender_id,
-                text="К сожалению, вы не можете писать в данный чат.",
-                source="bot_system",
-                text_format="markdown",
-            )
-            await process_outbox_queue(db, limit=20)
-            meta.blocked_notice_sent_at = _as_naive_utc(_utc_now())
-            db.add(meta)
-            db.commit()
-        return {"ok": True, "flow": "blocked_customer"}
-
-    if is_message_event:
-        await maybe_send_offhours_autoreply(
-            db,
-            conversation=conversation,
-            meta=meta,
-            event=event,
-            client=client,
-            workspace_id=workspace_id,
-        )
-
-    # Helper-first start flow:
-    # - start-intents (/start, bot_started, fallback Start)
-    # - standalone phone verification events
-    start_flow_result = await _process_start_intent(
-        db,
-        client=client,
-        event=event,
-        conversation=conversation,
-        meta=meta,
-        workspace_id=int(workspace_id),
-        require_phone=bool(require_phone),
-        chat_session_rotated=bool(chat_session_rotated),
-        is_start_intent=bool(is_bot_started),
-        phone_just_verified=bool(phone_just_verified),
-    )
-    if start_flow_result is not None:
-        start_action = str(start_flow_result.get("start_intent_action") or "").strip().lower()
-        if is_bot_started and start_action == "first_start_processed":
-            _store_start_intent_marker(
-                db,
-                workspace_id=int(workspace_id),
-                conversation_id=int(conversation.id),
-                sender_id=str(event.sender_id or "").strip(),
-                chat_id=str(event.chat_id or "").strip(),
-                stage=str(start_flow_result.get("start_intent_stage") or "").strip().lower(),
-            )
-        start_flow_result.setdefault("conversation_id", int(conversation.id))
-        return start_flow_result
-
     db.add(
         MessageLog(
             workspace_id=workspace_id,
@@ -4495,6 +4357,62 @@ async def handle_customer_event(
     )
     _mark_conversation_unread_from_customer(db, meta=meta)
 
+    phone_just_verified = False
+    # If phone is already available (privacy allows it), skip explicit phone-confirmation step.
+    if event.contact_phone and not meta.phone_verified:
+        meta.phone_verified = True
+        meta.phone_number = event.contact_phone
+        if meta.status == "new":
+            meta.status = "waiting_manager"
+        db.add(meta)
+        db.commit()
+        phone_just_verified = True
+        _upsert_customer_profile(
+            db=db,
+            customer_id=event.sender_id,
+            chat_id=event.chat_id,
+            first_name=event.sender_first_name,
+            username=event.sender_username,
+            phone_number=event.contact_phone,
+            workspace_id=workspace_id,
+        )
+
+    update_type = (event.update_type or "").strip().lower()
+    is_bot_started = _is_start_intent_event(event)
+    is_message_event = update_type in {"", "message_created", "message_callback", "new_message"}
+
+    if bool(meta.is_blocked):
+        last_notice = meta.blocked_notice_sent_at
+        should_notify = True
+        if isinstance(last_notice, datetime):
+            delta = _as_naive_utc(_utc_now()) - _as_naive_utc(last_notice)
+            should_notify = delta.total_seconds() >= BLOCKED_NOTICE_COOLDOWN_SECONDS
+        if should_notify:
+            await queue_only_send_text(
+                db,
+                conversation_id=conversation.id,
+                target_chat_id=event.chat_id,
+                target_user_id=event.sender_id,
+                text="К сожалению, вы не можете писать в данный чат.",
+                source="bot_system",
+                text_format="markdown",
+            )
+            await process_outbox_queue(db, limit=20)
+            meta.blocked_notice_sent_at = _as_naive_utc(_utc_now())
+            db.add(meta)
+            db.commit()
+        return {"ok": True, "flow": "blocked_customer"}
+
+    if is_message_event:
+        await maybe_send_offhours_autoreply(
+            db,
+            conversation=conversation,
+            meta=meta,
+            event=event,
+            client=client,
+            workspace_id=workspace_id,
+        )
+
     # Message before Start (custom behavior for message_created before start)
     # Do not intercept explicit /start text commands here: they should enter
     # the normal start flow and not loop back to prestart.
@@ -4516,6 +4434,22 @@ async def handle_customer_event(
                 text=prestart_text,
             )
         return {"ok": True, "flow": "prestart"}
+
+    # Unified deterministic start/onboarding flow in one helper.
+    start_flow_result = await _process_start_intent(
+        db,
+        client=client,
+        event=event,
+        conversation=conversation,
+        meta=meta,
+        workspace_id=int(workspace_id),
+        require_phone=bool(require_phone),
+        chat_session_rotated=bool(chat_session_rotated),
+        is_start_intent=bool(is_bot_started),
+        phone_just_verified=bool(phone_just_verified),
+    )
+    if start_flow_result is not None:
+        return start_flow_result
 
     if require_phone and not meta.phone_verified and event.text.strip():
         return {"ok": True, "flow": "waiting_contact_confirmation"}
