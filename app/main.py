@@ -2187,10 +2187,12 @@ def _build_superadmin_context(
 
     user_rows: list[dict] = []
     if active_tab == "users":
+        # Superadmin users tab should list workspace managers too.
+        users_roles_for_superadmin = set(_WORKSPACE_USER_ROLES) | {"manager"}
         users = (
             db.query(ServiceUser)
             .filter(
-                normalized_role.in_(list(_WORKSPACE_USER_ROLES)),
+                normalized_role.in_(list(users_roles_for_superadmin)),
                 ServiceUser.workspace_id.isnot(None),
                 ServiceUser.workspace_id != int(DEFAULT_WORKSPACE_ID),
             )
