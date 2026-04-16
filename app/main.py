@@ -10311,6 +10311,15 @@ async def max_webhook(
         # Ignore non-message updates or malformed events without failing webhook delivery.
         return {"ok": True, "ignored": "unsupported_payload"}
 
+    # Webhook dedup by stable event UID.
+    event_uid = event.event_uid_value()
+    if event_uid:
+        seen = db.query(WebhookEvent).filter(WebhookEvent.event_uid == event_uid).first()
+        if seen:
+            return {"ok": True, "ignored": "duplicate_event"}
+        db.add(WebhookEvent(event_uid=event_uid, update_type=event.update_type))
+        db.commit()
+
     accepted_update_types = {
         "message_created",
         "message_callback",
@@ -10348,17 +10357,6 @@ async def max_webhook(
             int(workspace_id),
         )
         return {"ok": True, "ignored": "stale_webhook_key"}
-
-    # Webhook dedup by stable event UID.
-    # IMPORTANT: run after webhook-key guard so stale/unknown keys
-    # cannot poison dedupe table and suppress valid canonical deliveries.
-    event_uid = event.event_uid_value()
-    if event_uid:
-        seen = db.query(WebhookEvent).filter(WebhookEvent.event_uid == event_uid).first()
-        if seen:
-            return {"ok": True, "ignored": "duplicate_event"}
-        db.add(WebhookEvent(event_uid=event_uid, update_type=event.update_type))
-        db.commit()
     max_client, client_error = _workspace_client_or_error(settings_db)
     if client_error or max_client is None:
         return {"ok": True, "ignored": "bot_token_not_configured"}
