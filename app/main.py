@@ -10335,28 +10335,8 @@ async def max_webhook(
     if event.update_type and event.update_type not in accepted_update_types:
         return {"ok": True, "ignored": event.update_type}
 
-    workspace_id_by_key = _resolve_workspace_by_webhook_key(db, webhook_key)
-    if workspace_id_by_key is None:
-        logging.getLogger(__name__).warning(
-            "[WEBHOOK_KEY_GUARD] unknown key ignored key=%s chat_id=%s sender_id=%s update_type=%s",
-            str(webhook_key or "").strip(),
-            str(getattr(event, "chat_id", "") or "").strip(),
-            str(getattr(event, "sender_id", "") or "").strip(),
-            str(getattr(event, "update_type", "") or "").strip().lower(),
-        )
-        return {"ok": True, "ignored": "unknown_webhook_key"}
-    workspace_id = int(workspace_id_by_key)
+    workspace_id = _resolve_workspace_by_webhook_key(db, webhook_key) or _resolve_workspace_id_from_event(db, event)
     settings_db = get_or_create_settings(db, workspace_id=workspace_id)
-    canonical_webhook_key = str(getattr(settings_db, "webhook_key", "") or "").strip()
-    incoming_webhook_key = str(webhook_key or "").strip()
-    if canonical_webhook_key and incoming_webhook_key != canonical_webhook_key:
-        logging.getLogger(__name__).warning(
-            "[WEBHOOK_KEY_GUARD] stale key ignored key=%s canonical=%s workspace_id=%s",
-            incoming_webhook_key,
-            canonical_webhook_key,
-            int(workspace_id),
-        )
-        return {"ok": True, "ignored": "stale_webhook_key"}
     max_client, client_error = _workspace_client_or_error(settings_db)
     if client_error or max_client is None:
         return {"ok": True, "ignored": "bot_token_not_configured"}
