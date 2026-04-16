@@ -1979,11 +1979,7 @@ def run() -> None:
             },
         )
         assert no_phone_start_repeat.status_code == 200
-        assert no_phone_start_repeat.json().get("flow") in {
-            "start_ignored_active_dialog",
-            "start_prompt_phone_not_required",
-            "start_prompt",
-        }
+        assert no_phone_start_repeat.json().get("flow") == "start_ignored_active_dialog"
         # Regression: repeated identical start payload (provider retry without stable
         # update/message id) must not re-trigger onboarding in same chat session.
         no_phone_start_retry_payload = {
@@ -1995,6 +1991,35 @@ def run() -> None:
         no_phone_start_retry = client.post("/webhook/max/phonewskey", json=no_phone_start_retry_payload)
         assert no_phone_start_retry.status_code == 200
         assert no_phone_start_retry.json().get("flow") == "start_ignored_active_dialog"
+        with SessionLocal() as db:
+            no_phone_conv = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == ws_id, Conversation.chat_id == phone_chat_no)
+                .first()
+            )
+            assert no_phone_conv is not None
+            start_markers_no_phone = (
+                db.query(MessageLog)
+                .filter(
+                    MessageLog.workspace_id == ws_id,
+                    MessageLog.conversation_id == int(no_phone_conv.id),
+                    MessageLog.message_type == "start_intent",
+                )
+                .count()
+            )
+            assert int(start_markers_no_phone) == 1
+            customer_rows_no_phone = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == ws_id,
+                    ChatMessage.conversation_id == int(no_phone_conv.id),
+                    ChatMessage.direction == "customer",
+                    ChatMessage.source == "customer",
+                )
+                .count()
+            )
+            # Start retries must not create duplicate customer timeline rows.
+            assert int(customer_rows_no_phone) == 0
         with SessionLocal() as db:
             started_conv_no_phone = (
                 db.query(Conversation)
@@ -2133,11 +2158,7 @@ def run() -> None:
             },
         )
         assert with_phone_start_repeat.status_code == 200
-        assert with_phone_start_repeat.json().get("flow") in {
-            "start_ignored_active_dialog",
-            "start_prompt",
-            "start_prompt_phone_not_required",
-        }
+        assert with_phone_start_repeat.json().get("flow") == "start_ignored_active_dialog"
         with_phone_start_retry_payload = {
             "update_type": "bot_started",
             "chat_id": phone_chat_yes,
@@ -2147,6 +2168,23 @@ def run() -> None:
         with_phone_start_retry = client.post("/webhook/max/phonewskey", json=with_phone_start_retry_payload)
         assert with_phone_start_retry.status_code == 200
         assert with_phone_start_retry.json().get("flow") == "start_ignored_active_dialog"
+        with SessionLocal() as db:
+            with_phone_conv = (
+                db.query(Conversation)
+                .filter(Conversation.workspace_id == ws_id, Conversation.chat_id == phone_chat_yes)
+                .first()
+            )
+            assert with_phone_conv is not None
+            start_markers_with_phone = (
+                db.query(MessageLog)
+                .filter(
+                    MessageLog.workspace_id == ws_id,
+                    MessageLog.conversation_id == int(with_phone_conv.id),
+                    MessageLog.message_type == "start_intent",
+                )
+                .count()
+            )
+            assert int(start_markers_with_phone) == 1
         # After explicit contact confirmation, duplicate delivery must not
         # resend after-phone onboarding.
         with_phone_verify = client.post(
@@ -2160,7 +2198,7 @@ def run() -> None:
             },
         )
         assert with_phone_verify.status_code == 200
-        assert with_phone_verify.json().get("flow") in {"phone_verified", "start_ignored_active_dialog"}
+        assert with_phone_verify.json().get("flow") == "phone_verified"
         with_phone_verify_retry = client.post(
             "/webhook/max/phonewskey",
             json={
@@ -2172,7 +2210,7 @@ def run() -> None:
             },
         )
         assert with_phone_verify_retry.status_code == 200
-        assert with_phone_verify_retry.json().get("flow") == "start_ignored_active_dialog"
+        assert with_phone_verify_retry.json().get("flow") == "phone_verified_duplicate_ignored"
         # Re-engagement regression: if customer removes chat on MAX side and
         # receives a new chat_id, start flow must run again (not remain frozen).
         rotated_chat_yes = f"chat_with_phone_rot_{uuid4().hex[:6]}"
@@ -2195,6 +2233,17 @@ def run() -> None:
             )
             assert rotated_conv_yes is not None
             assert str(rotated_conv_yes.chat_id or "") == rotated_chat_yes
+            rotated_start_markers = (
+                db.query(MessageLog)
+                .filter(
+                    MessageLog.workspace_id == ws_id,
+                    MessageLog.conversation_id == int(rotated_conv_yes.id),
+                    MessageLog.message_type == "start_intent",
+                )
+                .count()
+            )
+            # Old chat start marker + exactly one new marker for rotated session.
+            assert int(rotated_start_markers) == 2
             start_template = str(get_template_text(db, TEMPLATE_START, workspace_id=ws_id) or "")
             after_template = str(get_template_text(db, TEMPLATE_AFTER_PHONE, workspace_id=ws_id) or "")
             onboarding_rows_yes = (
@@ -2234,6 +2283,16 @@ def run() -> None:
             )
             assert rotated_conv_no is not None
             assert str(rotated_conv_no.chat_id or "") == rotated_chat_no
+            rotated_no_phone_markers = (
+                db.query(MessageLog)
+                .filter(
+                    MessageLog.workspace_id == ws_id,
+                    MessageLog.conversation_id == int(rotated_conv_no.id),
+                    MessageLog.message_type == "start_intent",
+                )
+                .count()
+            )
+            assert int(rotated_no_phone_markers) == 2
         with SessionLocal() as db:
             phone_toggle_user = db.query(ServiceUser).filter(ServiceUser.username == phone_toggle_email).first()
             assert phone_toggle_user is not None
