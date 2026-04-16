@@ -25,6 +25,7 @@ from app.manager_bridge import (
 from app.services import get_or_create_settings
 from app.models import (
     AuditLog,
+    BotSettings,
     ChatMessage,
     ChatFolder,
     Conversation,
@@ -825,6 +826,51 @@ def run() -> None:
         )
         assert webhook_ws2_start.status_code == 200
         assert webhook_ws2_start.json().get("flow") in {"start_prompt", "start_prompt_phone_not_required", "start_prompt_skipped_phone"}
+        # Safety regression: stale webhook key for workspace must be ignored
+        # to prevent duplicate processing when old MAX subscriptions still exist.
+        webhook_ws2_start_stale_key = client.post(
+            "/webhook/max/old-stale-key",
+            json={
+                "update_type": "bot_started",
+                "chat_id": f"chat_deep_stale_{uuid4().hex[:6]}",
+                "sender_id": f"buyer_deep_stale_{uuid4().hex[:6]}",
+                "text": "",
+            },
+        )
+        assert webhook_ws2_start_stale_key.status_code == 200
+        assert webhook_ws2_start_stale_key.json().get("ignored") == "unknown_webhook_key"
+        with SessionLocal() as db:
+            ws2_settings = get_or_create_settings(db, workspace_id=2)
+            ws2_settings.webhook_key = "ws2-old-key"
+            db.add(ws2_settings)
+            db.commit()
+            stale_settings_row = BotSettings(
+                workspace_id=2,
+                bot_token=ws2_settings.bot_token,
+                bot_link=ws2_settings.bot_link,
+                webhook_key="ws2-stale-key",
+                manager_account_id=ws2_settings.manager_account_id,
+                admin_account_id=ws2_settings.admin_account_id,
+                request_customer_phone=bool(ws2_settings.request_customer_phone),
+                routing_mode=ws2_settings.routing_mode or "round_robin",
+                routing_rr_cursor=int(ws2_settings.routing_rr_cursor or 0),
+            )
+            db.add(stale_settings_row)
+            db.commit()
+            ws2_settings.webhook_key = "ws2-canonical-key"
+            db.add(ws2_settings)
+            db.commit()
+        webhook_ws2_start_known_stale = client.post(
+            "/webhook/max/ws2-stale-key",
+            json={
+                "update_type": "bot_started",
+                "chat_id": f"chat_deep_stale_known_{uuid4().hex[:6]}",
+                "sender_id": f"buyer_deep_stale_known_{uuid4().hex[:6]}",
+                "text": "",
+            },
+        )
+        assert webhook_ws2_start_known_stale.status_code == 200
+        assert webhook_ws2_start_known_stale.json().get("ignored") == "stale_webhook_key"
 
         # Regression: sender must be resolved from message.sender, not payload.user.
         webhook_ws2_start_with_actor_user = client.post(
