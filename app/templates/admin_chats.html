@@ -1114,9 +1114,15 @@
     }
     .compose-row {
       display: grid;
-      grid-template-columns: auto auto 1fr auto auto;
+      grid-template-columns: auto auto 1fr auto;
       gap: 8px;
       align-items: end;
+    }
+    .compose-actions-right {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      align-self: end;
     }
     .attach-wrap {
       position: relative;
@@ -1915,28 +1921,28 @@
       }
       .compose-row {
         grid-template-columns: auto minmax(0, 1fr) auto;
-        grid-template-rows: auto auto;
         align-items: end;
       }
       .attach-wrap {
         grid-column: 1;
-        grid-row: 1;
+        grid-row: auto;
       }
       .emoji-wrap {
-        grid-column: 1;
-        grid-row: 2;
+        display: none;
       }
       #message-input {
         grid-column: 2;
-        grid-row: 1 / span 2;
+        grid-row: auto;
       }
-      .send-btn {
+      .compose-actions-right {
         grid-column: 3;
-        grid-row: 1;
-      }
-      .schedule-btn {
-        grid-column: 3;
-        grid-row: 2;
+        grid-row: auto;
+        display: inline-flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 8px;
+        align-self: end;
       }
       .emoji-pop {
         left: -4px;
@@ -2769,18 +2775,20 @@
                 rows="1"
                 placeholder="Введите сообщение или / для быстрых ответов"
               ></textarea>
-              <button class="send-btn" id="send-btn" type="submit" title="Отправить" aria-label="Отправить">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M12 20V6"></path>
-                  <path d="M6 12l6-6 6 6"></path>
-                </svg>
-              </button>
-              <button class="schedule-btn" id="schedule-btn-mobile" type="button" title="Отложенная отправка" aria-label="Отложенная отправка">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <circle cx="12" cy="12" r="8"></circle>
-                  <path d="M12 8v4l3 2"></path>
-                </svg>
-              </button>
+              <div class="compose-actions-right">
+                <button class="send-btn" id="send-btn" type="submit" title="Отправить" aria-label="Отправить">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 20V6"></path>
+                    <path d="M6 12l6-6 6 6"></path>
+                  </svg>
+                </button>
+                <button class="schedule-btn" id="schedule-btn-mobile" type="button" title="Отложенная отправка" aria-label="Отложенная отправка">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="12" cy="12" r="8"></circle>
+                    <path d="M12 8v4l3 2"></path>
+                  </svg>
+                </button>
+              </div>
             </div>
             <div class="compose-media-preview" id="compose-media-preview" aria-live="polite"></div>
             <div class="compose-upload-status" id="compose-upload-status" aria-live="polite"></div>
