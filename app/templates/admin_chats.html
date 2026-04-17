@@ -1509,6 +1509,12 @@
       justify-content: flex-end;
       align-items: center;
       min-height: 14px;
+      gap: 6px;
+    }
+    .bubble-tail-time {
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
     }
     .scheduled-label {
       font-size: 11px;
@@ -2536,7 +2542,7 @@
                       </span>
                     {% endif %}
                   </div>
-                  <div class="thread-meta">customer_account_id: {{ thread.customer_account_id or "—" }}</div>
+                  <div class="thread-meta">{{ thread.last_message_time_label or "—" }}</div>
                   <div class="thread-preview">{{ thread.last_message_preview or "—" }}</div>
                 </a>
               {% endfor %}
@@ -2597,7 +2603,7 @@
                     </span>
                   {% endif %}
                 </div>
-                <div class="thread-meta">customer_account_id: {{ thread.customer_account_id or "—" }}</div>
+                <div class="thread-meta">{{ thread.last_message_time_label or "—" }}</div>
                 <div class="thread-preview">{{ thread.last_message_preview or "—" }}</div>
               </a>
             {% endfor %}
@@ -2689,6 +2695,7 @@
                         Отправится {{ scheduled_at }}
                       </span>
                     {% else %}
+                      <span class="bubble-tail-time">{{ msg.created_at_label or "—" }}</span>
                       {% if state == "failed" %}
                         {% set ticks = "✓✓" %}
                         {% set status_class = "failed" %}
@@ -5190,6 +5197,33 @@
       );
       const messagesWrap = document.querySelector(".messages-wrap");
       const pageQueryPrefix = "{{ page_query_prefix }}";
+      const formatMoscowChatLabel = (value) => {
+        const raw = String(value || "").trim();
+        if (!raw) return "—";
+        const dt = new Date(raw);
+        if (Number.isNaN(dt.getTime())) return "—";
+        try {
+          const moscow = new Intl.DateTimeFormat("ru-RU", {
+            timeZone: "Europe/Moscow",
+            hour: "2-digit",
+            minute: "2-digit",
+            day: "2-digit",
+            month: "2-digit",
+            year: "numeric",
+            hour12: false,
+          }).formatToParts(dt);
+          const part = (type) => moscow.find((item) => item.type === type)?.value || "";
+          const hh = part("hour");
+          const mm = part("minute");
+          const dd = part("day");
+          const mo = part("month");
+          const yy = part("year");
+          if (!hh || !mm || !dd || !mo || !yy) return "—";
+          return `${hh}:${mm} | ${dd}-${mo}-${yy}`;
+        } catch (_) {
+          return "—";
+        }
+      };
       const buildThreadHref = (conversationId) => {
         const params = new URLSearchParams();
         params.set("conversation_id", String(conversationId || 0));
@@ -5209,7 +5243,7 @@
         const pinOrder = Number(threadPayload.pin_order || 0);
         const hasDeliveryErrors = Boolean(threadPayload.has_delivery_errors);
         const isNew = Boolean(threadPayload.is_new);
-        const customerAccountId = String(threadPayload.customer_account_id || "").trim() || "—";
+        const threadTimeLabel = formatMoscowChatLabel(threadPayload.last_message_created_at);
         const customerLabel = String(threadPayload.customer_label || "").trim() || "—";
         const ticketNo = Number(threadPayload.ticket_no || 0);
         const previewText = String(threadPayload.last_message_preview || "").trim() || "—";
@@ -5256,7 +5290,7 @@
         }
         const threadMeta = threadNode.querySelector(".thread-meta");
         if (threadMeta instanceof HTMLElement) {
-          threadMeta.textContent = `customer_account_id: ${customerAccountId}`;
+          threadMeta.textContent = threadTimeLabel;
         }
         const threadPreview = threadNode.querySelector(".thread-preview");
         if (threadPreview instanceof HTMLElement) {
@@ -5381,7 +5415,7 @@
             </span>
           </div>
           <div class="thread-folder-row"></div>
-          <div class="thread-meta">customer_account_id: —</div>
+          <div class="thread-meta">—</div>
           <div class="thread-preview">—</div>
         `;
         updateThreadNodeFromPayload(threadNode, threadPayload);
@@ -5655,6 +5689,7 @@
           imageUrls,
           isRenderable,
           isReadByCustomer: Boolean(row.is_read_by_customer),
+          createdAtLabel: String(row.created_at_label || ""),
         };
       };
       const bubbleRenderFingerprint = (row) => {
@@ -5670,6 +5705,7 @@
           isScheduledPending,
           imageUrls,
           isReadByCustomer,
+          createdAtLabel,
         } = meta;
         return [
           String(messageId || 0),
@@ -5680,6 +5716,7 @@
           String(scheduledAt || ""),
           isScheduledPending ? "1" : "0",
           isReadByCustomer ? "1" : "0",
+          String(createdAtLabel || ""),
           imageUrls.join("|"),
         ].join("::");
       };
@@ -5696,6 +5733,7 @@
           isScheduledPending,
           imageUrls,
           isReadByCustomer,
+          createdAtLabel,
         } = meta;
 
         const bubble = document.createElement("article");
@@ -5749,6 +5787,10 @@
             scheduledNode.textContent = formatScheduledLabel(scheduledAt);
             tail.appendChild(scheduledNode);
           } else {
+            const timeNode = document.createElement("span");
+            timeNode.className = "bubble-tail-time";
+            timeNode.textContent = String(createdAtLabel || "—");
+            tail.appendChild(timeNode);
             let ticks = "✓";
             let statusClass = "sent";
             let statusTitle = "Сообщение отправляется";

@@ -633,6 +633,7 @@ class ChatThreadItem:
     status: str
     phone_verified: bool
     last_message_preview: str
+    last_message_created_at: datetime | None
     last_message_is_max_incoming: bool
     has_delivery_errors: bool
     is_unread: bool
@@ -4953,11 +4954,15 @@ def load_chat_threads(
         username = (profile.username if profile and profile.username else "").strip()
         label = f"{name}{(' @' + username) if username else ''}"
         preview = ""
+        last_message_created_at: datetime | None = None
         last_message_is_max_incoming = False
         if last_msg:
             preview = (last_msg.text or "").strip()
             if not preview and last_msg.image_url:
                 preview = "[изображение]"
+            created_raw = getattr(last_msg, "created_at", None)
+            if isinstance(created_raw, datetime):
+                last_message_created_at = created_raw
             last_message_is_max_incoming = (
                 str(getattr(last_msg, "direction", "") or "").strip().lower() == "customer"
                 and str(getattr(last_msg, "source", "") or "").strip().lower() == "customer"
@@ -5004,6 +5009,7 @@ def load_chat_threads(
                 status=status,
                 phone_verified=phone_verified,
                 last_message_preview=preview,
+                last_message_created_at=last_message_created_at,
                 last_message_is_max_incoming=last_message_is_max_incoming,
                 has_delivery_errors=has_delivery_errors,
                 is_unread=is_unread,

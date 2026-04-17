@@ -87,6 +87,17 @@ def _ensure_lightweight_migrations() -> None:
                 )
             if "read_at" not in chat_columns:
                 conn.execute(text("ALTER TABLE chat_messages ADD COLUMN read_at DATETIME"))
+            if "created_at" not in chat_columns:
+                conn.execute(
+                    text("ALTER TABLE chat_messages ADD COLUMN created_at DATETIME")
+                )
+                conn.execute(
+                    text(
+                        "UPDATE chat_messages "
+                        "SET created_at = CURRENT_TIMESTAMP "
+                        "WHERE created_at IS NULL"
+                    )
+                )
 
         if "conversation_meta" in table_names:
             meta_columns = {col["name"] for col in inspector.get_columns("conversation_meta")}

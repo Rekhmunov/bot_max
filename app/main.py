@@ -222,6 +222,22 @@ def _to_local(dt: datetime | None, fmt: str = "%d.%m.%Y %H:%M") -> str:
         return local_value.strftime("%d.%m.%Y %H:%M")
 
 
+def _to_moscow_chat_label(dt: datetime | None) -> str:
+    if dt is None:
+        return "—"
+    value = dt
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    else:
+        value = value.astimezone(UTC)
+    try:
+        msk_tz = ZoneInfo("Europe/Moscow")
+        msk_value = value.astimezone(msk_tz)
+    except Exception:
+        msk_value = value
+    return msk_value.strftime("%H:%M | %d-%m-%Y")
+
+
 def _safe_int(value: int | str | None, default: int, min_value: int = 0) -> int:
     try:
         parsed = int(value if value is not None else default)
@@ -8874,6 +8890,14 @@ def _thread_summary_dict(item: object) -> dict[str, object]:
         "is_new": str(getattr(item, "status", "") or "").strip().lower() == "new",
         "has_delivery_errors": bool(getattr(item, "has_delivery_errors", False)),
         "last_message_preview": str(getattr(item, "last_message_preview", "") or ""),
+        "last_message_created_at": (
+            getattr(item, "last_message_created_at").isoformat()
+            if isinstance(getattr(item, "last_message_created_at", None), datetime)
+            else ""
+        ),
+        "last_message_time_label": _to_moscow_chat_label(
+            getattr(item, "last_message_created_at", None)
+        ),
         "last_message_from_customer_max": bool(
             getattr(item, "last_message_from_customer_max", False)
         ),
@@ -8923,6 +8947,12 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
         ),
         "is_scheduled_message": is_scheduled_message,
         "is_scheduled_pending": is_scheduled_pending,
+        "created_at": (
+            item.created_at.isoformat()
+            if isinstance(getattr(item, "created_at", None), datetime)
+            else ""
+        ),
+        "created_at_label": _to_moscow_chat_label(getattr(item, "created_at", None)),
     }
 
 

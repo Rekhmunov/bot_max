@@ -307,6 +307,7 @@ class ChatMessage(Base):
     delivery_error: Mapped[str] = mapped_column(Text, default="")
     delivery_retry_count: Mapped[int] = mapped_column(Integer, default=0)
     delivery_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     conversation: Mapped[Conversation] = relationship(back_populates="chat_messages")
 
