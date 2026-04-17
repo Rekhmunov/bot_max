@@ -1116,7 +1116,7 @@
       display: grid;
       grid-template-columns: auto auto 1fr auto auto;
       gap: 8px;
-      align-items: center;
+      align-items: end;
     }
     .attach-wrap {
       position: relative;
@@ -1220,12 +1220,21 @@
       outline: 2px solid #9ec2ff;
       outline-offset: 1px;
     }
-    .compose input[type="text"] {
+    .compose textarea {
+      display: block;
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 18px;
       padding: 10px 12px;
       font-size: 16px;
+      min-height: 40px;
+      max-height: 50vh;
+      line-height: 1.35;
+      resize: none;
+      overflow-y: hidden;
+      overflow-x: hidden;
+      white-space: pre-wrap;
+      word-break: break-word;
     }
     .send-btn {
       border: 0;
@@ -2728,13 +2737,13 @@
                   aria-label="Популярные смайлики"
                 ></div>
               </div>
-              <input
+              <textarea
                 id="message-input"
-                type="text"
                 name="text"
                 autocomplete="off"
+                rows="1"
                 placeholder="Введите сообщение или / для быстрых ответов"
-              />
+              ></textarea>
               <button class="send-btn" id="send-btn" type="submit" title="Отправить" aria-label="Отправить">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M12 20V6"></path>
@@ -3015,6 +3024,14 @@
       const scheduledAtInput = document.getElementById("scheduled-at-input");
       const composeForm = document.querySelector(".compose form");
       if (!messageInput || !photoInput || !sendBtn || !scheduleBtnMobile || !scheduleTriggerMenu || !schedulePopup || !scheduleDateInput || !scheduleTimeInput || !scheduleHint || !scheduleSubmitBtn || !scheduledAtInput || !composeForm || !mediaPreview || !uploadStatus) return;
+      const resizeMessageInput = () => {
+        if (!(messageInput instanceof HTMLTextAreaElement)) return;
+        const maxHeightPx = Math.max(120, Math.floor(window.innerHeight * 0.5));
+        messageInput.style.height = "auto";
+        const nextHeight = Math.min(Math.max(messageInput.scrollHeight, 40), maxHeightPx);
+        messageInput.style.height = `${nextHeight}px`;
+        messageInput.style.overflowY = messageInput.scrollHeight > maxHeightPx ? "auto" : "hidden";
+      };
 
       const MAX_FILE_BYTES = 5 * 1024 * 1024;
       const activeConversationId = {{ active_thread.conversation_id if active_thread else "null" }};
@@ -3362,7 +3379,7 @@
       };
 
       const insertEmojiAtCursor = (emojiValue) => {
-        if (!(messageInput instanceof HTMLInputElement)) return;
+        if (!(messageInput instanceof HTMLTextAreaElement)) return;
         const emoji = String(emojiValue || "");
         if (!emoji) return;
         const value = String(messageInput.value || "");
@@ -3372,6 +3389,7 @@
         const nextPos = start + emoji.length;
         messageInput.focus();
         messageInput.setSelectionRange(nextPos, nextPos);
+        resizeMessageInput();
         syncSendVisibility();
       };
 
@@ -3528,6 +3546,7 @@
         closeScheduleMenu();
         closeEmojiPopover();
         setKeyboardInset();
+        resizeMessageInput();
         if (document.activeElement === messageInput) {
           startKeyboardSyncBurst(700);
         }
@@ -3566,7 +3585,21 @@
         stopKeyboardSync();
         setTimeout(setKeyboardInset, 20);
       });
-      messageInput.addEventListener("input", syncSendVisibility);
+      messageInput.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") return;
+        if (event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+        if (event.isComposing) return;
+        const slashMenu = document.getElementById("slash-menu");
+        if (slashMenu instanceof HTMLElement && slashMenu.style.display === "block") {
+          return;
+        }
+        event.preventDefault();
+        composeForm.requestSubmit();
+      });
+      messageInput.addEventListener("input", () => {
+        resizeMessageInput();
+        syncSendVisibility();
+      });
       photoInput.addEventListener("change", () => {
         const incoming = Array.from(photoInput.files || []);
         if (!incoming.length) {
@@ -3633,7 +3666,9 @@
           return await originalSoftVisit(...args);
         };
       }
+      resizeMessageInput();
       syncSendVisibility();
+      window.__chatResizeMessageInput = resizeMessageInput;
     })();
 
     (() => {
@@ -3974,6 +4009,9 @@
       const applyCommand = (cmd) => {
         input.value = "/" + cmd;
         input.focus();
+        if (typeof window.__chatResizeMessageInput === "function") {
+          window.__chatResizeMessageInput();
+        }
         hideMenu();
       };
 
@@ -4947,6 +4985,7 @@
         editIdInput.value = "";
         editHint.style.display = "none";
         messageInput.value = "";
+        resizeMessageInput();
       };
 
       const openMsgMenu = (x, y, bubble) => {
@@ -4962,6 +5001,7 @@
           editIdInput.value = selectedMessageId || "";
           messageInput.value = selectedMessageText;
           editHint.style.display = "block";
+          resizeMessageInput();
           messageInput.focus();
         });
         msgMenu.appendChild(editBtn);
@@ -5896,7 +5936,7 @@
         const mediaPreviewEl = document.getElementById("compose-media-preview");
         let isComposingMessage = false;
         if (composeForm instanceof HTMLFormElement) {
-          const hasDraftText = messageInputEl instanceof HTMLInputElement
+          const hasDraftText = messageInputEl instanceof HTMLTextAreaElement
             ? String(messageInputEl.value || "").trim().length > 0
             : false;
           const hasPendingMedia =
@@ -5928,7 +5968,7 @@
           composeForm.addEventListener("focusin", () => lockComposeInteraction(8000));
           composeForm.addEventListener("pointerdown", () => lockComposeInteraction(8000), { passive: true });
         }
-        if (messageInputEl instanceof HTMLInputElement) {
+        if (messageInputEl instanceof HTMLTextAreaElement) {
           messageInputEl.addEventListener("focus", () => lockComposeInteraction(10000));
           messageInputEl.addEventListener("input", () => lockComposeInteraction(10000));
           messageInputEl.addEventListener("keydown", () => lockComposeInteraction(10000));
