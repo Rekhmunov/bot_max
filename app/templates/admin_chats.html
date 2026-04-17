@@ -1225,11 +1225,11 @@
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 18px;
-      padding: 10px 12px;
+      padding: 5px 12px;
       font-size: 16px;
-      min-height: 40px;
+      min-height: 30px;
       max-height: 50vh;
-      line-height: 1.35;
+      line-height: 1.3;
       resize: none;
       overflow-y: hidden;
       overflow-x: hidden;
@@ -3024,11 +3024,19 @@
       const scheduledAtInput = document.getElementById("scheduled-at-input");
       const composeForm = document.querySelector(".compose form");
       if (!messageInput || !photoInput || !sendBtn || !scheduleBtnMobile || !scheduleTriggerMenu || !schedulePopup || !scheduleDateInput || !scheduleTimeInput || !scheduleHint || !scheduleSubmitBtn || !scheduledAtInput || !composeForm || !mediaPreview || !uploadStatus) return;
+      const computeMessageInputMinHeight = () => {
+        const styles = window.getComputedStyle(messageInput);
+        const lineHeight = Number.parseFloat(styles.lineHeight || "") || Number.parseFloat(styles.fontSize || "") || 16;
+        const paddingY = (Number.parseFloat(styles.paddingTop || "") || 0) + (Number.parseFloat(styles.paddingBottom || "") || 0);
+        const borderY = (Number.parseFloat(styles.borderTopWidth || "") || 0) + (Number.parseFloat(styles.borderBottomWidth || "") || 0);
+        return Math.max(30, Math.ceil(lineHeight + paddingY + borderY));
+      };
       const resizeMessageInput = () => {
         if (!(messageInput instanceof HTMLTextAreaElement)) return;
+        const minHeightPx = computeMessageInputMinHeight();
         const maxHeightPx = Math.max(120, Math.floor(window.innerHeight * 0.5));
         messageInput.style.height = "auto";
-        const nextHeight = Math.min(Math.max(messageInput.scrollHeight, 40), maxHeightPx);
+        const nextHeight = Math.min(Math.max(messageInput.scrollHeight, minHeightPx), maxHeightPx);
         messageInput.style.height = `${nextHeight}px`;
         messageInput.style.overflowY = messageInput.scrollHeight > maxHeightPx ? "auto" : "hidden";
       };
