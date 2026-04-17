@@ -1913,12 +1913,37 @@
         bottom: var(--keyboard-offset, 0px);
         padding-bottom: max(10px, env(safe-area-inset-bottom));
       }
+      .compose-row {
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        grid-template-rows: auto auto;
+        align-items: end;
+      }
+      .attach-wrap {
+        grid-column: 1;
+        grid-row: 1;
+      }
+      .emoji-wrap {
+        grid-column: 1;
+        grid-row: 2;
+      }
+      #message-input {
+        grid-column: 2;
+        grid-row: 1 / span 2;
+      }
+      .send-btn {
+        grid-column: 3;
+        grid-row: 1;
+      }
+      .schedule-btn {
+        grid-column: 3;
+        grid-row: 2;
+      }
       .emoji-pop {
         left: -4px;
         width: min(260px, calc(100vw - 24px));
         max-height: min(240px, 40vh);
       }
-      .schedule-btn.mobile-visible {
+      .schedule-btn.is-visible.mobile-visible {
         display: inline-flex;
       }
       .bubble {
@@ -4993,7 +5018,9 @@
         editIdInput.value = "";
         editHint.style.display = "none";
         messageInput.value = "";
-        resizeMessageInput();
+        if (typeof window.__chatResizeMessageInput === "function") {
+          window.__chatResizeMessageInput();
+        }
       };
 
       const openMsgMenu = (x, y, bubble) => {
@@ -5009,7 +5036,9 @@
           editIdInput.value = selectedMessageId || "";
           messageInput.value = selectedMessageText;
           editHint.style.display = "block";
-          resizeMessageInput();
+          if (typeof window.__chatResizeMessageInput === "function") {
+            window.__chatResizeMessageInput();
+          }
           messageInput.focus();
         });
         msgMenu.appendChild(editBtn);
