@@ -1961,6 +1961,12 @@
       .bubble {
         max-width: 92%;
       }
+      .bubble[data-message-direction="bot"],
+      .bubble[data-message-direction="bot"] * {
+        -webkit-user-select: none;
+        user-select: none;
+        -webkit-touch-callout: none;
+      }
       .schedule-grid {
         grid-template-columns: 1fr;
       }
@@ -5008,6 +5014,38 @@
       let selectedMessageId = null;
       let selectedMessageText = "";
       let longPressTimer = null;
+      const isTouchLikeViewport = () => (
+        window.matchMedia("(max-width: 900px), (hover: none) and (pointer: coarse)").matches
+      );
+
+      const clearNativeSelection = () => {
+        try {
+          const selection = window.getSelection?.();
+          selection?.removeAllRanges?.();
+        } catch (_) {
+          // Keep long-press resilient when selection APIs are unavailable.
+        }
+      };
+
+      const copyMessageText = async (value) => {
+        const textToCopy = String(value || "");
+        if (!textToCopy) return;
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+          await navigator.clipboard.writeText(textToCopy);
+          return;
+        }
+        const fallback = document.createElement("textarea");
+        fallback.value = textToCopy;
+        fallback.setAttribute("readonly", "");
+        fallback.style.position = "fixed";
+        fallback.style.opacity = "0";
+        fallback.style.pointerEvents = "none";
+        document.body.appendChild(fallback);
+        fallback.focus();
+        fallback.select();
+        document.execCommand("copy");
+        fallback.remove();
+      };
 
       const placeFixedMenu = (menuEl, x, y) => {
         const pad = 8;
@@ -5042,6 +5080,17 @@
         selectedMessageId = bubble.dataset.messageId;
         selectedMessageText = bubble.dataset.messageText || "";
         msgMenu.innerHTML = "";
+
+        if (isTouchLikeViewport()) {
+          const copyBtn = document.createElement("button");
+          copyBtn.type = "button";
+          copyBtn.textContent = "Скопировать";
+          copyBtn.addEventListener("click", async () => {
+            hideMsgMenu();
+            await copyMessageText(selectedMessageText);
+          });
+          msgMenu.appendChild(copyBtn);
+        }
 
         const editBtn = document.createElement("button");
         editBtn.type = "button";
@@ -5111,6 +5160,7 @@
         if (!(bubble instanceof HTMLElement)) return;
         if (longPressTimer) clearTimeout(longPressTimer);
         longPressTimer = setTimeout(() => {
+          clearNativeSelection();
           openMsgMenu(touch.clientX, touch.clientY, bubble);
         }, 550);
       }, { passive: true });
