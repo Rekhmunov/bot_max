@@ -2686,12 +2686,12 @@
                     {% endfor %}
                   </div>
                 {% endif %}
-                {% if msg.direction == "bot" and (msg.text or message_images) %}
+                {% if msg.text or message_images or (msg.direction == "bot" and msg.delivery_state == "failed") %}
                   {% set state = (msg.delivery_state or "sent")|lower %}
                   {% set scheduled_at = (msg.delivery_next_retry_at or "") %}
                   {% set is_scheduled_pending = (msg.is_scheduled_pending if msg.is_scheduled_pending is defined else false) %}
                   <div class="bubble-tail">
-                    {% if is_scheduled_pending and scheduled_at %}
+                    {% if msg.direction == "bot" and is_scheduled_pending and scheduled_at %}
                       <span
                         class="scheduled-label"
                         title="Отложенная отправка"
@@ -2702,30 +2702,32 @@
                       </span>
                     {% else %}
                       <span class="bubble-tail-time">{{ msg.created_at_label or "—" }}</span>
-                      {% if state == "failed" %}
-                        {% set ticks = "✓✓" %}
-                        {% set status_class = "failed" %}
-                        {% set status_title = "Ошибка отправки" %}
-                      {% elif state == "sent" and msg.is_read_by_customer %}
-                        {% set ticks = "✓✓" %}
-                        {% set status_class = "delivered" %}
-                        {% set status_title = "Сообщение прочитано" %}
-                      {% elif state == "sent" %}
-                        {% set ticks = "✓" %}
-                        {% set status_class = "sent" %}
-                        {% set status_title = "Сообщение отправлено" %}
-                      {% else %}
-                        {% set ticks = "✓" %}
-                        {% set status_class = "sent" %}
-                        {% set status_title = "Сообщение отправляется" %}
+                      {% if msg.direction == "bot" %}
+                        {% if state == "failed" %}
+                          {% set ticks = "✓✓" %}
+                          {% set status_class = "failed" %}
+                          {% set status_title = "Ошибка отправки" %}
+                        {% elif state == "sent" and msg.is_read_by_customer %}
+                          {% set ticks = "✓✓" %}
+                          {% set status_class = "delivered" %}
+                          {% set status_title = "Сообщение прочитано" %}
+                        {% elif state == "sent" %}
+                          {% set ticks = "✓" %}
+                          {% set status_class = "sent" %}
+                          {% set status_title = "Сообщение отправлено" %}
+                        {% else %}
+                          {% set ticks = "✓" %}
+                          {% set status_class = "sent" %}
+                          {% set status_title = "Сообщение отправляется" %}
+                        {% endif %}
+                        <span
+                          class="delivery-status {{ status_class }}"
+                          title="{{ status_title }}"
+                          aria-label="{{ status_title }}"
+                        >
+                          <span class="ticks">{{ ticks }}</span>
+                        </span>
                       {% endif %}
-                      <span
-                        class="delivery-status {{ status_class }}"
-                        title="{{ status_title }}"
-                        aria-label="{{ status_title }}"
-                      >
-                        <span class="ticks">{{ ticks }}</span>
-                      </span>
                     {% endif %}
                   </div>
                 {% endif %}
@@ -5825,10 +5827,10 @@
           }
         }
 
-        if (direction === "bot" && (text || imageUrls.length)) {
+        if (text || imageUrls.length || (direction === "bot" && deliveryState === "failed")) {
           const tail = document.createElement("div");
           tail.className = "bubble-tail";
-          if (isScheduledPending && scheduledAt) {
+          if (direction === "bot" && isScheduledPending && scheduledAt) {
             const scheduledNode = document.createElement("span");
             scheduledNode.className = "scheduled-label";
             scheduledNode.title = "Отложенная отправка";
@@ -5841,31 +5843,33 @@
             timeNode.className = "bubble-tail-time";
             timeNode.textContent = String(createdAtLabel || "—");
             tail.appendChild(timeNode);
-            let ticks = "✓";
-            let statusClass = "sent";
-            let statusTitle = "Сообщение отправляется";
-            if (deliveryState === "failed") {
-              ticks = "✓✓";
-              statusClass = "failed";
-              statusTitle = "Ошибка отправки";
-            } else if (deliveryState === "sent" && isReadByCustomer) {
-              ticks = "✓✓";
-              statusClass = "delivered";
-              statusTitle = "Сообщение прочитано";
-            } else if (deliveryState === "sent") {
-              ticks = "✓";
-              statusClass = "sent";
-              statusTitle = "Сообщение отправлено";
+            if (direction === "bot") {
+              let ticks = "✓";
+              let statusClass = "sent";
+              let statusTitle = "Сообщение отправляется";
+              if (deliveryState === "failed") {
+                ticks = "✓✓";
+                statusClass = "failed";
+                statusTitle = "Ошибка отправки";
+              } else if (deliveryState === "sent" && isReadByCustomer) {
+                ticks = "✓✓";
+                statusClass = "delivered";
+                statusTitle = "Сообщение прочитано";
+              } else if (deliveryState === "sent") {
+                ticks = "✓";
+                statusClass = "sent";
+                statusTitle = "Сообщение отправлено";
+              }
+              const statusNode = document.createElement("span");
+              statusNode.className = `delivery-status ${statusClass}`;
+              statusNode.title = statusTitle;
+              statusNode.setAttribute("aria-label", statusTitle);
+              const ticksNode = document.createElement("span");
+              ticksNode.className = "ticks";
+              ticksNode.textContent = ticks;
+              statusNode.appendChild(ticksNode);
+              tail.appendChild(statusNode);
             }
-            const statusNode = document.createElement("span");
-            statusNode.className = `delivery-status ${statusClass}`;
-            statusNode.title = statusTitle;
-            statusNode.setAttribute("aria-label", statusTitle);
-            const ticksNode = document.createElement("span");
-            ticksNode.className = "ticks";
-            ticksNode.textContent = ticks;
-            statusNode.appendChild(ticksNode);
-            tail.appendChild(statusNode);
           }
           bubble.appendChild(tail);
         }

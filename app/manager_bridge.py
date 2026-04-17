@@ -634,6 +634,7 @@ class ChatThreadItem:
     phone_verified: bool
     last_message_preview: str
     last_message_created_at: datetime | None
+    last_message_time_label: str
     last_message_is_max_incoming: bool
     has_delivery_errors: bool
     is_unread: bool
@@ -666,6 +667,21 @@ class DeliveryStats:
         if self.total_sent_attempts <= 0:
             return 0.0
         return round(self.retry_sum / self.total_sent_attempts, 2)
+
+
+def _to_moscow_chat_label(value: datetime | None) -> str:
+    if value is None:
+        return "—"
+    dt_value = value
+    if dt_value.tzinfo is None:
+        dt_value = dt_value.replace(tzinfo=UTC)
+    else:
+        dt_value = dt_value.astimezone(UTC)
+    try:
+        dt_value = dt_value.astimezone(ZoneInfo("Europe/Moscow"))
+    except Exception:
+        pass
+    return dt_value.strftime("%H:%M | %d-%m-%Y")
 
 
 @dataclass
@@ -4955,6 +4971,7 @@ def load_chat_threads(
         label = f"{name}{(' @' + username) if username else ''}"
         preview = ""
         last_message_created_at: datetime | None = None
+        last_message_time_label = "—"
         last_message_is_max_incoming = False
         if last_msg:
             preview = (last_msg.text or "").strip()
@@ -4963,6 +4980,7 @@ def load_chat_threads(
             created_raw = getattr(last_msg, "created_at", None)
             if isinstance(created_raw, datetime):
                 last_message_created_at = created_raw
+                last_message_time_label = _to_moscow_chat_label(created_raw)
             last_message_is_max_incoming = (
                 str(getattr(last_msg, "direction", "") or "").strip().lower() == "customer"
                 and str(getattr(last_msg, "source", "") or "").strip().lower() == "customer"
@@ -5010,6 +5028,7 @@ def load_chat_threads(
                 phone_verified=phone_verified,
                 last_message_preview=preview,
                 last_message_created_at=last_message_created_at,
+                last_message_time_label=last_message_time_label,
                 last_message_is_max_incoming=last_message_is_max_incoming,
                 has_delivery_errors=has_delivery_errors,
                 is_unread=is_unread,

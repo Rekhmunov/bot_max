@@ -8873,6 +8873,9 @@ def _chat_op_messages(request: Request) -> tuple[str | None, str | None]:
 
 def _thread_summary_dict(item: object) -> dict[str, object]:
     conversation_id = int(getattr(item, "conversation_id", 0) or 0)
+    thread_time_label = str(getattr(item, "last_message_time_label", "") or "").strip()
+    if not thread_time_label:
+        thread_time_label = _to_moscow_chat_label(getattr(item, "last_message_created_at", None))
     return {
         "conversation_id": conversation_id,
         "chat_id": str(getattr(item, "chat_id", "") or ""),
@@ -8895,9 +8898,7 @@ def _thread_summary_dict(item: object) -> dict[str, object]:
             if isinstance(getattr(item, "last_message_created_at", None), datetime)
             else ""
         ),
-        "last_message_time_label": _to_moscow_chat_label(
-            getattr(item, "last_message_created_at", None)
-        ),
+        "last_message_time_label": thread_time_label,
         "last_message_from_customer_max": bool(
             getattr(item, "last_message_from_customer_max", False)
         ),
