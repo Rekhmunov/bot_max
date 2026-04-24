@@ -1286,6 +1286,15 @@
         box-shadow var(--motion-fast) var(--ease-standard),
         filter var(--motion-fast) var(--ease-standard);
     }
+    .schedule-btn.more-menu-btn {
+      width: 26px;
+      border-radius: 10px;
+      font-size: 18px;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -1px;
+      justify-content: center;
+    }
     .send-btn:hover,
     .schedule-btn:hover {
       transform: translateY(-1px);
@@ -1944,10 +1953,10 @@
         grid-column: 3;
         grid-row: auto;
         display: inline-flex;
-        flex-direction: column;
+        flex-direction: row;
         align-items: center;
         justify-content: flex-end;
-        gap: 8px;
+        gap: 6px;
         align-self: end;
       }
       .emoji-pop {
@@ -2794,11 +2803,8 @@
                     <path d="M6 12l6-6 6 6"></path>
                   </svg>
                 </button>
-                <button class="schedule-btn" id="schedule-btn-mobile" type="button" title="Отложенная отправка" aria-label="Отложенная отправка">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <circle cx="12" cy="12" r="8"></circle>
-                    <path d="M12 8v4l3 2"></path>
-                  </svg>
+                <button class="schedule-btn more-menu-btn" id="schedule-btn-mobile" type="button" title="Дополнительно" aria-label="Дополнительно">
+                  &#8942;
                 </button>
               </div>
             </div>
@@ -3538,8 +3544,23 @@
 
       scheduleBtnMobile.addEventListener("click", (event) => {
         event.preventDefault();
+        event.stopPropagation();
         if (!hasPayload()) return;
-        openSchedulePopup();
+        if (scheduleTriggerMenu.style.display === "block") {
+          closeScheduleMenu();
+          return;
+        }
+        scheduleTriggerMenu.innerHTML = "";
+        const laterBtn = document.createElement("button");
+        laterBtn.type = "button";
+        laterBtn.textContent = "Отложенная отправка";
+        laterBtn.addEventListener("click", () => {
+          closeScheduleMenu();
+          openSchedulePopup();
+        });
+        scheduleTriggerMenu.appendChild(laterBtn);
+        const rect = scheduleBtnMobile.getBoundingClientRect();
+        placeFixedMenu(scheduleTriggerMenu, rect.right - 6, rect.bottom + 6);
       });
 
       scheduleSubmitBtn.addEventListener("click", () => {
@@ -3578,6 +3599,7 @@
       document.addEventListener("click", (event) => {
         if (scheduleTriggerMenu.contains(event.target)) return;
         if (event.target === sendBtn) return;
+        if (scheduleBtnMobile.contains(event.target)) return;
         closeScheduleMenu();
       });
       document.addEventListener("click", (event) => {
