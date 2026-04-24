@@ -5261,6 +5261,30 @@ def _render_app_landing(
     )
 
 
+def _render_miniapp_landing(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request,
+        "mini_app_channel_landing.html",
+        {
+            "request": request,
+            "channel_url": "https://max.ru/id372400681880_biz",
+        },
+    )
+
+
+def _is_miniapp_landing_request(request: Request) -> bool:
+    miniapp_flag = str(request.query_params.get("miniapp") or request.query_params.get("mini") or "").strip().lower()
+    if miniapp_flag in {"1", "true", "yes", "on"}:
+        return True
+    user_agent = str(request.headers.get("user-agent") or "").strip().lower()
+    if any(marker in user_agent for marker in ("max-miniapp", "maxapp", "max webview", "maxwebview")):
+        return True
+    requested_with = str(request.headers.get("x-requested-with") or "").strip().lower()
+    if "max" in requested_with and "mini" in requested_with:
+        return True
+    return False
+
+
 def _build_manager_invite_links(
     *,
     db: Session,
@@ -5438,6 +5462,8 @@ def app_landing(
     request: Request,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    if _is_miniapp_landing_request(request):
+        return _render_miniapp_landing(request)
     current_user = get_current_service_user(request=request, db=db)
     if current_user is not None:
         if current_user.role == "superadmin":
@@ -5451,6 +5477,8 @@ def app_login_page(
     request: Request,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    if _is_miniapp_landing_request(request):
+        return _render_miniapp_landing(request)
     current_user = get_current_service_user(request=request, db=db)
     if current_user is not None:
         if current_user.role == "superadmin":
