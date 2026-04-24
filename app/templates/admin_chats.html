@@ -3806,7 +3806,13 @@
       const isChatListVisible = () => {
         const listScreen = document.getElementById("chat-list-screen");
         if (!(listScreen instanceof HTMLElement)) return true;
-        return !listScreen.classList.contains("hidden-mobile");
+        // `hidden-mobile` class is present on desktop too, but only hidden by media-query.
+        // Check computed visibility instead of class name to avoid skipping desktop restore.
+        const style = window.getComputedStyle(listScreen);
+        if (!style) return true;
+        if (style.display === "none") return false;
+        if (style.visibility === "hidden") return false;
+        return true;
       };
 
       const getThreadsContextFromUrl = (urlValue) => {
