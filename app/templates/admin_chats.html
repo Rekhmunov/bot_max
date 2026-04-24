@@ -2640,9 +2640,6 @@
                 {{ active_thread.customer_label }}
               {% endif %}
             </h2>
-            <div class="chat-sub">
-              customer_account_id: {{ active_thread.customer_account_id or "—" }} | номер верифицирован: {{ "да" if active_thread.phone_verified else "нет" }}
-            </div>
             {% if active_thread and active_thread.is_blocked %}
               <div class="chat-sub chat-sub-blocked">
                 Пользователь заблокирован

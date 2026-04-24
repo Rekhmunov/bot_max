@@ -4449,7 +4449,6 @@ def _render_customer_profile_page(
                 or "—"
             ),
         },
-        {"label": "Телефон подтвержден", "value": ("да" if meta and meta.phone_verified else "нет")},
     ]
     technical_rows = [
         {"label": "conversation_id", "value": str(conversation.id)},
