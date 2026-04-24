@@ -3795,6 +3795,98 @@
     (() => {
       const SOFT_NAV_ATTR = "data-soft-nav";
       const CHAT_SCROLL_STATE_KEY = "__chatMessagesScrollState";
+      const THREADS_SCROLL_STATE_KEY = "__chatThreadsScrollState";
+      const THREADS_SCROLL_STATE_TTL_MS = 5 * 60 * 1000;
+
+      const getThreadsScroller = () => {
+        const node = document.querySelector(".threads");
+        return node instanceof HTMLElement ? node : null;
+      };
+
+      const isChatListVisible = () => {
+        const listScreen = document.getElementById("chat-list-screen");
+        if (!(listScreen instanceof HTMLElement)) return true;
+        return !listScreen.classList.contains("hidden-mobile");
+      };
+
+      const getThreadsContextFromUrl = (urlValue) => {
+        try {
+          const parsed = new URL(String(urlValue || window.location.href), window.location.origin);
+          return {
+            path: String(parsed.pathname || ""),
+            q: String(parsed.searchParams.get("q") || ""),
+            folder_id: String(parsed.searchParams.get("folder_id") || ""),
+          };
+        } catch (_) {
+          return {
+            path: String(window.location.pathname || ""),
+            q: "",
+            folder_id: "",
+          };
+        }
+      };
+
+      const captureThreadsScrollState = () => {
+        const scroller = getThreadsScroller();
+        if (!(scroller instanceof HTMLElement)) return;
+        if (!isChatListVisible()) return;
+        try {
+          const context = getThreadsContextFromUrl(window.location.href);
+          window.sessionStorage.setItem(
+            THREADS_SCROLL_STATE_KEY,
+            JSON.stringify({
+              ...context,
+              scrollTop: Math.max(0, Math.round(Number(scroller.scrollTop || 0))),
+              savedAt: Date.now(),
+            }),
+          );
+        } catch (_) {
+          // Keep chat soft-navigation resilient if storage is unavailable.
+        }
+      };
+      window.__chatCaptureThreadsScrollState = captureThreadsScrollState;
+
+      const restoreThreadsScrollState = () => {
+        const scroller = getThreadsScroller();
+        if (!(scroller instanceof HTMLElement)) return false;
+        if (!isChatListVisible()) return false;
+        let payload = null;
+        try {
+          const raw = window.sessionStorage.getItem(THREADS_SCROLL_STATE_KEY);
+          if (!raw) return false;
+          payload = JSON.parse(raw);
+        } catch (_) {
+          return false;
+        }
+        const savedAt = Number(payload?.savedAt || 0);
+        if (!savedAt || (Date.now() - savedAt) > THREADS_SCROLL_STATE_TTL_MS) {
+          try {
+            window.sessionStorage.removeItem(THREADS_SCROLL_STATE_KEY);
+          } catch (_) {}
+          return false;
+        }
+        const currentContext = getThreadsContextFromUrl(window.location.href);
+        const sameContext = (
+          String(payload?.path || "") === currentContext.path
+          && String(payload?.q || "") === currentContext.q
+          && String(payload?.folder_id || "") === currentContext.folder_id
+        );
+        if (!sameContext) {
+          return false;
+        }
+        const targetTop = Math.max(0, Number(payload?.scrollTop || 0));
+        window.requestAnimationFrame(() => {
+          scroller.scrollTop = targetTop;
+          // Double-frame write helps after heavy thread list rerenders.
+          window.requestAnimationFrame(() => {
+            scroller.scrollTop = targetTop;
+          });
+        });
+        try {
+          window.sessionStorage.removeItem(THREADS_SCROLL_STATE_KEY);
+        } catch (_) {}
+        return true;
+      };
 
       const captureMessagesScrollState = ({ forceBottom = false } = {}) => {
         const wrap = document.querySelector(".messages-wrap");
@@ -3946,6 +4038,7 @@
       window.__chatSoftRenderFromResponse = renderFromResponse;
       window.__chatSoftVisit = softVisit;
       stripChatOperationFlags();
+      restoreThreadsScrollState();
       window.addEventListener("beforeunload", () => {
         softNavInFlight = false;
       });
@@ -3984,6 +4077,9 @@
         if (!canInterceptClick(event, anchor)) return;
         event.preventDefault();
         if (shouldThrottleSoftNavClick(anchor)) return;
+        if (anchor.classList.contains("thread")) {
+          captureThreadsScrollState();
+        }
         softVisit(anchor.href, { replaceHistory: false }).catch(() => {
           window.location.href = anchor.href;
         });
