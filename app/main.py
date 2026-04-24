@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from jinja2 import TemplateNotFound
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -5262,26 +5263,82 @@ def _render_app_landing(
 
 
 def _render_miniapp_landing(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(
-        request,
-        "mini_app_channel_landing.html",
-        {
-            "request": request,
-            "channel_url": "https://max.ru/id372400681880_biz",
-        },
-    )
+    context = {
+        "request": request,
+        "channel_url": "https://max.ru/id372400681880_biz",
+    }
+    try:
+        return templates.TemplateResponse(request, "miniapp_landing.html", context)
+    except TemplateNotFound:
+        # Safe fallback to prevent 500 in case template deployment lags behind code.
+        return HTMLResponse(
+            (
+                "<!doctype html><html lang='ru'><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+                "<title>FeedPilot mini-app</title></head><body style='margin:0;"
+                "min-height:100vh;display:grid;place-items:center;background:#0f1730;"
+                "font-family:Inter,Arial,sans-serif;color:#eef4ff;'>"
+                "<main style='max-width:560px;padding:20px;text-align:center;'>"
+                "<h1 style='margin:0 0 14px;font-size:26px;line-height:1.2;'>"
+                "Хочешь больше выгодных предложений с кэшбэком, тогда подпишись на наш канал"
+                "</h1><a href='https://max.ru/id372400681880_biz' target='_blank' rel='noopener noreferrer' "
+                "style='display:inline-block;padding:12px 20px;border-radius:12px;"
+                "background:#2f8dff;color:#fff;text-decoration:none;font-weight:800;'>"
+                "Перейти в канал</a></main></body></html>"
+            ),
+            status_code=200,
+        )
 
 
 def _is_miniapp_landing_request(request: Request) -> bool:
-    miniapp_flag = str(request.query_params.get("miniapp") or request.query_params.get("mini") or "").strip().lower()
+    miniapp_flag = str(
+        request.query_params.get("miniapp")
+        or request.query_params.get("mini")
+        or request.query_params.get("from")
+        or request.query_params.get("source")
+        or ""
+    ).strip().lower()
     if miniapp_flag in {"1", "true", "yes", "on"}:
         return True
-    user_agent = str(request.headers.get("user-agent") or "").strip().lower()
-    if any(marker in user_agent for marker in ("max-miniapp", "maxapp", "max webview", "maxwebview")):
+    if miniapp_flag in {"miniapp", "mini_app", "max-miniapp", "max_miniapp", "max"}:
         return True
+
     requested_with = str(request.headers.get("x-requested-with") or "").strip().lower()
-    if "max" in requested_with and "mini" in requested_with:
+    if any(marker in requested_with for marker in ("max", "miniapp", "mini_app")):
         return True
+
+    x_miniapp = str(
+        request.headers.get("x-miniapp")
+        or request.headers.get("x-max-miniapp")
+        or ""
+    ).strip().lower()
+    if x_miniapp in {"1", "true", "yes", "on"}:
+        return True
+
+    user_agent = str(request.headers.get("user-agent") or "").strip().lower()
+    if any(marker in user_agent for marker in ("max-miniapp", "maxapp", "max webview", "maxwebview", "miniapp")):
+        return True
+    if "max" in user_agent and any(marker in user_agent for marker in ("webview", "qtwebengine", "messenger")):
+        return True
+
+    for header_name in ("referer", "origin"):
+        raw_value = str(request.headers.get(header_name) or "").strip().lower()
+        if not raw_value:
+            continue
+        try:
+            parsed = urlsplit(raw_value)
+        except Exception:
+            continue
+        host = str(parsed.netloc or "").strip().lower()
+        if host.endswith("max.ru") or host.endswith(".max.ru"):
+            return True
+
+    fetch_dest = str(request.headers.get("sec-fetch-dest") or "").strip().lower()
+    if fetch_dest in {"iframe", "embed", "object"}:
+        referer_value = str(request.headers.get("referer") or "").strip().lower()
+        if "max.ru" in referer_value:
+            return True
+
     return False
 
 
