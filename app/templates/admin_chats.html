@@ -668,6 +668,34 @@
       min-width: 0;
       max-width: 100%;
     }
+    .copy-ticket-btn {
+      border: 0;
+      background: transparent;
+      color: #5573ad;
+      width: 20px;
+      height: 20px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+      flex: 0 0 auto;
+      transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
+    }
+    .copy-ticket-btn:hover {
+      background: #eaf1ff;
+      color: #2e5eb9;
+    }
+    .copy-ticket-btn svg {
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
     .thread-name-text {
       min-width: 0;
       white-space: nowrap;
@@ -778,6 +806,12 @@
     }
     .back-btn:hover { background: #f1f4fb; }
     .chat-title-wrap { min-width: 0; }
+    .chat-title-main {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+    }
     .chat-title {
       margin: 0;
       font-size: 18px;
@@ -785,6 +819,8 @@
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
+      min-width: 0;
+      flex: 1 1 auto;
     }
     .chat-sub {
       margin-top: 2px;
@@ -2528,11 +2564,25 @@
                       />
                     </span>
                     <div class="thread-name">
+                      {% set thread_copy_label = ((('[T-' ~ thread.ticket_no ~ '] ') if thread.ticket_no else '') ~ thread.customer_label) %}
                       <span class="thread-name-with-origin">
                         {% if thread.last_message_from_customer_max %}
                           <span class="origin-max-badge" aria-label="Чат из MAX" title="Чат из MAX">M</span>
                         {% endif %}
                         <span class="thread-name-text">📌 {% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}</span>
+                        <button
+                          type="button"
+                          class="copy-ticket-btn"
+                          data-copy-ticket-btn
+                          data-copy-value="{{ thread_copy_label|e }}"
+                          title="Копировать"
+                          aria-label="Копировать {{ thread_copy_label }}"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                            <rect x="5" y="5" width="10" height="10" rx="2"></rect>
+                          </svg>
+                        </button>
                       </span>
                     </div>
                     <span class="thread-head-right">
@@ -2589,11 +2639,25 @@
                     />
                   </span>
                   <div class="thread-name">
+                    {% set thread_copy_label = ((('[T-' ~ thread.ticket_no ~ '] ') if thread.ticket_no else '') ~ thread.customer_label) %}
                     <span class="thread-name-with-origin">
                       {% if thread.last_message_from_customer_max %}
                         <span class="origin-max-badge" aria-label="Чат из MAX" title="Чат из MAX">M</span>
                       {% endif %}
                       <span class="thread-name-text">{% if thread.ticket_no %}[T-{{ thread.ticket_no }}] {% endif %}{{ thread.customer_label }}</span>
+                      <button
+                        type="button"
+                        class="copy-ticket-btn"
+                        data-copy-ticket-btn
+                        data-copy-value="{{ thread_copy_label|e }}"
+                        title="Копировать"
+                        aria-label="Копировать {{ thread_copy_label }}"
+                      >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                          <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                          <rect x="5" y="5" width="10" height="10" rx="2"></rect>
+                        </svg>
+                      </button>
                     </span>
                   </div>
                   <span class="thread-head-right">
@@ -2641,17 +2705,31 @@
             </svg>
           </a>
           <div class="chat-title-wrap">
-            <h2 class="chat-title">
-              {% if show_profile_links %}
-                <a class="profile-link" href="{{ profile_href_prefix }}{{ active_thread.conversation_id }}/profile?q={{ query }}&view={{ 'chat' if mobile_chat_view else '' }}{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}">
-                  {% if active_thread.ticket_no %}[T-{{ active_thread.ticket_no }}] {% endif %}
-                  {{ active_thread.customer_label }}
-                </a>
-              {% else %}
-                {% if active_thread.ticket_no %}[T-{{ active_thread.ticket_no }}] {% endif %}
-                {{ active_thread.customer_label }}
-              {% endif %}
-            </h2>
+            {% set active_thread_copy_label = ((('[T-' ~ active_thread.ticket_no ~ '] ') if active_thread.ticket_no else '') ~ active_thread.customer_label) %}
+            <div class="chat-title-main">
+              <h2 class="chat-title">
+                {% if show_profile_links %}
+                  <a class="profile-link" href="{{ profile_href_prefix }}{{ active_thread.conversation_id }}/profile?q={{ query }}&view={{ 'chat' if mobile_chat_view else '' }}{% if folder_filter is not none %}&folder_id={{ folder_filter }}{% endif %}">
+                    {{ active_thread_copy_label }}
+                  </a>
+                {% else %}
+                  {{ active_thread_copy_label }}
+                {% endif %}
+              </h2>
+              <button
+                type="button"
+                class="copy-ticket-btn"
+                data-copy-ticket-btn
+                data-copy-value="{{ active_thread_copy_label|e }}"
+                title="Копировать"
+                aria-label="Копировать {{ active_thread_copy_label }}"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="9" y="9" width="10" height="10" rx="2"></rect>
+                  <rect x="5" y="5" width="10" height="10" rx="2"></rect>
+                </svg>
+              </button>
+            </div>
             {% if active_thread and active_thread.is_blocked %}
               <div class="chat-sub chat-sub-blocked">
                 Пользователь заблокирован
@@ -4187,11 +4265,41 @@
         if (anchor.hasAttribute("download")) return false;
         return true;
       };
+      const copyTextToClipboard = async (value) => {
+        const textValue = String(value || "").trim();
+        if (!textValue) return false;
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+          await navigator.clipboard.writeText(textValue);
+          return true;
+        }
+        const fallback = document.createElement("textarea");
+        fallback.value = textValue;
+        fallback.setAttribute("readonly", "");
+        fallback.style.position = "fixed";
+        fallback.style.opacity = "0";
+        fallback.style.pointerEvents = "none";
+        document.body.appendChild(fallback);
+        fallback.focus();
+        fallback.select();
+        const ok = document.execCommand("copy");
+        fallback.remove();
+        return Boolean(ok);
+      };
 
       document.addEventListener("click", (event) => {
+        const copyBtn = event.target instanceof Element
+          ? event.target.closest("[data-copy-ticket-btn]")
+          : null;
+        if (copyBtn instanceof HTMLButtonElement) {
+          event.preventDefault();
+          event.stopPropagation();
+          void copyTextToClipboard(String(copyBtn.dataset.copyValue || ""));
+          return;
+        }
         const anchor = event.target.closest(`a[${SOFT_NAV_ATTR}]`);
         // Thread action menu button sits inside <a.thread>; do not treat it as navigation click.
         if (event.target instanceof Element && event.target.closest("[data-thread-menu-btn]")) return;
+        if (event.target instanceof Element && event.target.closest("[data-copy-ticket-btn]")) return;
         if (event.target instanceof Element && event.target.closest("[data-thread-select]")) {
           // Let native checkbox toggle + change event run.
           return;
@@ -4530,6 +4638,9 @@
             return;
           }
           if (event.target.closest("[data-thread-menu-btn]")) {
+            return;
+          }
+          if (event.target.closest("[data-copy-ticket-btn]")) {
             return;
           }
         }
