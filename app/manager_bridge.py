@@ -4994,11 +4994,17 @@ def load_chat_threads(
         last_activity_id = last_msg.id if last_msg else conv.id
         has_delivery_errors = conv_key in failed_conversation_ids
 
+        searchable_ticket_label = (
+            f"[T-{int(ticket_no)}] {label}"
+            if ticket_no is not None and int(ticket_no or 0) > 0
+            else label
+        )
         searchable = " ".join(
             [
                 conv.chat_id,
                 conv.customer_account_id,
                 label,
+                searchable_ticket_label,
                 preview,
                 status,
                 str(ticket_no or ""),
