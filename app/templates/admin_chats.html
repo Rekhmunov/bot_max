@@ -4070,6 +4070,40 @@
       window.__chatSoftVisit = softVisit;
       stripChatOperationFlags();
       restoreThreadsScrollState();
+      const searchInput = document.querySelector(".search-form input[name='q']");
+      let searchDebounceTimer = 0;
+      let lastAutoSearchValue = "";
+      const triggerAutoSearch = () => {
+        if (!(searchInput instanceof HTMLInputElement)) return;
+        const form = searchInput.closest(`form[${SOFT_NAV_ATTR}]`);
+        if (!(form instanceof HTMLFormElement)) return;
+        const nextValue = String(searchInput.value || "");
+        const currentValue = String(lastAutoSearchValue || "");
+        if (nextValue === currentValue) return;
+        lastAutoSearchValue = nextValue;
+        const actionUrl = form.action || window.location.href;
+        const url = new URL(actionUrl, window.location.origin);
+        const params = new URLSearchParams();
+        const formData = new FormData(form);
+        for (const [key, value] of formData.entries()) {
+          params.append(key, String(value));
+        }
+        url.search = params.toString();
+        softVisit(url.toString(), { replaceHistory: false }).catch(() => {
+          window.location.href = url.toString();
+        });
+      };
+      if (searchInput instanceof HTMLInputElement) {
+        lastAutoSearchValue = String(searchInput.value || "");
+        searchInput.addEventListener("input", () => {
+          if (searchDebounceTimer) {
+            window.clearTimeout(searchDebounceTimer);
+          }
+          searchDebounceTimer = window.setTimeout(() => {
+            triggerAutoSearch();
+          }, 300);
+        });
+      }
       window.addEventListener("beforeunload", () => {
         softNavInFlight = false;
       });
