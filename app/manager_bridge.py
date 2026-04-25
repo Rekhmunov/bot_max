@@ -4999,12 +4999,18 @@ def load_chat_threads(
             if ticket_no is not None and int(ticket_no or 0) > 0
             else label
         )
+        searchable_ticket_code = (
+            f"T-{int(ticket_no)}"
+            if ticket_no is not None and int(ticket_no or 0) > 0
+            else ""
+        )
         searchable = " ".join(
             [
                 conv.chat_id,
                 conv.customer_account_id,
                 label,
                 searchable_ticket_label,
+                searchable_ticket_code,
                 preview,
                 status,
                 str(ticket_no or ""),

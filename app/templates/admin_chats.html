@@ -3821,6 +3821,7 @@
       const SOFT_NAV_ATTR = "data-soft-nav";
       const CHAT_SCROLL_STATE_KEY = "__chatMessagesScrollState";
       const THREADS_SCROLL_STATE_KEY = "__chatThreadsScrollState";
+      const SEARCH_FOCUS_STATE_KEY = "__chatSearchFocusState";
       const THREADS_SCROLL_STATE_TTL_MS = 5 * 60 * 1000;
 
       const getThreadsScroller = () => {
@@ -3947,6 +3948,73 @@
       };
       window.__chatCaptureMessagesScrollState = captureMessagesScrollState;
 
+      const captureSearchFocusState = () => {
+        const searchInputNode = document.querySelector(".search-form input[name='q']");
+        if (!(searchInputNode instanceof HTMLInputElement)) return;
+        if (document.activeElement !== searchInputNode) {
+          try {
+            window.sessionStorage.removeItem(SEARCH_FOCUS_STATE_KEY);
+          } catch (_) {}
+          return;
+        }
+        try {
+          window.sessionStorage.setItem(
+            SEARCH_FOCUS_STATE_KEY,
+            JSON.stringify({
+              value: String(searchInputNode.value || ""),
+              selectionStart: Number(searchInputNode.selectionStart ?? -1),
+              selectionEnd: Number(searchInputNode.selectionEnd ?? -1),
+              savedAt: Date.now(),
+            }),
+          );
+        } catch (_) {
+          // Keep soft-nav resilient if storage APIs are unavailable.
+        }
+      };
+
+      const restoreSearchFocusState = () => {
+        const searchInputNode = document.querySelector(".search-form input[name='q']");
+        if (!(searchInputNode instanceof HTMLInputElement)) return;
+        let payload = null;
+        try {
+          const raw = window.sessionStorage.getItem(SEARCH_FOCUS_STATE_KEY);
+          if (!raw) return;
+          payload = JSON.parse(raw);
+        } catch (_) {
+          return;
+        }
+        const savedAt = Number(payload?.savedAt || 0);
+        if (!savedAt || (Date.now() - savedAt) > 30000) {
+          try {
+            window.sessionStorage.removeItem(SEARCH_FOCUS_STATE_KEY);
+          } catch (_) {}
+          return;
+        }
+        const savedValue = String(payload?.value || "");
+        if (savedValue !== String(searchInputNode.value || "")) {
+          try {
+            window.sessionStorage.removeItem(SEARCH_FOCUS_STATE_KEY);
+          } catch (_) {}
+          return;
+        }
+        const startRaw = Number(payload?.selectionStart ?? -1);
+        const endRaw = Number(payload?.selectionEnd ?? -1);
+        const maxPos = savedValue.length;
+        const start = Math.min(Math.max(0, Number.isFinite(startRaw) ? startRaw : maxPos), maxPos);
+        const end = Math.min(Math.max(0, Number.isFinite(endRaw) ? endRaw : start), maxPos);
+        window.requestAnimationFrame(() => {
+          searchInputNode.focus({ preventScroll: true });
+          try {
+            searchInputNode.setSelectionRange(start, end);
+          } catch (_) {
+            // Ignore selection restore errors for unsupported input types.
+          }
+        });
+        try {
+          window.sessionStorage.removeItem(SEARCH_FOCUS_STATE_KEY);
+        } catch (_) {}
+      };
+
       async function renderFromResponse(response, { replaceHistory = true } = {}) {
         if (!response || !response.ok) {
           window.location.reload();
@@ -4070,6 +4138,7 @@
       window.__chatSoftVisit = softVisit;
       stripChatOperationFlags();
       restoreThreadsScrollState();
+      restoreSearchFocusState();
       const searchInput = document.querySelector(".search-form input[name='q']");
       let searchDebounceTimer = 0;
       let lastAutoSearchValue = "";
@@ -4089,6 +4158,7 @@
           params.append(key, String(value));
         }
         url.search = params.toString();
+        captureSearchFocusState();
         softVisit(url.toString(), { replaceHistory: false }).catch(() => {
           window.location.href = url.toString();
         });
