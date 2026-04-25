@@ -317,6 +317,7 @@
       color: #365694;
       font-size: 12px;
       font-weight: 700;
+      min-width: 0;
     }
     .pinned-threads {
       display: grid;
@@ -324,6 +325,7 @@
       margin-bottom: 8px;
       padding-bottom: 8px;
       border-bottom: 1px dashed #d8e3f8;
+      min-width: 0;
     }
     .thread.pinned {
       border-color: #d3e2ff;
@@ -569,6 +571,7 @@
       border: 1px solid transparent;
       border-radius: var(--radius);
       padding: 10px 12px;
+      min-width: 0;
       transition:
         border-color var(--motion-fast) var(--ease-standard),
         background-color var(--motion-fast) var(--ease-standard),
@@ -600,6 +603,7 @@
       align-items: center;
       gap: 8px;
       margin-bottom: 4px;
+      min-width: 0;
     }
     .thread-head-right {
       display: inline-flex;
@@ -662,11 +666,13 @@
       box-shadow: 0 1px 3px rgba(25, 118, 255, 0.3);
     }
     .thread-name-with-origin {
-      display: inline-flex;
+      display: flex;
       align-items: center;
       gap: 6px;
+      width: 100%;
       min-width: 0;
       max-width: 100%;
+      overflow: hidden;
     }
     .copy-ticket-btn {
       border: 0;
@@ -697,6 +703,7 @@
       stroke-linejoin: round;
     }
     .thread-name-text {
+      flex: 1 1 auto;
       min-width: 0;
       white-space: nowrap;
       overflow: hidden;
