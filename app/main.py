@@ -86,8 +86,6 @@ from app.manager_bridge import (
     backfill_quick_reply_media_assets,
     process_outbox_queue,
     run_storage_cleanup_for_all_workspaces,
-    get_message_file_urls,
-    get_message_media_assets,
     get_message_media_urls,
     get_quick_reply_media_paths,
     ensure_media_asset_for_path,
@@ -160,14 +158,7 @@ from app.ops import (
     delete_sqlite_backup,
     restore_sqlite_backup,
 )
-from app.security import (
-    InMemoryRateLimiter,
-    is_safe_document,
-    is_safe_image,
-    is_same_origin,
-    safe_json_dumps,
-    verify_hmac_signature,
-)
+from app.security import InMemoryRateLimiter, is_safe_image, is_same_origin, verify_hmac_signature, safe_json_dumps
 from app.schemas import MaxWebhookEvent
 from app.storage import (
     ensure_storage_ready,
@@ -2476,44 +2467,32 @@ def _check_rate_limit_or_raise(request: Request, *, scope: str, limit: int, wind
         raise HTTPException(status_code=429, detail=f"rate_limit_exceeded:{scope}")
 
 
-async def _read_and_validate_upload(photo: UploadFile | None) -> tuple[str | None, bytes | None, str | None]:
+async def _read_and_validate_upload(photo: UploadFile | None) -> tuple[str | None, bytes | None]:
     if not photo or not photo.filename:
-        return None, None, None
+        return None, None
     content = await photo.read()
-    name = str(photo.filename or "").strip()
-    ext = Path(name).suffix.lower()
-    if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
-        ok, reason = is_safe_image(
-            filename=name,
-            content=content,
-            max_bytes=_MAX_UPLOAD_BYTES,
-        )
-        if not ok:
-            if reason == "file_too_large":
-                raise HTTPException(status_code=413, detail="Файл слишком большой")
-            raise HTTPException(status_code=400, detail="Некорректный файл изображения")
-        return ext, content, "image"
-    ok, reason = is_safe_document(
-        filename=name,
+    ok, reason = is_safe_image(
+        filename=photo.filename,
         content=content,
         max_bytes=_MAX_UPLOAD_BYTES,
     )
     if not ok:
         if reason == "file_too_large":
             raise HTTPException(status_code=413, detail="Файл слишком большой")
-        raise HTTPException(status_code=400, detail="Некорректный формат документа")
-    return ext, content, "document"
+        raise HTTPException(status_code=400, detail="Некорректный файл изображения")
+    ext = Path(photo.filename).suffix.lower()
+    return ext, content
 
 
-async def _read_and_validate_uploads(photos: list[UploadFile] | None) -> list[tuple[str, bytes, str, str]]:
-    validated: list[tuple[str, bytes, str, str]] = []
+async def _read_and_validate_uploads(photos: list[UploadFile] | None) -> list[tuple[str, bytes, str]]:
+    validated: list[tuple[str, bytes, str]] = []
     for upload in photos or []:
         if not upload or not upload.filename:
             continue
-        ext, content, media_kind = await _read_and_validate_upload(upload)
-        if ext is None or content is None or media_kind is None:
+        ext, content = await _read_and_validate_upload(upload)
+        if ext is None or content is None:
             continue
-        validated.append((ext, content, str(upload.filename), media_kind))
+        validated.append((ext, content, str(upload.filename)))
     return validated
 
 
@@ -2544,24 +2523,17 @@ async def _merge_upload_inputs(
     return merged
 
 
-def _store_uploaded_attachments(validated_files: list[tuple[str, bytes, str, str]]) -> list[dict[str, str]]:
-    stored_items: list[dict[str, str]] = []
-    for ext, content, original_name, media_kind in validated_files:
+def _store_uploaded_images(validated_files: list[tuple[str, bytes, str]]) -> list[str]:
+    stored_paths: list[str] = []
+    for ext, content, _name in validated_files:
         safe_name = f"{uuid4().hex}{ext}"
-        path_value = save_upload_bytes(file_name=safe_name, content=content)
-        stored_items.append(
-            {
-                "path": str(path_value or "").strip(),
-                "name": str(original_name or "").strip(),
-                "kind": str(media_kind or "").strip().lower() or "document",
-            }
-        )
-    return stored_items
+        stored_paths.append(save_upload_bytes(file_name=safe_name, content=content))
+    return stored_paths
 
 
-def _cleanup_uploaded_attachments(items: list[dict[str, str]]) -> None:
-    for item in items:
-        path_value = str((item or {}).get("path") or "").strip()
+def _cleanup_uploaded_images(paths: list[str]) -> None:
+    for item in paths:
+        path_value = str(item or "").strip()
         if not path_value:
             continue
         # Avoid removing files that are still referenced by chat/quick-reply rows.
@@ -4585,7 +4557,7 @@ async def admin_chats_send_message(
     workspace_id = DEFAULT_WORKSPACE_ID
     text_value = text.strip()
     view_value = view.strip().lower()
-    attachment_items: list[dict[str, str]] = []
+    image_paths: list[str] = []
     uploads_to_validate = [item for item in photos if item and item.filename]
     if not uploads_to_validate:
         form_data = await request.form()
@@ -4594,11 +4566,11 @@ async def admin_chats_send_message(
             uploads_to_validate = [legacy_photo]
     validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
     if validated_uploads:
-        attachment_items = _store_uploaded_attachments(validated_uploads)
+        image_paths = _store_uploaded_images(validated_uploads)
 
     if edit_message_id is not None:
         updated = None
-        if text_value and not attachment_items:
+        if text_value and not image_paths:
             updated = await update_chat_message_text(
                 db=db,
                 chat_message_id=edit_message_id,
@@ -4613,7 +4585,7 @@ async def admin_chats_send_message(
             redirect_url += "&view=chat"
         return RedirectResponse(url=redirect_url, status_code=302)
 
-    if text_value.startswith("/") and not attachment_items:
+    if text_value.startswith("/") and not image_paths:
         sent_ok, quick_error = await send_admin_quick_reply(
             db=db,
             conversation_id=conversation_id,
@@ -4638,15 +4610,15 @@ async def admin_chats_send_message(
             db=db,
             conversation_id=conversation_id,
             text=text_value,
-            media_items=attachment_items,
+            image_paths=image_paths,
             workspace_id=workspace_id,
             schedule_at_iso=schedule_at_value,
         )
     except Exception:
-        _cleanup_uploaded_attachments(attachment_items)
+        _cleanup_uploaded_images(image_paths)
         raise
     if not sent_ok:
-        _cleanup_uploaded_attachments(attachment_items)
+        _cleanup_uploaded_images(image_paths)
     scheduled_at_clean = schedule_at_value
     is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"
@@ -8427,11 +8399,11 @@ async def app_chats_send_message(
         if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
             uploads_to_validate = [legacy_photo]
     validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
-    attachment_items = _store_uploaded_attachments(validated_uploads)
+    image_paths = _store_uploaded_images(validated_uploads)
 
     if edit_message_id is not None:
         updated = None
-        if text_value and not attachment_items:
+        if text_value and not image_paths:
             updated = await update_chat_message_text(
                 db=db,
                 chat_message_id=edit_message_id,
@@ -8446,7 +8418,7 @@ async def app_chats_send_message(
             redirect_url += "&view=chat"
         return RedirectResponse(url=f"{redirect_url}{workspace_qs}", status_code=302)
 
-    if text_value.startswith("/") and not attachment_items:
+    if text_value.startswith("/") and not image_paths:
         quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
         sent_ok, quick_error = await send_admin_quick_reply(
             db=db,
@@ -8472,13 +8444,13 @@ async def app_chats_send_message(
             db=db,
             conversation_id=conversation_id,
             text=text_value,
-            media_items=attachment_items,
+            image_paths=image_paths,
             workspace_id=workspace_id,
             schedule_at_iso=schedule_at_value,
         )
     finally:
-        if not sent_ok and attachment_items:
-            _cleanup_uploaded_attachments(attachment_items)
+        if not sent_ok and image_paths:
+            _cleanup_uploaded_images(image_paths)
     scheduled_at_clean = schedule_at_value
     is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"
@@ -9026,28 +8998,6 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
     delivery_state_value = str(item.delivery_state or "sent")
     delivery_next_retry_at_raw = getattr(item, "delivery_next_retry_at", None)
     image_urls = get_message_media_urls(item)
-    file_urls = get_message_file_urls(item)
-    file_attachments = []
-    media_assets_raw = getattr(item, "media_assets", None)
-    if isinstance(media_assets_raw, list):
-        for asset in media_assets_raw:
-            if not isinstance(asset, dict):
-                continue
-            role_value = str(asset.get("role") or "").strip().lower()
-            if role_value != "file":
-                continue
-            file_url = str(asset.get("url") or "").strip()
-            if not file_url:
-                continue
-            file_name = str(asset.get("name") or "").strip() or Path(file_url).name or "file"
-            mime_type = str(asset.get("mime_type") or "").strip()
-            file_attachments.append(
-                {
-                    "url": file_url,
-                    "name": file_name,
-                    "mime_type": mime_type,
-                }
-            )
     is_scheduled_message = bool(getattr(item, "is_scheduled_message", False))
     is_scheduled_pending = bool(
         delivery_state_value == "queued"
@@ -9066,8 +9016,6 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
         "text": text_value,
         "image_url": str(item.image_url or ""),
         "image_urls": image_urls,
-        "file_urls": file_urls,
-        "file_attachments": file_attachments,
         "delivery_state": delivery_state_value,
         "delivery_error": str(item.delivery_error or ""),
         "max_message_mid": str(item.max_message_mid or ""),
@@ -9099,30 +9047,10 @@ def _hydrate_message_media_urls(db: Session, messages: list[ChatMessage]) -> Non
     message_ids = [int(getattr(msg, "id", 0) or 0) for msg in messages if int(getattr(msg, "id", 0) or 0) > 0]
     if not message_ids:
         return
-    by_message = list_chat_message_media_urls_map(
-        db,
-        chat_message_ids=message_ids,
-        include_roles={"image", "file"},
-    )
+    by_message = list_chat_message_media_urls_map(db, chat_message_ids=message_ids)
     for msg in messages:
         msg_id = int(getattr(msg, "id", 0) or 0)
         setattr(msg, "image_urls", get_message_media_urls(msg, linked_urls_map=by_message))
-        setattr(
-            msg,
-            "file_urls",
-            get_message_file_urls(
-                msg,
-                linked_urls_map=by_message,
-            ),
-        )
-        setattr(
-            msg,
-            "media_assets",
-            get_message_media_assets(
-                msg,
-                linked_urls_map=by_message,
-            ),
-        )
 
 
 def _select_active_thread(
@@ -10407,9 +10335,9 @@ async def manager_mini_send_message(
         if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
             uploads_to_validate = [legacy_photo]
     validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
-    attachment_items = _store_uploaded_attachments(validated_uploads)
+    image_paths = _store_uploaded_images(validated_uploads)
 
-    if text_value.startswith("/") and not attachment_items:
+    if text_value.startswith("/") and not image_paths:
         quick_reply_owner_id = _chat_scope_quick_reply_owner_id(manager_claims=claims)
         sent_ok, quick_error = await send_admin_quick_reply(
             db=db,
@@ -10442,13 +10370,13 @@ async def manager_mini_send_message(
             db=db,
             conversation_id=conversation_id,
             text=text_value,
-            media_items=attachment_items,
+            image_paths=image_paths,
             workspace_id=workspace_id,
             schedule_at_iso=schedule_at_value,
         )
     finally:
-        if not sent_ok and attachment_items:
-            _cleanup_uploaded_attachments(attachment_items)
+        if not sent_ok and image_paths:
+            _cleanup_uploaded_images(image_paths)
     scheduled_at_clean = schedule_at_value
     is_scheduled = bool(scheduled_at_clean)
     suffix = "1" if sent_ok else "0"

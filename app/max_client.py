@@ -298,12 +298,6 @@ class MaxClient:
             ".bmp": "image/bmp",
             ".tiff": "image/tiff",
             ".heic": "image/heic",
-            ".pdf": "application/pdf",
-            ".txt": "text/plain",
-            ".csv": "text/csv",
-            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
         }
         return mapping.get(ext, "application/octet-stream")
 

@@ -968,53 +968,6 @@
       width: 100%;
       max-width: 240px;
     }
-    .bubble-file-list {
-      margin-top: 8px;
-      display: grid;
-      gap: 6px;
-      width: 100%;
-      max-width: 320px;
-    }
-    .bubble-file-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 8px 10px;
-      background: #f7faff;
-      color: #23406f;
-      text-decoration: none;
-      font-size: 13px;
-      font-weight: 700;
-      line-height: 1.25;
-      transition:
-        transform var(--motion-fast) var(--ease-emphasized),
-        box-shadow var(--motion-fast) var(--ease-standard),
-        border-color var(--motion-fast) var(--ease-standard);
-    }
-    .bubble-file-item:hover {
-      transform: translateY(-1px);
-      border-color: #c8dbff;
-      box-shadow: 0 5px 12px rgba(22, 55, 111, 0.12);
-    }
-    .bubble-file-icon {
-      flex: 0 0 auto;
-      width: 20px;
-      height: 20px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      color: #2f63c6;
-      font-size: 16px;
-      line-height: 1;
-    }
-    .bubble-file-name {
-      min-width: 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
     .bubble-media-item {
       display: block;
       border-radius: 10px;
@@ -1071,34 +1024,6 @@
       height: 100%;
       object-fit: cover;
       display: block;
-    }
-    .compose-media-chip.file {
-      background: #f7fbff;
-      border-color: #cbdcf9;
-      flex-direction: column;
-      gap: 2px;
-      padding: 4px;
-      align-items: center;
-      justify-content: center;
-    }
-    .compose-media-chip-file-icon {
-      font-size: 17px;
-      line-height: 1;
-      color: #2f63c6;
-      flex: 0 0 auto;
-    }
-    .compose-media-chip-file-name {
-      display: block;
-      width: 100%;
-      text-align: center;
-      font-size: 10px;
-      font-weight: 700;
-      color: #2e466f;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      padding: 0 2px;
-      box-sizing: border-box;
     }
     .compose-media-remove {
       position: absolute;
@@ -2835,8 +2760,7 @@
             {% set shown = namespace(count=0) %}
             {% for msg in messages %}
               {% set message_images = (msg.image_urls if msg.image_urls is defined else []) %}
-              {% set message_files = (msg.file_attachments if msg.file_attachments is defined else []) %}
-              {% if msg.text or message_images or message_files or (msg.direction == "bot" and msg.delivery_state == "failed") %}
+              {% if msg.text or message_images or (msg.direction == "bot" and msg.delivery_state == "failed") %}
               {% set shown.count = shown.count + 1 %}
               <article
                 class="bubble {{ msg.direction }}"
@@ -2856,25 +2780,7 @@
                     {% endfor %}
                   </div>
                 {% endif %}
-                {% if message_files %}
-                  <div class="bubble-file-list">
-                    {% for file_item in message_files %}
-                      {% set file_url = (file_item.url if file_item.url is defined else '') %}
-                      {% set file_name = (file_item.name if file_item.name is defined else 'Файл') %}
-                      <a
-                        href="{{ file_url }}"
-                        class="bubble-file-item"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        download
-                      >
-                        <span class="bubble-file-icon" aria-hidden="true">📄</span>
-                        <span class="bubble-file-name">{{ file_name }}</span>
-                      </a>
-                    {% endfor %}
-                  </div>
-                {% endif %}
-                {% if msg.text or message_images or message_files or (msg.direction == "bot" and msg.delivery_state == "failed") %}
+                {% if msg.text or message_images or (msg.direction == "bot" and msg.delivery_state == "failed") %}
                   {% set state = (msg.delivery_state or "sent")|lower %}
                   {% set scheduled_at = (msg.delivery_next_retry_at or "") %}
                   {% set is_scheduled_pending = (msg.is_scheduled_pending if msg.is_scheduled_pending is defined else false) %}
@@ -2952,12 +2858,7 @@
             <div class="compose-row">
               <label class="attach-wrap" title="Прикрепить файл">
                 📎
-                <input
-                  type="file"
-                  name="photos"
-                  accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.csv,.docx,.xlsx,.pptx"
-                  multiple
-                />
+                <input type="file" name="photos" accept=".png,.jpg,.jpeg,.gif,.webp" multiple />
               </label>
               <div class="emoji-wrap">
                 <button
@@ -3280,27 +3181,6 @@
       };
 
       const MAX_FILE_BYTES = 5 * 1024 * 1024;
-      const ALLOWED_DOC_EXTENSIONS = new Set(["pdf", "txt", "csv", "docx", "xlsx", "pptx"]);
-      const ALLOWED_DOC_MIME_TYPES = new Set([
-        "application/pdf",
-        "text/plain",
-        "text/csv",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-      ]);
-      const getFileExtension = (fileName) => {
-        const value = String(fileName || "").trim().toLowerCase();
-        if (!value || !value.includes(".")) return "";
-        return value.split(".").pop() || "";
-      };
-      const isImageFile = (file) => String(file?.type || "").toLowerCase().startsWith("image/");
-      const isAllowedDocumentFile = (file) => {
-        const mime = String(file?.type || "").toLowerCase();
-        const ext = getFileExtension(file?.name);
-        if (ALLOWED_DOC_MIME_TYPES.has(mime)) return true;
-        return ALLOWED_DOC_EXTENSIONS.has(ext);
-      };
       const activeConversationId = {{ active_thread.conversation_id if active_thread else "null" }};
       const CHAT_SCROLL_STATE_KEY = "__chatMessagesScrollState";
       const OPERATION_QUERY_KEYS = new Set([
@@ -3409,23 +3289,12 @@
           chip.className = "compose-media-chip";
           chip.setAttribute("draggable", "true");
           chip.dataset.token = token;
-          if (isImageFile(file)) {
-            const img = document.createElement("img");
-            const objectUrl = URL.createObjectURL(file);
-            fileViewUrls.push(objectUrl);
-            img.src = objectUrl;
-            img.alt = file.name || `photo-${idx + 1}`;
-            chip.appendChild(img);
-          } else {
-            const icon = document.createElement("span");
-            icon.className = "bubble-file-icon";
-            icon.textContent = "📄";
-            const fileLabel = document.createElement("span");
-            fileLabel.className = "bubble-file-name";
-            fileLabel.textContent = String(file.name || `file-${idx + 1}`);
-            chip.appendChild(icon);
-            chip.appendChild(fileLabel);
-          }
+          const img = document.createElement("img");
+          const objectUrl = URL.createObjectURL(file);
+          fileViewUrls.push(objectUrl);
+          img.src = objectUrl;
+          img.alt = file.name || `photo-${idx + 1}`;
+          chip.appendChild(img);
           const removeBtn = document.createElement("button");
           removeBtn.type = "button";
           removeBtn.className = "compose-media-remove";
@@ -3470,8 +3339,9 @@
       const validateSelectedFiles = (files) => {
         const prepared = [];
         for (const file of files) {
-          if (!(isImageFile(file) || isAllowedDocumentFile(file))) {
-            setUploadStatus(`Формат файла "${file.name}" не поддерживается.`, "error");
+          const mime = String(file.type || "").toLowerCase();
+          if (!mime.startsWith("image/")) {
+            setUploadStatus(`Файл "${file.name}" не является изображением.`, "error");
             return [];
           }
           if (Number(file.size || 0) > MAX_FILE_BYTES) {
@@ -3783,7 +3653,7 @@
 
       scheduleSubmitBtn.addEventListener("click", () => {
         if (!isUploadReady) {
-          setUploadStatus("Дождитесь подготовки файлов к отправке.", "error");
+          setUploadStatus("Дождитесь подготовки фото к отправке.", "error");
           return;
         }
         const dateValue = (scheduleDateInput.value || "").trim();
@@ -3932,7 +3802,7 @@
         }
         if (!isUploadReady) {
           event.preventDefault();
-          setUploadStatus("Дождитесь подготовки файлов к отправке.", "error");
+          setUploadStatus("Дождитесь подготовки фото к отправке.", "error");
           return;
         }
         isComposeSubmitting = true;
@@ -6203,29 +6073,8 @@
           const fallbackImage = String(row.image_url || "").trim();
           if (fallbackImage) imageUrls.push(fallbackImage);
         }
-        const fileRowsRaw = Array.isArray(row.file_attachments)
-          ? row.file_attachments
-          : (
-            Array.isArray(row.file_urls)
-              ? row.file_urls.map((url) => ({ url }))
-              : []
-          );
-        const fileAttachments = fileRowsRaw
-          .map((item) => {
-            if (typeof item === "string") {
-              const value = String(item || "").trim();
-              if (!value) return null;
-              return { url: value, name: value.split("/").pop() || "file" };
-            }
-            if (!item || typeof item !== "object") return null;
-            const url = String(item.url || "").trim();
-            if (!url) return null;
-            const name = String(item.name || "").trim() || (url.split("/").pop() || "file");
-            return { url, name };
-          })
-          .filter((item) => !!item);
         const isRenderable = Boolean(
-          text || imageUrls.length || fileAttachments.length || (direction === "bot" && deliveryState === "failed")
+          text || imageUrls.length || (direction === "bot" && deliveryState === "failed")
         );
         return {
           messageId,
@@ -6236,7 +6085,6 @@
           scheduledAt,
           isScheduledPending,
           imageUrls,
-          fileAttachments,
           isRenderable,
           isReadByCustomer: Boolean(row.is_read_by_customer),
           createdAtLabel: String(row.created_at_label || ""),
@@ -6254,7 +6102,6 @@
           scheduledAt,
           isScheduledPending,
           imageUrls,
-          fileAttachments,
           isReadByCustomer,
           createdAtLabel,
         } = meta;
@@ -6269,9 +6116,6 @@
           isReadByCustomer ? "1" : "0",
           String(createdAtLabel || ""),
           imageUrls.join("|"),
-          fileAttachments
-            .map((entry) => `${String(entry.url || "").trim()}|${String(entry.name || "").trim()}`)
-            .join("|"),
         ].join("::");
       };
       const createMessageBubbleNode = (row) => {
@@ -6286,7 +6130,6 @@
           scheduledAt,
           isScheduledPending,
           imageUrls,
-          fileAttachments,
           isReadByCustomer,
           createdAtLabel,
         } = meta;
@@ -6330,37 +6173,7 @@
           }
         }
 
-        if (Array.isArray(fileAttachments) && fileAttachments.length) {
-          const fileList = document.createElement("div");
-          fileList.className = "bubble-file-list";
-          fileAttachments.forEach((fileEntry) => {
-            if (!fileEntry || typeof fileEntry !== "object") return;
-            const href = String(fileEntry.url || "").trim();
-            if (!href) return;
-            const fileName = String(fileEntry.name || "").trim() || "file";
-            const fileItem = document.createElement("a");
-            fileItem.href = href;
-            fileItem.className = "bubble-file-item";
-            fileItem.target = "_blank";
-            fileItem.rel = "noopener noreferrer";
-            fileItem.setAttribute("download", "");
-            const iconNode = document.createElement("span");
-            iconNode.className = "bubble-file-icon";
-            iconNode.setAttribute("aria-hidden", "true");
-            iconNode.textContent = "📄";
-            const nameNode = document.createElement("span");
-            nameNode.className = "bubble-file-name";
-            nameNode.textContent = fileName;
-            fileItem.appendChild(iconNode);
-            fileItem.appendChild(nameNode);
-            fileList.appendChild(fileItem);
-          });
-          if (fileList.childElementCount > 0) {
-            bubble.appendChild(fileList);
-          }
-        }
-
-        if (text || imageUrls.length || (Array.isArray(fileAttachments) && fileAttachments.length) || (direction === "bot" && deliveryState === "failed")) {
+        if (text || imageUrls.length || (direction === "bot" && deliveryState === "failed")) {
           const tail = document.createElement("div");
           tail.className = "bubble-tail";
           if (direction === "bot" && isScheduledPending && scheduledAt) {

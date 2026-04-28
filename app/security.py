@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import io
 import threading
 import time
-import zipfile
 from collections import deque
 from dataclasses import dataclass
 from typing import Deque
@@ -105,50 +103,6 @@ def is_safe_image(*, filename: str, content: bytes, max_bytes: int) -> tuple[boo
         ext = ".jpg"
     if detected_ext != ext:
         return False, "extension_mismatch"
-    return True, ""
-
-
-def is_safe_document(*, filename: str, content: bytes, max_bytes: int) -> tuple[bool, str]:
-    normalized = (filename or "").strip().lower()
-    if not normalized:
-        return False, "empty_filename"
-    if "." not in normalized:
-        return False, "missing_extension"
-    ext = "." + normalized.rsplit(".", 1)[-1]
-    allowed_ext = {".pdf", ".txt", ".csv", ".docx", ".xlsx", ".pptx"}
-    if ext not in allowed_ext:
-        return False, "unsupported_extension"
-    if len(content) <= 0:
-        return False, "empty_file"
-    if len(content) > int(max_bytes):
-        return False, "file_too_large"
-
-    if ext == ".pdf":
-        if not content.startswith(b"%PDF-"):
-            return False, "invalid_signature"
-        return True, ""
-
-    if ext in {".txt", ".csv"}:
-        if b"\x00" in content:
-            return False, "binary_detected"
-        return True, ""
-
-    # OpenXML documents are zip containers with known directory markers.
-    if not content.startswith(b"PK"):
-        return False, "invalid_signature"
-    try:
-        with zipfile.ZipFile(io.BytesIO(content)) as archive:
-            names = {str(name or "").strip() for name in archive.namelist()}
-    except Exception:
-        return False, "invalid_zip"
-    if "[Content_Types].xml" not in names:
-        return False, "invalid_openxml"
-    if ext == ".docx" and not any(name.startswith("word/") for name in names):
-        return False, "invalid_openxml"
-    if ext == ".xlsx" and not any(name.startswith("xl/") for name in names):
-        return False, "invalid_openxml"
-    if ext == ".pptx" and not any(name.startswith("ppt/") for name in names):
-        return False, "invalid_openxml"
     return True, ""
 
 

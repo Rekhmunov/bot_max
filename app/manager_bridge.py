@@ -104,6 +104,7 @@ DEFAULT_OFFHOURS_COOLDOWN_SECONDS = 6 * 60 * 60
 DEFAULT_BUSINESS_TIMEZONE = "UTC"
 logger = logging.getLogger(__name__)
 
+
 def _workspace_client(db: Session, *, workspace_id: int) -> MaxClient:
     settings_row = db.query(BotSettings).filter(BotSettings.workspace_id == workspace_id).first()
     token = (settings_row.bot_token if settings_row is not None else "") or ""
@@ -1306,18 +1307,6 @@ def _mime_from_extension(path_value: str | None) -> str:
         return "image/webp"
     if ext == ".bmp":
         return "image/bmp"
-    if ext == ".pdf":
-        return "application/pdf"
-    if ext == ".txt":
-        return "text/plain"
-    if ext == ".csv":
-        return "text/csv"
-    if ext == ".docx":
-        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    if ext == ".xlsx":
-        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    if ext == ".pptx":
-        return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
     return "application/octet-stream"
 
 
@@ -1380,7 +1369,6 @@ def _link_chat_message_media_assets(
     chat_message_id: int,
     workspace_id: int,
     media_paths: list[str],
-    media_role: str = "image",
 ) -> None:
     normalized_paths = [str(item).strip() for item in media_paths if str(item).strip()]
     if not normalized_paths:
@@ -1399,7 +1387,7 @@ def _link_chat_message_media_assets(
                 ChatMessageMedia.workspace_id == int(workspace_id),
                 ChatMessageMedia.chat_message_id == int(chat_message_id),
                 ChatMessageMedia.media_asset_id == int(asset.id),
-                ChatMessageMedia.role == str(media_role or "image"),
+                ChatMessageMedia.role == "image",
             )
             .first()
             is not None
@@ -1407,24 +1395,18 @@ def _link_chat_message_media_assets(
         if exists:
             continue
         db.add(
-                ChatMessageMedia(
-                    workspace_id=int(workspace_id),
-                    chat_message_id=int(chat_message_id),
-                    media_asset_id=int(asset.id),
-                    sort_order=int(idx),
-                    role=str(media_role or "image"),
-                )
+            ChatMessageMedia(
+                workspace_id=int(workspace_id),
+                chat_message_id=int(chat_message_id),
+                media_asset_id=int(asset.id),
+                sort_order=int(idx),
+                role="image",
+            )
         )
     db.commit()
 
 
-def _media_paths_from_asset_links(
-    db: Session,
-    *,
-    chat_message_id: int,
-    workspace_id: int,
-    roles: set[str] | None = None,
-) -> list[str]:
+def _media_paths_from_asset_links(db: Session, *, chat_message_id: int, workspace_id: int) -> list[str]:
     links = (
         db.query(ChatMessageMedia, MediaAsset)
         .join(MediaAsset, MediaAsset.id == ChatMessageMedia.media_asset_id)
@@ -1436,11 +1418,7 @@ def _media_paths_from_asset_links(
         .all()
     )
     result: list[str] = []
-    allowed_roles = {str(item).strip().lower() for item in (roles or set()) if str(item).strip()}
     for link_row, asset in links:
-        row_role = str(getattr(link_row, "role", "") or "").strip().lower()
-        if allowed_roles and row_role not in allowed_roles:
-            continue
         raw = str(asset.public_url or "").strip()
         if not raw:
             key = str(asset.storage_key or "").strip()
@@ -1476,7 +1454,6 @@ def _chat_message_media_paths(item: ChatMessage) -> list[str]:
         db=Session.object_session(item),  # type: ignore[arg-type]
         chat_message_id=int(getattr(item, "id", 0) or 0),
         workspace_id=int(getattr(item, "workspace_id", DEFAULT_WORKSPACE_ID) or DEFAULT_WORKSPACE_ID),
-        roles={"image", "file"},
     ) if Session.object_session(item) is not None and int(getattr(item, "id", 0) or 0) > 0 else []
     if linked_paths:
         normalized_linked: list[str] = []
@@ -2561,19 +2538,6 @@ async def _dispatch_outbox(
                 if button_text and button_payload:
                     normalized.append({"type": "callback", "text": button_text, "payload": button_payload})
                 continue
-            if row_type == "file" and isinstance(row_payload, dict):
-                file_url = _to_external_media_url(row_payload.get("url"))
-                if not file_url:
-                    continue
-                file_name = str(row_payload.get("file_name") or row_payload.get("name") or "").strip()
-                file_payload: dict[str, object] = {"url": file_url}
-                if file_name:
-                    file_payload["file_name"] = file_name
-                mime_type = str(row_payload.get("mime_type") or row_payload.get("mime") or "").strip()
-                if mime_type:
-                    file_payload["mime_type"] = mime_type
-                normalized.append({"type": "file", "payload": file_payload})
-                continue
         return normalized
 
     def _resolve_fallback_attachments() -> list[dict]:
@@ -2586,19 +2550,6 @@ async def _dispatch_outbox(
                 row_type = str(row.get("type") or "").strip().lower()
                 row_payload = row.get("payload")
                 if not isinstance(row_payload, dict):
-                    continue
-                if row_type == "file":
-                    file_url = _to_external_media_url(row_payload.get("url"))
-                    if not file_url:
-                        continue
-                    file_name = str(row_payload.get("file_name") or row_payload.get("name") or "").strip()
-                    file_payload: dict[str, object] = {"url": file_url}
-                    if file_name:
-                        file_payload["file_name"] = file_name
-                    mime_type = str(row_payload.get("mime_type") or row_payload.get("mime") or "").strip()
-                    if mime_type:
-                        file_payload["mime_type"] = mime_type
-                    normalized.append({"type": "file", "payload": file_payload})
                     continue
                 token = str(row_payload.get("token") or "").strip()
                 photos = row_payload.get("photos")
@@ -2628,34 +2579,6 @@ async def _dispatch_outbox(
         chat_message = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
         if chat_message is None:
             return []
-
-        links = (
-            db.query(ChatMessageMedia, MediaAsset)
-            .join(MediaAsset, MediaAsset.id == ChatMessageMedia.media_asset_id)
-            .filter(ChatMessageMedia.chat_message_id == int(message_id))
-            .order_by(ChatMessageMedia.sort_order.asc(), ChatMessageMedia.id.asc())
-            .all()
-        )
-        if links:
-            normalized: list[dict] = []
-            for link_row, asset in links:
-                url_value = _to_external_media_url(
-                    str(asset.public_url or "").strip() or f"/static/{str(asset.storage_key or '').strip()}"
-                )
-                if not url_value:
-                    continue
-                role_value = str(getattr(link_row, "role", "") or "").strip().lower()
-                if role_value == "file":
-                    file_name = Path(str(asset.storage_key or "").strip()).name or "file"
-                    payload_value: dict[str, object] = {"url": url_value, "file_name": file_name}
-                    mime_value = str(getattr(asset, "mime_type", "") or "").strip()
-                    if mime_value:
-                        payload_value["mime_type"] = mime_value
-                    normalized.append({"type": "file", "payload": payload_value})
-                else:
-                    normalized.append({"type": "image", "payload": {"url": url_value}})
-            if normalized:
-                return normalized
 
         urls: list[str] = []
         raw_urls_json = str(getattr(chat_message, "image_urls_json", "") or "").strip()
@@ -3236,88 +3159,33 @@ async def enqueue_and_process_send_media_group(
     conversation_id: int,
     target_chat_id: str,
     target_user_id: str | None = None,
-    media_items: list[dict[str, str]],
+    photo_urls: list[str],
     text: str = "",
     text_format: str | None = None,
     source: str,
 ) -> bool:
-    normalized_media_items: list[dict[str, str]] = []
-    for raw_item in media_items or []:
-        if not isinstance(raw_item, dict):
-            continue
-        media_path = str(raw_item.get("path") or "").strip()
-        if not media_path:
-            continue
-        media_name = str(raw_item.get("name") or "").strip()
-        media_kind = str(raw_item.get("kind") or "").strip().lower() or "document"
-        normalized_media_items.append(
-            {
-                "path": media_path,
-                "name": media_name,
-                "kind": ("image" if media_kind == "image" else "document"),
-            }
-        )
-    if not normalized_media_items:
+    urls = [str(item).strip() for item in (photo_urls or []) if str(item).strip()]
+    if not urls:
         return False
-    image_items = [item for item in normalized_media_items if str(item.get("kind") or "") == "image"]
-    doc_items = [item for item in normalized_media_items if str(item.get("kind") or "") == "document"]
-    attachments: list[dict] = []
-    for item in image_items:
-        image_url = _to_external_media_url(item.get("path"))
-        if image_url:
-            attachments.append({"type": "image", "payload": {"url": image_url}})
-    for item in doc_items:
-        doc_url = _to_external_media_url(item.get("path"))
-        if not doc_url:
-            continue
-        doc_name = str(item.get("name") or "").strip() or Path(doc_url).name or "file"
-        attachments.append({"type": "file", "payload": {"url": doc_url, "file_name": doc_name}})
+    attachments = [{"type": "image", "payload": {"url": _to_external_media_url(value)}} for value in urls]
+    attachments = [item for item in attachments if str((item.get("payload") or {}).get("url") or "").strip()]
     now_utc_naive = _as_naive_utc(_utc_now())
-    first_path = str(normalized_media_items[0].get("path") or "").strip()
-    image_urls_json = json.dumps(
-        [str(item.get("path") or "").strip() for item in image_items if str(item.get("path") or "").strip()],
-        ensure_ascii=False,
-    )
+    first_image = urls[0]
     msg = _store_chat_message(
         db,
         conversation_id=conversation_id,
         direction="bot",
         source=source,
         text=(text or "").strip(),
-        image_url=first_path or None,
-        image_urls_json=image_urls_json,
+        image_url=first_image,
+        image_urls_json=json.dumps(urls, ensure_ascii=False),
         delivery_state="queued",
         delivery_error="",
         delivery_retry_count=0,
         delivery_next_retry_at=now_utc_naive,
     )
-    if image_items:
-        _link_chat_message_media_assets(
-            db,
-            chat_message_id=int(msg.id),
-            workspace_id=int(msg.workspace_id or DEFAULT_WORKSPACE_ID),
-            media_paths=[
-                str(item.get("path") or "").strip()
-                for item in image_items
-                if str(item.get("path") or "").strip()
-            ],
-            media_role="image",
-        )
-    if doc_items:
-        _link_chat_message_media_assets(
-            db,
-            chat_message_id=int(msg.id),
-            workspace_id=int(msg.workspace_id or DEFAULT_WORKSPACE_ID),
-            media_paths=[
-                str(item.get("path") or "").strip()
-                for item in doc_items
-                if str(item.get("path") or "").strip()
-            ],
-            media_role="file",
-        )
     image_payloads: list[tuple[str, bytes]] = []
-    for item in image_items:
-        value = str(item.get("path") or "").strip()
+    for value in urls:
         local_file = _resolve_local_static_media_file(value)
         if local_file is None:
             image_payloads = []
@@ -3400,91 +3268,36 @@ async def queue_only_send_media_group(
     conversation_id: int,
     target_chat_id: str,
     target_user_id: str | None = None,
-    media_items: list[dict[str, str]],
+    photo_urls: list[str],
     text: str = "",
     text_format: str | None = None,
     source: str,
     scheduled_for: datetime | None = None,
 ) -> None:
-    normalized_media_items: list[dict[str, str]] = []
-    for raw_item in media_items or []:
-        if not isinstance(raw_item, dict):
-            continue
-        media_path = str(raw_item.get("path") or "").strip()
-        if not media_path:
-            continue
-        media_name = str(raw_item.get("name") or "").strip()
-        media_kind = str(raw_item.get("kind") or "").strip().lower() or "document"
-        normalized_media_items.append(
-            {
-                "path": media_path,
-                "name": media_name,
-                "kind": ("image" if media_kind == "image" else "document"),
-            }
-        )
-    if not normalized_media_items:
+    urls = [str(item).strip() for item in (photo_urls or []) if str(item).strip()]
+    if not urls:
         return
-    image_items = [item for item in normalized_media_items if str(item.get("kind") or "") == "image"]
-    doc_items = [item for item in normalized_media_items if str(item.get("kind") or "") == "document"]
     next_retry_at = _as_naive_utc(scheduled_for or _utc_now())
     is_scheduled_message = scheduled_for is not None
-    first_path = str(normalized_media_items[0].get("path") or "").strip()
-    image_urls_json = json.dumps(
-        [str(item.get("path") or "").strip() for item in image_items if str(item.get("path") or "").strip()],
-        ensure_ascii=False,
-    )
+    first_image = urls[0]
     msg = _store_chat_message(
         db,
         conversation_id=conversation_id,
         direction="bot",
         source=source,
         text=(text or "").strip(),
-        image_url=first_path or None,
-        image_urls_json=image_urls_json,
+        image_url=first_image,
+        image_urls_json=json.dumps(urls, ensure_ascii=False),
         delivery_state="queued",
         delivery_error="",
         delivery_retry_count=0,
         delivery_next_retry_at=next_retry_at,
         is_scheduled_message=is_scheduled_message,
     )
-    if image_items:
-        _link_chat_message_media_assets(
-            db,
-            chat_message_id=int(msg.id),
-            workspace_id=int(msg.workspace_id or DEFAULT_WORKSPACE_ID),
-            media_paths=[
-                str(item.get("path") or "").strip()
-                for item in image_items
-                if str(item.get("path") or "").strip()
-            ],
-            media_role="image",
-        )
-    if doc_items:
-        _link_chat_message_media_assets(
-            db,
-            chat_message_id=int(msg.id),
-            workspace_id=int(msg.workspace_id or DEFAULT_WORKSPACE_ID),
-            media_paths=[
-                str(item.get("path") or "").strip()
-                for item in doc_items
-                if str(item.get("path") or "").strip()
-            ],
-            media_role="file",
-        )
-    attachments: list[dict] = []
-    for item in image_items:
-        image_url = _to_external_media_url(item.get("path"))
-        if image_url:
-            attachments.append({"type": "image", "payload": {"url": image_url}})
-    for item in doc_items:
-        doc_url = _to_external_media_url(item.get("path"))
-        if not doc_url:
-            continue
-        doc_name = str(item.get("name") or "").strip() or Path(doc_url).name or "file"
-        attachments.append({"type": "file", "payload": {"url": doc_url, "file_name": doc_name}})
+    attachments = [{"type": "image", "payload": {"url": _to_external_media_url(value)}} for value in urls]
+    attachments = [item for item in attachments if str((item.get("payload") or {}).get("url") or "").strip()]
     image_payloads: list[tuple[str, bytes]] = []
-    for item in image_items:
-        value = str(item.get("path") or "").strip()
+    for value in urls:
         local_file = _resolve_local_static_media_file(value)
         if local_file is None:
             image_payloads = []
@@ -4878,18 +4691,13 @@ async def send_quick_reply_to_customer(
         rendered_text = ""
 
     if media_urls:
-        quick_reply_media_items = [
-            {"path": str(url or "").strip(), "name": "", "kind": "image"}
-            for url in media_urls
-            if str(url or "").strip()
-        ]
         if process_immediately:
             ok = await enqueue_and_process_send_media_group(
                 db,
                 conversation_id=conversation_id,
                 target_chat_id=customer_chat_id,
                 target_user_id=customer_user_id,
-                media_items=quick_reply_media_items,
+                photo_urls=media_urls,
                 text=rendered_text,
                 text_format="markdown",
                 source=source,
@@ -4900,7 +4708,7 @@ async def send_quick_reply_to_customer(
                 conversation_id=conversation_id,
                 target_chat_id=customer_chat_id,
                 target_user_id=customer_user_id,
-                media_items=quick_reply_media_items,
+                photo_urls=media_urls,
                 text=rendered_text,
                 text_format="markdown",
                 source=source,
@@ -5548,12 +5356,6 @@ def _guess_media_mime_type_from_path(path_value: str | None) -> str:
         ".gif": "image/gif",
         ".webp": "image/webp",
         ".bmp": "image/bmp",
-        ".pdf": "application/pdf",
-        ".txt": "text/plain",
-        ".csv": "text/csv",
-        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }
     return mapping.get(ext, "")
 
@@ -5812,23 +5614,15 @@ def list_chat_message_media_urls_map(
     db: Session,
     *,
     chat_message_ids: list[int],
-    include_roles: set[str] | None = None,
-) -> dict[int, list[dict[str, str]]]:
+) -> dict[int, list[str]]:
     ids = sorted({int(value) for value in (chat_message_ids or []) if int(value or 0) > 0})
     if not ids:
         return {}
-    allowed_roles = {
-        str(value or "").strip().lower()
-        for value in (include_roles or set())
-        if str(value or "").strip()
-    }
     rows = (
         db.query(
             ChatMessageMedia.chat_message_id,
-            ChatMessageMedia.role,
             MediaAsset.public_url,
             MediaAsset.storage_key,
-            MediaAsset.mime_type,
         )
         .join(MediaAsset, MediaAsset.id == ChatMessageMedia.media_asset_id)
         .filter(ChatMessageMedia.chat_message_id.in_(ids))
@@ -5839,15 +5633,10 @@ def list_chat_message_media_urls_map(
         )
         .all()
     )
-    grouped: dict[int, list[dict[str, str]]] = {}
-    for chat_message_id, role, public_url, storage_key, mime_type in rows:
+    grouped: dict[int, list[str]] = {}
+    for chat_message_id, public_url, storage_key in rows:
         message_id = int(chat_message_id or 0)
         if message_id <= 0:
-            continue
-        role_value = str(role or "").strip().lower()
-        if role_value not in {"image", "file"}:
-            role_value = "image"
-        if allowed_roles and role_value not in allowed_roles:
             continue
         url = str(public_url or "").strip()
         if not url:
@@ -5856,43 +5645,10 @@ def list_chat_message_media_urls_map(
                 url = storage_public_url_for_key(storage_key=key_value)
         if not url:
             continue
-        file_name = Path(str(storage_key or "").strip()).name or Path(urlsplit(url).path).name or "file"
-        mime_value = str(mime_type or "").strip() or guess_mime_type_for_file_name(file_name)
-        grouped.setdefault(message_id, []).append(
-            {
-                "url": url,
-                "role": role_value,
-                "name": file_name,
-                "mime_type": mime_value,
-            }
-        )
-    deduped_grouped: dict[int, list[dict[str, str]]] = {}
+        grouped.setdefault(message_id, []).append(url)
+    deduped_grouped: dict[int, list[str]] = {}
     for message_id, values in grouped.items():
-        filtered_urls = set(
-            _filter_existing_local_media_urls(
-                [str((item or {}).get("url") or "").strip() for item in values]
-            )
-        )
-        deduped: list[dict[str, str]] = []
-        seen_keys: set[str] = set()
-        for row in values:
-            row_url = str((row or {}).get("url") or "").strip()
-            if not row_url or row_url not in filtered_urls:
-                continue
-            row_role = str((row or {}).get("role") or "").strip().lower() or "image"
-            dedupe_key = f"{row_role}:{row_url}"
-            if dedupe_key in seen_keys:
-                continue
-            seen_keys.add(dedupe_key)
-            deduped.append(
-                {
-                    "url": row_url,
-                    "role": row_role,
-                    "name": str((row or {}).get("name") or "").strip() or Path(urlsplit(row_url).path).name or "file",
-                    "mime_type": str((row or {}).get("mime_type") or "").strip(),
-                }
-            )
-        deduped_grouped[message_id] = deduped
+        deduped_grouped[message_id] = _filter_existing_local_media_urls(values)
     return deduped_grouped
 
 
@@ -5900,119 +5656,54 @@ def list_chat_message_media_urls(
     db: Session,
     *,
     chat_message_id: int,
-    include_roles: set[str] | None = None,
-) -> list[dict[str, str]]:
+) -> list[str]:
     return list_chat_message_media_urls_map(
         db,
         chat_message_ids=[int(chat_message_id or 0)],
-        include_roles=include_roles,
     ).get(int(chat_message_id or 0), [])
-
-
-def get_message_media_assets(
-    item: ChatMessage,
-    *,
-    linked_urls_map: dict[int, list[dict[str, str]]] | None = None,
-) -> list[dict[str, str]]:
-    preloaded_assets = getattr(item, "media_assets", None)
-    assets: list[dict[str, str]] = []
-    if isinstance(preloaded_assets, list) and preloaded_assets:
-        for row in preloaded_assets:
-            if not isinstance(row, dict):
-                continue
-            row_url = str(row.get("url") or "").strip()
-            if not row_url:
-                continue
-            row_role = str(row.get("role") or "").strip().lower()
-            if row_role not in {"image", "file"}:
-                row_role = "image"
-            row_name = str(row.get("name") or "").strip() or Path(urlsplit(row_url).path).name or "file"
-            row_mime = str(row.get("mime_type") or "").strip() or guess_mime_type_for_file_name(row_name)
-            assets.append(
-                {
-                    "url": row_url,
-                    "role": row_role,
-                    "name": row_name,
-                    "mime_type": row_mime,
-                }
-            )
-
-    message_id = int(getattr(item, "id", 0) or 0)
-    if not assets and message_id > 0:
-        try:
-            if linked_urls_map is not None:
-                assets = [row for row in (linked_urls_map.get(message_id, []) or []) if isinstance(row, dict)]
-            else:
-                item_db = Session.object_session(item)  # type: ignore[arg-type]
-                if item_db is not None:
-                    assets = list_chat_message_media_urls(
-                        item_db,
-                        chat_message_id=message_id,
-                        include_roles={"image", "file"},
-                    )
-        except Exception:
-            assets = []
-
-    legacy_image_urls = _parse_image_urls_json(
-        getattr(item, "image_urls_json", None),
-        fallback_image_url=getattr(item, "image_url", None),
-    )
-    legacy_image_urls = _filter_existing_local_media_urls(legacy_image_urls)
-    for row_url in legacy_image_urls:
-        assets.append(
-            {
-                "url": row_url,
-                "role": "image",
-                "name": Path(urlsplit(row_url).path).name or "image",
-                "mime_type": guess_mime_type_for_file_name(row_url),
-            }
-        )
-
-    filtered_existing_urls = set(
-        _filter_existing_local_media_urls([str((row or {}).get("url") or "").strip() for row in assets])
-    )
-    deduped: list[dict[str, str]] = []
-    seen_keys: set[str] = set()
-    for row in assets:
-        row_url = str((row or {}).get("url") or "").strip()
-        if not row_url or row_url not in filtered_existing_urls:
-            continue
-        row_role = str((row or {}).get("role") or "").strip().lower()
-        if row_role not in {"image", "file"}:
-            row_role = "image"
-        dedupe_key = f"{row_role}:{row_url}"
-        if dedupe_key in seen_keys:
-            continue
-        seen_keys.add(dedupe_key)
-        row_name = str((row or {}).get("name") or "").strip() or Path(urlsplit(row_url).path).name or "file"
-        row_mime = str((row or {}).get("mime_type") or "").strip() or guess_mime_type_for_file_name(row_name)
-        deduped.append(
-            {
-                "url": row_url,
-                "role": row_role,
-                "name": row_name,
-                "mime_type": row_mime,
-            }
-        )
-    return deduped
 
 
 def get_message_media_urls(
     item: ChatMessage,
     *,
-    linked_urls_map: dict[int, list[dict[str, str]]] | None = None,
+    linked_urls_map: dict[int, list[str]] | None = None,
 ) -> list[str]:
-    assets = get_message_media_assets(item, linked_urls_map=linked_urls_map)
-    return [str(row.get("url") or "").strip() for row in assets if str(row.get("role") or "").strip().lower() == "image" and str(row.get("url") or "").strip()]
-
-
-def get_message_file_urls(
-    item: ChatMessage,
-    *,
-    linked_urls_map: dict[int, list[dict[str, str]]] | None = None,
-) -> list[str]:
-    assets = get_message_media_assets(item, linked_urls_map=linked_urls_map)
-    return [str(row.get("url") or "").strip() for row in assets if str(row.get("role") or "").strip().lower() == "file" and str(row.get("url") or "").strip()]
+    """Read message media from normalized links with legacy fallback."""
+    preloaded_urls = getattr(item, "image_urls", None)
+    if isinstance(preloaded_urls, list) and preloaded_urls:
+        return _filter_existing_local_media_urls(preloaded_urls)
+    legacy_urls_raw = _parse_image_urls_json(
+        getattr(item, "image_urls_json", None),
+        fallback_image_url=getattr(item, "image_url", None),
+    )
+    legacy_urls = _filter_existing_local_media_urls(legacy_urls_raw)
+    message_id = int(getattr(item, "id", 0) or 0)
+    if message_id > 0:
+        try:
+            if linked_urls_map is not None:
+                linked_urls = _filter_existing_local_media_urls(linked_urls_map.get(message_id, []) or [])
+            else:
+                linked_urls: list[str] = []
+                item_db = Session.object_session(item)  # type: ignore[arg-type]
+                if item_db is not None:
+                    linked_urls = list_chat_message_media_urls(
+                        item_db,
+                        chat_message_id=message_id,
+                    )
+            if linked_urls:
+                linked_set = {str(url).strip() for url in linked_urls if str(url).strip()}
+                legacy_set = {str(url).strip() for url in legacy_urls if str(url).strip()}
+                # UI must prefer full message payload when normalized links are partial/stale.
+                # This keeps operator history accurate (e.g. 2 sent photos must stay 2 in bubble).
+                if legacy_urls and (
+                    len(linked_set) != len(legacy_set)
+                    or linked_set != legacy_set
+                ):
+                    return legacy_urls
+                return linked_urls
+        except Exception:
+            pass
+    return legacy_urls
 
 
 def get_quick_reply_media_paths(db: Session, *, quick_reply_id: int) -> list[str]:
@@ -7019,7 +6710,7 @@ async def send_admin_chat_message(
     *,
     conversation_id: int,
     text: str,
-    media_items: list[dict[str, str]] | None = None,
+    image_paths: list[str] | None = None,
     workspace_id: int | None = None,
     schedule_at_iso: str = "",
 ) -> tuple[bool, str]:
@@ -7029,33 +6720,19 @@ async def send_admin_chat_message(
     scheduled_for = _parse_schedule_at_iso(schedule_at_iso)
     sent_any = False
 
-    normalized_media_items: list[dict[str, str]] = []
-    for raw_item in (media_items or []):
-        if not isinstance(raw_item, dict):
-            continue
-        media_path = str(raw_item.get("path") or "").strip()
-        if not media_path:
-            continue
-        media_name = str(raw_item.get("name") or "").strip()
-        media_kind = str(raw_item.get("kind") or "").strip().lower() or "document"
-        normalized_media_items.append(
-            {
-                "path": media_path,
-                "name": media_name,
-                "kind": ("image" if media_kind == "image" else "document"),
-            }
-        )
+    normalized_image_paths = [str(item).strip() for item in (image_paths or []) if str(item).strip()]
 
     # If message contains media, send one grouped message with optional text
     # (Telegram-style UX). Plain text-only path stays unchanged.
-    if normalized_media_items:
+    if normalized_image_paths:
+        image_urls = [str(path).strip() for path in normalized_image_paths if str(path).strip()]
         if scheduled_for:
             await queue_only_send_media_group(
                 db,
                 conversation_id=conversation_id,
                 target_chat_id=conversation.chat_id,
                 target_user_id=conversation.customer_account_id,
-                media_items=normalized_media_items,
+                photo_urls=image_urls,
                 text=(text or "").strip(),
                 text_format="markdown",
                 source="bot_system",
@@ -7068,7 +6745,7 @@ async def send_admin_chat_message(
                 conversation_id=conversation_id,
                 target_chat_id=conversation.chat_id,
                 target_user_id=conversation.customer_account_id,
-                media_items=normalized_media_items,
+                photo_urls=image_urls,
                 text=(text or "").strip(),
                 text_format="markdown",
                 source="bot_system",
