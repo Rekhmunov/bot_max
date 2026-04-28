@@ -439,33 +439,6 @@ class MaxClient:
             return {"token": str(fallback_token or "").strip()}
         return None
 
-    @staticmethod
-    def _build_file_attachment_payload(upload_result: Any, *, fallback_token: str = "") -> dict[str, Any] | None:
-        """Build attachment payload for file/document from upload responses."""
-        if isinstance(upload_result, dict):
-            for nested_key in ("payload", "result", "data", "attachment", "file"):
-                nested_value = upload_result.get(nested_key)
-                if not isinstance(nested_value, dict):
-                    continue
-                nested_payload = MaxClient._build_file_attachment_payload(
-                    nested_value,
-                    fallback_token=fallback_token,
-                )
-                if nested_payload:
-                    return nested_payload
-
-            token_value = MaxClient._extract_token_from_payload(upload_result) or str(fallback_token or "").strip()
-            if token_value:
-                return {"token": token_value}
-
-            url_value = str(upload_result.get("url") or upload_result.get("href") or "").strip()
-            if url_value:
-                return {"url": url_value}
-
-        if str(fallback_token or "").strip():
-            return {"token": str(fallback_token or "").strip()}
-        return None
-
     async def upload_image_bytes(
         self,
         *,
@@ -515,67 +488,6 @@ class MaxClient:
             },
             "token": token,
         }
-
-    async def upload_file_bytes(
-        self,
-        *,
-        file_name: str,
-        content: bytes,
-        mime_type: str | None = None,
-    ) -> dict[str, Any]:
-        """
-        Upload document/file to MAX and return attachment payload:
-        {"type":"file","payload":{"token":"..."}}
-        """
-        file_name_value = str(file_name or "file.bin").strip() or "file.bin"
-        mime_value = str(mime_type or "").strip() or self._guess_mime_type(file_name_value)
-        last_error: dict[str, Any] = {"success": False, "error": "upload_token_missing"}
-        # Different MAX deployments may use different upload type aliases.
-        for upload_type in ("file", "video", "document"):
-            upload_info = await self._post(f"/uploads?type={upload_type}", {})
-            if not isinstance(upload_info, dict):
-                last_error = {"success": False, "error": "invalid_upload_response"}
-                continue
-            upload_url = str(
-                upload_info.get("url")
-                or upload_info.get("upload_url")
-                or upload_info.get("link")
-                or upload_info.get("href")
-                or ""
-            ).strip()
-            if not upload_url:
-                upload_url = self._extract_upload_url_from_payload(upload_info)
-            if not upload_url:
-                last_error = {"success": False, "error": "upload_url_missing", "response": upload_info}
-                continue
-            upload_info_token = self._extract_token_from_payload(upload_info)
-            upload_result = await self._post_file(
-                upload_url,
-                file_name=file_name_value,
-                content=content,
-                mime_type=mime_value,
-            )
-            if not isinstance(upload_result, dict):
-                last_error = {"success": False, "error": "invalid_upload_result"}
-                continue
-            attachment_payload = self._build_file_attachment_payload(
-                upload_result,
-                fallback_token=upload_info_token,
-            )
-            if not isinstance(attachment_payload, dict) or not attachment_payload:
-                last_error = {"success": False, "error": "upload_token_missing", "response": upload_result}
-                continue
-            token = self._extract_token_from_payload(attachment_payload)
-            return {
-                "success": True,
-                "upload_type": upload_type,
-                "attachment": {
-                    "type": "file",
-                    "payload": attachment_payload,
-                },
-                "token": token,
-            }
-        return last_error
 
     @staticmethod
     def _extract_upload_url_from_payload(payload: Any) -> str:
