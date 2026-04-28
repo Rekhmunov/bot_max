@@ -2741,10 +2741,10 @@ async def _dispatch_outbox(
         text_format: str | None = None,
         max_attempts: int = 4,
     ) -> dict:
-        async def _materialize_file_attachments(rows: list[dict] | None) -> tuple[list[dict], str]:
+        async def _materialize_file_attachments(rows: list[dict] | None) -> list[dict]:
             source_rows = rows if isinstance(rows, list) else []
             if not source_rows:
-                return [], ""
+                return []
             normalized_rows: list[dict] = []
             for raw_row in source_rows:
                 if not isinstance(raw_row, dict):
@@ -2763,48 +2763,35 @@ async def _dispatch_outbox(
                 file_url = _to_external_media_url(row_payload.get("url"))
                 file_name = str(row_payload.get("file_name") or row_payload.get("name") or "").strip()
                 mime_type = str(row_payload.get("mime_type") or row_payload.get("mime") or "").strip()
-                file_bytes = b""
                 local_file = _resolve_local_static_media_file(file_url)
                 if local_file is not None:
                     try:
                         file_bytes = local_file.read_bytes()
                     except Exception:
                         file_bytes = b""
-                elif file_url.startswith("http://") or file_url.startswith("https://"):
-                    try:
-                        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http_client:
-                            response = await http_client.get(file_url)
-                        if not response.is_error:
-                            max_bytes = max(1, int(getattr(app_settings, "max_upload_bytes", 5 * 1024 * 1024)))
-                            content_bytes = bytes(response.content or b"")
-                            if 0 < len(content_bytes) <= max_bytes:
-                                file_bytes = content_bytes
-                    except Exception:
-                        file_bytes = b""
-                if file_bytes:
-                    upload_result = await client.upload_file_bytes(
-                        file_name=(file_name or (local_file.name if local_file is not None else "file.bin")),
-                        content=file_bytes,
-                        mime_type=(mime_type or guess_mime_type_for_file_name(file_name or (local_file.name if local_file is not None else ""))),
-                    )
-                    if bool(upload_result.get("success")):
-                        attachment_row = upload_result.get("attachment")
-                        if isinstance(attachment_row, dict) and attachment_row:
-                            normalized_rows.append(attachment_row)
-                            continue
-                    return normalized_rows, (
-                        str(upload_result.get("error") or "").strip() or "file_upload_token_missing"
-                    )
-                return normalized_rows, "file_bytes_unavailable_for_upload"
-            return normalized_rows, ""
+                    if file_bytes:
+                        upload_result = await client.upload_file_bytes(
+                            file_name=(file_name or local_file.name or "file.bin"),
+                            content=file_bytes,
+                            mime_type=(mime_type or guess_mime_type_for_file_name(file_name or local_file.name)),
+                        )
+                        if bool(upload_result.get("success")):
+                            attachment_row = upload_result.get("attachment")
+                            if isinstance(attachment_row, dict) and attachment_row:
+                                normalized_rows.append(attachment_row)
+                                continue
+                fallback_payload: dict[str, object] = {}
+                if file_url:
+                    fallback_payload["url"] = file_url
+                if file_name:
+                    fallback_payload["file_name"] = file_name
+                if mime_type:
+                    fallback_payload["mime_type"] = mime_type
+                if fallback_payload:
+                    normalized_rows.append({"type": "file", "payload": fallback_payload})
+            return normalized_rows
 
-        prepared_attachments, materialize_error = await _materialize_file_attachments(attachments)
-        if materialize_error:
-            return {
-                "success": False,
-                "error": str(materialize_error),
-                "endpoint": "/messages",
-            }
+        prepared_attachments = await _materialize_file_attachments(attachments)
         wait_seconds = 0.6
         attempts = max(1, int(max_attempts or 1))
         for idx in range(attempts):
