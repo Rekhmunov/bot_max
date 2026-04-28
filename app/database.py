@@ -295,30 +295,6 @@ def _ensure_lightweight_migrations() -> None:
                     "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
                 )
             )
-        else:
-            chat_media_columns = {col["name"] for col in inspector.get_columns("chat_message_media")}
-            if "role" not in chat_media_columns:
-                conn.execute(
-                    text("ALTER TABLE chat_message_media ADD COLUMN role VARCHAR(32) DEFAULT 'image'")
-                )
-            if "created_at" not in chat_media_columns:
-                conn.execute(
-                    text("ALTER TABLE chat_message_media ADD COLUMN created_at DATETIME")
-                )
-                conn.execute(
-                    text(
-                        "UPDATE chat_message_media "
-                        "SET created_at = CURRENT_TIMESTAMP "
-                        "WHERE created_at IS NULL"
-                    )
-                )
-        conn.execute(
-            text(
-                "UPDATE chat_message_media "
-                "SET role = 'image' "
-                "WHERE role IS NULL OR TRIM(role) = ''"
-            )
-        )
         conn.execute(
             text(
                 "CREATE INDEX IF NOT EXISTS ix_chat_message_media_workspace "
@@ -337,9 +313,6 @@ def _ensure_lightweight_migrations() -> None:
                 "ON chat_message_media (media_asset_id)"
             )
         )
-        # Rebuild legacy unique index shape (chat_message_id, media_asset_id)
-        # into role-aware uniqueness to support image/file links safely.
-        conn.execute(text("DROP INDEX IF EXISTS ux_chat_message_media_unique"))
         conn.execute(
             text(
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_chat_message_media_unique "
