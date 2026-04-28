@@ -3396,18 +3396,17 @@ async def enqueue_and_process_send_media_group(
         return False
     image_items = [item for item in normalized_media_items if str(item.get("kind") or "") == "image"]
     doc_items = [item for item in normalized_media_items if str(item.get("kind") or "") == "document"]
-    image_attachments: list[dict] = []
+    attachments: list[dict] = []
     for item in image_items:
         image_url = _to_external_media_url(item.get("path"))
         if image_url:
-            image_attachments.append({"type": "image", "payload": {"url": image_url}})
-    file_attachments: list[dict] = []
+            attachments.append({"type": "image", "payload": {"url": image_url}})
     for item in doc_items:
         doc_url = _to_external_media_url(item.get("path"))
         if not doc_url:
             continue
         doc_name = str(item.get("name") or "").strip() or Path(doc_url).name or "file"
-        file_attachments.append({"type": "file", "payload": {"url": doc_url, "file_name": doc_name}})
+        attachments.append({"type": "file", "payload": {"url": doc_url, "file_name": doc_name}})
     now_utc_naive = _as_naive_utc(_utc_now())
     first_path = str(normalized_media_items[0].get("path") or "").strip()
     image_urls_json = json.dumps(
@@ -3477,69 +3476,36 @@ async def enqueue_and_process_send_media_group(
         except Exception:
             file_payloads = []
             break
-    outbox_items: list[OutboxMessage] = []
-    if image_items:
-        outbox_items.append(
-            _enqueue_outbox_message(
-                db,
-                conversation_id=conversation_id,
-                chat_message_id=msg.id,
-                target_chat_id=target_chat_id,
-                target_user_id=target_user_id,
-                operation="send_message",
-                payload={
-                    "text": (text or "").strip() or None,
-                    "format": text_format,
-                    "images": [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads],
-                    # Keep URL attachments even on byte-upload path so fallback
-                    # after upload_token_missing can resend without payload loss.
-                    "attachments": image_attachments,
-                },
-            )
-        )
-    if file_attachments:
-        outbox_items.append(
-            _enqueue_outbox_message(
-                db,
-                conversation_id=conversation_id,
-                chat_message_id=msg.id,
-                target_chat_id=target_chat_id,
-                target_user_id=target_user_id,
-                operation="send_message",
-                payload={
-                    # MAX file attachment must be sent as standalone attachment payload.
-                    "text": ((text or "").strip() or None) if not image_items else None,
-                    "format": text_format,
-                    "files": [
-                        [name, _encode_image_bytes_for_payload(content), mime_type]
-                        for name, content, mime_type in file_payloads
-                    ],
-                    "attachments": file_attachments,
-                },
-            )
-        )
-    if not outbox_items:
-        outbox_items.append(
-            _enqueue_outbox_message(
-                db,
-                conversation_id=conversation_id,
-                chat_message_id=msg.id,
-                target_chat_id=target_chat_id,
-                target_user_id=target_user_id,
-                operation="send_message",
-                payload={"text": (text or "").strip() or None, "format": text_format, "attachments": []},
-            )
-        )
-    final_ok = True
-    for outbox_item in outbox_items:
-        claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(outbox_item.id))
-        if claimed_item is None:
-            final_ok = False
-            continue
-        client = _workspace_client(db, workspace_id=claimed_item.workspace_id)
-        ok, _, _ = await _dispatch_outbox(db, client=client, item=claimed_item)
-        final_ok = final_ok and bool(ok)
-    return final_ok
+    item = _enqueue_outbox_message(
+        db,
+        conversation_id=conversation_id,
+        chat_message_id=msg.id,
+        target_chat_id=target_chat_id,
+        target_user_id=target_user_id,
+        operation="send_message",
+        payload=(
+            {
+                "text": (text or "").strip() or None,
+                "format": text_format,
+                "images": [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads],
+                "files": [
+                    [name, _encode_image_bytes_for_payload(content), mime_type]
+                    for name, content, mime_type in file_payloads
+                ],
+                # Keep URL attachments even on byte-upload path so fallback
+                # after upload_token_missing can resend without payload loss.
+                "attachments": attachments,
+            }
+            if image_payloads or file_payloads
+            else {"text": (text or "").strip() or None, "format": text_format, "attachments": attachments}
+        ),
+    )
+    claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
+    if claimed_item is None:
+        return False
+    client = _workspace_client(db, workspace_id=claimed_item.workspace_id)
+    ok, _, _ = await _dispatch_outbox(db, client=client, item=claimed_item)
+    return ok
 
 
 async def queue_only_send_text(
@@ -3658,18 +3624,17 @@ async def queue_only_send_media_group(
             ],
             media_role="file",
         )
-    image_attachments: list[dict] = []
+    attachments: list[dict] = []
     for item in image_items:
         image_url = _to_external_media_url(item.get("path"))
         if image_url:
-            image_attachments.append({"type": "image", "payload": {"url": image_url}})
-    file_attachments: list[dict] = []
+            attachments.append({"type": "image", "payload": {"url": image_url}})
     for item in doc_items:
         doc_url = _to_external_media_url(item.get("path"))
         if not doc_url:
             continue
         doc_name = str(item.get("name") or "").strip() or Path(doc_url).name or "file"
-        file_attachments.append({"type": "file", "payload": {"url": doc_url, "file_name": doc_name}})
+        attachments.append({"type": "file", "payload": {"url": doc_url, "file_name": doc_name}})
     image_payloads: list[tuple[str, bytes]] = []
     for item in image_items:
         value = str(item.get("path") or "").strip()
@@ -3682,56 +3647,26 @@ async def queue_only_send_media_group(
         except Exception:
             image_payloads = []
             break
-    if image_payloads:
-        _enqueue_outbox_message(
-            db,
-            conversation_id=conversation_id,
-            chat_message_id=msg.id,
-            target_chat_id=target_chat_id,
-            target_user_id=target_user_id,
-            operation="send_message",
-            payload={
+    _enqueue_outbox_message(
+        db,
+        conversation_id=conversation_id,
+        chat_message_id=msg.id,
+        target_chat_id=target_chat_id,
+        target_user_id=target_user_id,
+        operation="send_message",
+        payload=(
+            {
                 "text": (text or "").strip() or None,
                 "format": text_format,
                 "images": [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads],
                 # Preserve URL attachments for retry/fallback path.
-                "attachments": image_attachments,
-            },
-            next_retry_at=next_retry_at,
-        )
-    if file_attachments:
-        file_payloads: list[tuple[str, bytes, str]] = []
-        for item in doc_items:
-            value = str(item.get("path") or "").strip()
-            local_file = _resolve_local_static_media_file(value)
-            if local_file is None:
-                file_payloads = []
-                break
-            file_name = str(item.get("name") or "").strip() or local_file.name or "file.bin"
-            mime_type = guess_mime_type_for_file_name(file_name)
-            try:
-                file_payloads.append((file_name, local_file.read_bytes(), mime_type))
-            except Exception:
-                file_payloads = []
-                break
-        _enqueue_outbox_message(
-            db,
-            conversation_id=conversation_id,
-            chat_message_id=msg.id,
-            target_chat_id=target_chat_id,
-            target_user_id=target_user_id,
-            operation="send_message",
-            payload={
-                "text": ((text or "").strip() or None) if not image_items else None,
-                "format": text_format,
-                "files": [
-                    [name, _encode_image_bytes_for_payload(content), mime_type]
-                    for name, content, mime_type in file_payloads
-                ],
-                "attachments": file_attachments,
-            },
-            next_retry_at=next_retry_at,
-        )
+                "attachments": attachments,
+            }
+            if image_payloads
+            else {"text": (text or "").strip() or None, "format": text_format, "attachments": attachments}
+        ),
+        next_retry_at=next_retry_at,
+    )
 
 
 async def queue_only_send_photo(
