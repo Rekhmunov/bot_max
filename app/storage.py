@@ -297,6 +297,12 @@ def save_upload_bytes(*, file_name: str, content: bytes) -> str:
         ".gif": "image/gif",
         ".webp": "image/webp",
         ".bmp": "image/bmp",
+        ".pdf": "application/pdf",
+        ".txt": "text/plain",
+        ".csv": "text/csv",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
     }
     mime = mime_mapping.get(ext, "application/octet-stream")
     storage = get_media_storage()
@@ -316,6 +322,25 @@ def save_upload_bytes(*, file_name: str, content: bytes) -> str:
             mime_type=mime,
         )
     return upload_file_public_url(stored.public_url)
+
+
+def guess_mime_type_for_file_name(file_name: str | None) -> str:
+    ext = Path(str(file_name or "")).suffix.lower()
+    mime_mapping = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
+        ".pdf": "application/pdf",
+        ".txt": "text/plain",
+        ".csv": "text/csv",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+    return mime_mapping.get(ext, "application/octet-stream")
 
 
 def storage_public_url_for_key(*, storage_key: str) -> str:
