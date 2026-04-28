@@ -2424,6 +2424,57 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _EMAIL_VERIFY_SALT = "email-verify-link"
 
 
+def _cleanup_legacy_file_outbox_rows(db: Session, *, workspace_id: int, conversation_id: int) -> int:
+    """
+    Remove queued/sending/failed outbox rows where file attachments are URL-only.
+    These legacy rows keep producing proto.payload errors on MAX.
+    """
+    rows = (
+        db.query(OutboxMessage)
+        .filter(
+            OutboxMessage.workspace_id == int(workspace_id),
+            OutboxMessage.conversation_id == int(conversation_id),
+            OutboxMessage.operation == "send_message",
+            OutboxMessage.state.in_(["queued", "sending", "failed"]),
+        )
+        .all()
+    )
+    removed = 0
+    for row in rows:
+        try:
+            payload = json.loads(str(getattr(row, "payload_json", "") or "{}"))
+        except Exception:
+            payload = {}
+        attachments = payload.get("attachments") if isinstance(payload, dict) else None
+        if not isinstance(attachments, list) or not attachments:
+            continue
+        has_legacy_file = False
+        for entry in attachments:
+            if not isinstance(entry, dict):
+                continue
+            if str(entry.get("type") or "").strip().lower() != "file":
+                continue
+            payload_value = entry.get("payload")
+            if not isinstance(payload_value, dict):
+                continue
+            token = str(payload_value.get("token") or "").strip()
+            file_id = str(payload_value.get("fileId") or payload_value.get("file_id") or "").strip()
+            if token or file_id:
+                continue
+            has_legacy_file = True
+            break
+        state_value = str(getattr(row, "state", "") or "").strip().lower()
+        if state_value == "sent":
+            continue
+        if not has_legacy_file:
+            continue
+        db.delete(row)
+        removed += 1
+    if removed:
+        db.commit()
+    return removed
+
+
 def _apply_security_headers(response):
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
@@ -4595,6 +4646,11 @@ async def admin_chats_send_message(
     validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
     if validated_uploads:
         attachment_items = _store_uploaded_attachments(validated_uploads)
+        _cleanup_legacy_file_outbox_rows(
+            db,
+            workspace_id=int(workspace_id),
+            conversation_id=int(conversation_id),
+        )
 
     if edit_message_id is not None:
         updated = None
@@ -4631,6 +4687,18 @@ async def admin_chats_send_message(
             redirect_url += "&view=chat"
         return RedirectResponse(url=redirect_url, status_code=302)
 
+    if attachment_items:
+        _cleanup_legacy_file_outbox_rows(
+            db,
+            workspace_id=int(workspace_id),
+            conversation_id=int(conversation_id),
+        )
+    if attachment_items:
+        _cleanup_legacy_file_outbox_rows(
+            db,
+            workspace_id=int(workspace_id or DEFAULT_WORKSPACE_ID),
+            conversation_id=int(conversation_id),
+        )
     schedule_at_value = await _resolve_schedule_at_value(request, schedule_at)
     send_error_reason = ""
     try:
