@@ -3352,6 +3352,58 @@
         }
         return prepared;
       };
+      const addIncomingFilesToCompose = (incomingFiles, { resetNativeInput = false } = {}) => {
+        const incoming = Array.from(incomingFiles || []);
+        if (!incoming.length) {
+          syncSendVisibility();
+          return false;
+        }
+        isUploadReady = false;
+        syncSendVisibility();
+        const validated = validateSelectedFiles(incoming);
+        if (!validated.length) {
+          syncNativeFiles();
+          if (!selectedEntries.length) {
+            clearPreviews();
+          }
+          isUploadReady = true;
+          syncSendVisibility();
+          return false;
+        }
+        const existingTokens = new Set(selectedEntries.map((entry) => String(entry.token || "")));
+        validated.forEach((file) => {
+          const token = `${file.name}|${file.size}|${file.lastModified}`;
+          if (existingTokens.has(token)) return;
+          selectedEntries.push({ file, token });
+          existingTokens.add(token);
+        });
+        syncNativeFiles();
+        if (resetNativeInput) {
+          photoInput.value = "";
+        }
+        isUploadReady = true;
+        renderPreview();
+        return true;
+      };
+      const extractImageFilesFromClipboard = (clipboardData) => {
+        if (!clipboardData) return [];
+        const prepared = [];
+        const items = Array.from(clipboardData.items || []);
+        items.forEach((item) => {
+          if (!item || item.kind !== "file") return;
+          const mime = String(item.type || "").toLowerCase();
+          if (!mime.startsWith("image/")) return;
+          const file = item.getAsFile();
+          if (file instanceof File) {
+            prepared.push(file);
+          }
+        });
+        if (prepared.length) return prepared;
+        return Array.from(clipboardData.files || []).filter((file) => {
+          const mime = String(file?.type || "").toLowerCase();
+          return mime.startsWith("image/");
+        });
+      };
       const scrollMessagesToBottom = () => {
         const wrap = document.querySelector(".messages-wrap");
         if (!wrap) return;
@@ -3763,37 +3815,20 @@
         resizeMessageInput();
         syncSendVisibility();
       });
-      photoInput.addEventListener("change", () => {
-        const incoming = Array.from(photoInput.files || []);
-        if (!incoming.length) {
-          syncSendVisibility();
+      messageInput.addEventListener("paste", (event) => {
+        const imageFiles = extractImageFilesFromClipboard(event.clipboardData || null);
+        if (!imageFiles.length) {
           return;
         }
-        isUploadReady = false;
-        syncSendVisibility();
-        const validated = validateSelectedFiles(incoming);
-        if (!validated.length) {
-          syncNativeFiles();
-          if (!selectedEntries.length) {
-            clearPreviews();
-          }
-          isUploadReady = true;
-          syncSendVisibility();
-          return;
-        }
-        const existingTokens = new Set(selectedEntries.map((entry) => String(entry.token || "")));
-        validated.forEach((file) => {
-          const token = `${file.name}|${file.size}|${file.lastModified}`;
-          if (existingTokens.has(token)) return;
-          selectedEntries.push({ file, token });
-          existingTokens.add(token);
-        });
-        syncNativeFiles();
         if (!canConstructDataTransfer) {
-          photoInput.value = "";
+          setUploadStatus("Вставка изображений из буфера не поддерживается в этом браузере. Используйте скрепку.", "error");
+          return;
         }
-        isUploadReady = true;
-        renderPreview();
+        event.preventDefault();
+        addIncomingFilesToCompose(imageFiles);
+      });
+      photoInput.addEventListener("change", () => {
+        addIncomingFilesToCompose(photoInput.files, { resetNativeInput: !canConstructDataTransfer });
       });
       composeForm.addEventListener("submit", (event) => {
         if (isComposeSubmitting) {
