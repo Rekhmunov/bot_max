@@ -2751,6 +2751,10 @@ async def _dispatch_outbox(
                 if token_value:
                     normalized_rows.append({"type": "file", "payload": {"token": token_value}})
                     continue
+                file_id_value = str(row_payload.get("fileId") or row_payload.get("file_id") or "").strip()
+                if file_id_value:
+                    normalized_rows.append({"type": "file", "payload": {"fileId": file_id_value}})
+                    continue
                 file_url = _to_external_media_url(row_payload.get("url"))
                 file_name = str(row_payload.get("file_name") or row_payload.get("name") or "").strip()
                 mime_type = str(row_payload.get("mime_type") or row_payload.get("mime") or "").strip()
@@ -2781,6 +2785,22 @@ async def _dispatch_outbox(
                     if bool(upload_result.get("success")):
                         attachment_row = upload_result.get("attachment")
                         if isinstance(attachment_row, dict) and attachment_row:
+                            row_type_uploaded = str(attachment_row.get("type") or "").strip().lower()
+                            row_payload_uploaded = attachment_row.get("payload")
+                            if row_type_uploaded == "file" and isinstance(row_payload_uploaded, dict):
+                                uploaded_token = str(row_payload_uploaded.get("token") or "").strip()
+                                uploaded_file_id = str(
+                                    row_payload_uploaded.get("fileId")
+                                    or row_payload_uploaded.get("file_id")
+                                    or ""
+                                ).strip()
+                                if uploaded_token:
+                                    normalized_rows.append({"type": "file", "payload": {"token": uploaded_token}})
+                                    continue
+                                if uploaded_file_id:
+                                    normalized_rows.append({"type": "file", "payload": {"fileId": uploaded_file_id}})
+                                    continue
+                                return normalized_rows, "file_upload_missing_token_or_fileid"
                             normalized_rows.append(attachment_row)
                             continue
                     return normalized_rows, (
@@ -2794,6 +2814,27 @@ async def _dispatch_outbox(
             return {
                 "success": False,
                 "error": str(materialize_error),
+                "endpoint": "/messages",
+            }
+        for row in prepared_attachments:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("type") or "").strip().lower() != "file":
+                continue
+            payload_value = row.get("payload")
+            if not isinstance(payload_value, dict):
+                return {
+                    "success": False,
+                    "error": "file_attachment_payload_invalid",
+                    "endpoint": "/messages",
+                }
+            token_value = str(payload_value.get("token") or "").strip()
+            file_id_value = str(payload_value.get("fileId") or payload_value.get("file_id") or "").strip()
+            if token_value or file_id_value:
+                continue
+            return {
+                "success": False,
+                "error": "file_attachment_missing_token_or_fileid_local_guard",
                 "endpoint": "/messages",
             }
         wait_seconds = 0.6
