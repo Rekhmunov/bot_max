@@ -2741,6 +2741,57 @@ async def _dispatch_outbox(
         text_format: str | None = None,
         max_attempts: int = 4,
     ) -> dict:
+        async def _materialize_file_attachments(rows: list[dict] | None) -> list[dict]:
+            source_rows = rows if isinstance(rows, list) else []
+            if not source_rows:
+                return []
+            normalized_rows: list[dict] = []
+            for raw_row in source_rows:
+                if not isinstance(raw_row, dict):
+                    continue
+                row_type = str(raw_row.get("type") or "").strip().lower()
+                if row_type != "file":
+                    normalized_rows.append(raw_row)
+                    continue
+                row_payload = raw_row.get("payload")
+                if not isinstance(row_payload, dict):
+                    continue
+                token_value = str(row_payload.get("token") or "").strip()
+                if token_value:
+                    normalized_rows.append({"type": "file", "payload": {"token": token_value}})
+                    continue
+                file_url = _to_external_media_url(row_payload.get("url"))
+                file_name = str(row_payload.get("file_name") or row_payload.get("name") or "").strip()
+                mime_type = str(row_payload.get("mime_type") or row_payload.get("mime") or "").strip()
+                local_file = _resolve_local_static_media_file(file_url)
+                if local_file is not None:
+                    try:
+                        file_bytes = local_file.read_bytes()
+                    except Exception:
+                        file_bytes = b""
+                    if file_bytes:
+                        upload_result = await client.upload_file_bytes(
+                            file_name=(file_name or local_file.name or "file.bin"),
+                            content=file_bytes,
+                            mime_type=(mime_type or guess_mime_type_for_file_name(file_name or local_file.name)),
+                        )
+                        if bool(upload_result.get("success")):
+                            attachment_row = upload_result.get("attachment")
+                            if isinstance(attachment_row, dict) and attachment_row:
+                                normalized_rows.append(attachment_row)
+                                continue
+                fallback_payload: dict[str, object] = {}
+                if file_url:
+                    fallback_payload["url"] = file_url
+                if file_name:
+                    fallback_payload["file_name"] = file_name
+                if mime_type:
+                    fallback_payload["mime_type"] = mime_type
+                if fallback_payload:
+                    normalized_rows.append({"type": "file", "payload": fallback_payload})
+            return normalized_rows
+
+        prepared_attachments = await _materialize_file_attachments(attachments)
         wait_seconds = 0.6
         attempts = max(1, int(max_attempts or 1))
         for idx in range(attempts):
@@ -2748,7 +2799,7 @@ async def _dispatch_outbox(
                 chat_id=chat_id,
                 user_id=user_id,
                 text=text,
-                attachments=attachments,
+                attachments=prepared_attachments or None,
                 text_format=text_format,
             )
             code = ""
@@ -2780,6 +2831,7 @@ async def _dispatch_outbox(
         if item.operation == "send_message":
             direct_attachments = _resolve_direct_attachments()
             images_payload = payload.get("images")
+            files_payload = payload.get("files")
             if isinstance(images_payload, list) and images_payload:
                 images: list[tuple[str, bytes]] = []
                 images_count = 0
@@ -2828,6 +2880,40 @@ async def _dispatch_outbox(
                             text_format=str(payload.get("format") or "").strip().lower() or None,
                         )
                     return images_result
+            if isinstance(files_payload, list) and files_payload:
+                file_attachments: list[dict[str, object]] = []
+                for row in files_payload:
+                    if not isinstance(row, list) or len(row) < 2:
+                        file_attachments = []
+                        break
+                    file_name = str(row[0] or "").strip() or "file.bin"
+                    content_raw = row[1]
+                    content_bytes = _decode_image_bytes_from_payload(content_raw)
+                    if not content_bytes:
+                        file_attachments = []
+                        break
+                    mime_type = (
+                        str(row[2] or "").strip()
+                        if len(row) >= 3 and str(row[2] or "").strip()
+                        else guess_mime_type_for_file_name(file_name)
+                    )
+                    uploaded = await client.upload_file_bytes(
+                        file_name=file_name,
+                        content=content_bytes,
+                        mime_type=mime_type,
+                    )
+                    if not isinstance(uploaded, dict) or not bool(uploaded.get("success")):
+                        return uploaded if isinstance(uploaded, dict) else {"success": False, "error": "file_upload_failed"}
+                    attachment_value = uploaded.get("attachment")
+                    if isinstance(attachment_value, dict):
+                        file_attachments.append(attachment_value)
+                if file_attachments:
+                    return await _send_message_with_attachment_ready_retry(
+                        chat_id=target_chat_id,
+                        text=str(payload.get("text")) if payload.get("text") is not None else None,
+                        attachments=file_attachments,
+                        text_format=str(payload.get("format") or "").strip().lower() or None,
+                    )
             attachments_to_send = (
                 direct_attachments
                 if direct_attachments
@@ -2860,6 +2946,7 @@ async def _dispatch_outbox(
         if item.operation == "send_message":
             direct_attachments = _resolve_direct_attachments()
             images_payload = payload.get("images")
+            files_payload = payload.get("files")
             if isinstance(images_payload, list) and images_payload:
                 images: list[tuple[str, bytes]] = []
                 images_count = 0
@@ -2908,6 +2995,40 @@ async def _dispatch_outbox(
                             text_format=str(payload.get("format") or "").strip().lower() or None,
                         )
                     return images_result
+            if isinstance(files_payload, list) and files_payload:
+                file_attachments: list[dict[str, object]] = []
+                for row in files_payload:
+                    if not isinstance(row, list) or len(row) < 2:
+                        file_attachments = []
+                        break
+                    file_name = str(row[0] or "").strip() or "file.bin"
+                    content_raw = row[1]
+                    content_bytes = _decode_image_bytes_from_payload(content_raw)
+                    if not content_bytes:
+                        file_attachments = []
+                        break
+                    mime_type = (
+                        str(row[2] or "").strip()
+                        if len(row) >= 3 and str(row[2] or "").strip()
+                        else guess_mime_type_for_file_name(file_name)
+                    )
+                    uploaded = await client.upload_file_bytes(
+                        file_name=file_name,
+                        content=content_bytes,
+                        mime_type=mime_type,
+                    )
+                    if not isinstance(uploaded, dict) or not bool(uploaded.get("success")):
+                        return uploaded if isinstance(uploaded, dict) else {"success": False, "error": "file_upload_failed"}
+                    attachment_value = uploaded.get("attachment")
+                    if isinstance(attachment_value, dict):
+                        file_attachments.append(attachment_value)
+                if file_attachments:
+                    return await _send_message_with_attachment_ready_retry(
+                        user_id=target_user_id,
+                        text=str(payload.get("text")) if payload.get("text") is not None else None,
+                        attachments=file_attachments,
+                        text_format=str(payload.get("format") or "").strip().lower() or None,
+                    )
             attachments_to_send = (
                 direct_attachments
                 if direct_attachments
@@ -3328,6 +3449,20 @@ async def enqueue_and_process_send_media_group(
         except Exception:
             image_payloads = []
             break
+    file_payloads: list[tuple[str, bytes, str]] = []
+    for item in doc_items:
+        value = str(item.get("path") or "").strip()
+        local_file = _resolve_local_static_media_file(value)
+        if local_file is None:
+            file_payloads = []
+            break
+        file_name = str(item.get("name") or "").strip() or local_file.name or "file.bin"
+        mime_type = guess_mime_type_for_file_name(file_name)
+        try:
+            file_payloads.append((file_name, local_file.read_bytes(), mime_type))
+        except Exception:
+            file_payloads = []
+            break
     item = _enqueue_outbox_message(
         db,
         conversation_id=conversation_id,
@@ -3340,11 +3475,15 @@ async def enqueue_and_process_send_media_group(
                 "text": (text or "").strip() or None,
                 "format": text_format,
                 "images": [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads],
+                "files": [
+                    [name, _encode_image_bytes_for_payload(content), mime_type]
+                    for name, content, mime_type in file_payloads
+                ],
                 # Keep URL attachments even on byte-upload path so fallback
                 # after upload_token_missing can resend without payload loss.
                 "attachments": attachments,
             }
-            if image_payloads
+            if image_payloads or file_payloads
             else {"text": (text or "").strip() or None, "format": text_format, "attachments": attachments}
         ),
     )
