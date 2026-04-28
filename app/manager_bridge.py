@@ -24,7 +24,6 @@ from app.config import settings as app_settings
 from app.max_client import MaxClient
 from app.storage import (
     delete_by_public_url,
-    guess_mime_type_for_file_name,
     iter_local_upload_files,
     local_upload_abspath,
     normalize_storage_public_url,
