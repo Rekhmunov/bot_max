@@ -2563,17 +2563,16 @@ async def _dispatch_outbox(
                     normalized.append({"type": "callback", "text": button_text, "payload": button_payload})
                 continue
             if row_type == "file" and isinstance(row_payload, dict):
-                file_url = _to_external_media_url(row_payload.get("url"))
-                if not file_url:
+                token_value = str(row_payload.get("token") or "").strip()
+                file_id_value = str(row_payload.get("fileId") or row_payload.get("file_id") or "").strip()
+                if token_value:
+                    normalized.append({"type": "file", "payload": {"token": token_value}})
                     continue
-                file_name = str(row_payload.get("file_name") or row_payload.get("name") or "").strip()
-                file_payload: dict[str, object] = {"url": file_url}
-                if file_name:
-                    file_payload["file_name"] = file_name
-                mime_type = str(row_payload.get("mime_type") or row_payload.get("mime") or "").strip()
-                if mime_type:
-                    file_payload["mime_type"] = mime_type
-                normalized.append({"type": "file", "payload": file_payload})
+                if file_id_value:
+                    normalized.append({"type": "file", "payload": {"fileId": file_id_value}})
+                    continue
+                # Do not pass URL-only file attachments directly to MAX.
+                # They must be materialized into token/fileId first.
                 continue
         return normalized
 
@@ -2589,17 +2588,12 @@ async def _dispatch_outbox(
                 if not isinstance(row_payload, dict):
                     continue
                 if row_type == "file":
-                    file_url = _to_external_media_url(row_payload.get("url"))
-                    if not file_url:
-                        continue
-                    file_name = str(row_payload.get("file_name") or row_payload.get("name") or "").strip()
-                    file_payload: dict[str, object] = {"url": file_url}
-                    if file_name:
-                        file_payload["file_name"] = file_name
-                    mime_type = str(row_payload.get("mime_type") or row_payload.get("mime") or "").strip()
-                    if mime_type:
-                        file_payload["mime_type"] = mime_type
-                    normalized.append({"type": "file", "payload": file_payload})
+                    token_value = str(row_payload.get("token") or "").strip()
+                    file_id_value = str(row_payload.get("fileId") or row_payload.get("file_id") or "").strip()
+                    if token_value:
+                        normalized.append({"type": "file", "payload": {"token": token_value}})
+                    elif file_id_value:
+                        normalized.append({"type": "file", "payload": {"fileId": file_id_value}})
                     continue
                 token = str(row_payload.get("token") or "").strip()
                 photos = row_payload.get("photos")
@@ -2647,12 +2641,9 @@ async def _dispatch_outbox(
                     continue
                 role_value = str(getattr(link_row, "role", "") or "").strip().lower()
                 if role_value == "file":
-                    file_name = Path(str(asset.storage_key or "").strip()).name or "file"
-                    payload_value: dict[str, object] = {"url": url_value, "file_name": file_name}
-                    mime_value = str(getattr(asset, "mime_type", "") or "").strip()
-                    if mime_value:
-                        payload_value["mime_type"] = mime_value
-                    normalized.append({"type": "file", "payload": payload_value})
+                    # File attachments for MAX must use token/fileId.
+                    # URL-only fallback is not valid for type=file payload.
+                    continue
                 else:
                     normalized.append({"type": "image", "payload": {"url": url_value}})
             if normalized:

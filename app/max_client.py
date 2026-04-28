@@ -457,14 +457,45 @@ class MaxClient:
             token_value = MaxClient._extract_token_from_payload(upload_result) or str(fallback_token or "").strip()
             if token_value:
                 return {"token": token_value}
-
-            url_value = str(upload_result.get("url") or upload_result.get("href") or "").strip()
-            if url_value:
-                return {"url": url_value}
+            file_id_value = MaxClient._extract_file_id_from_payload(upload_result)
+            if file_id_value:
+                return {"fileId": file_id_value}
 
         if str(fallback_token or "").strip():
             return {"token": str(fallback_token or "").strip()}
         return None
+
+    @staticmethod
+    def _extract_file_id_from_payload(payload: Any) -> str:
+        file_id_keys = ("fileId", "file_id", "id")
+        queue: list[Any] = [payload]
+        visited_ids: set[int] = set()
+        while queue:
+            current = queue.pop(0)
+            try:
+                object_id = id(current)
+            except Exception:
+                object_id = 0
+            if object_id and object_id in visited_ids:
+                continue
+            if object_id:
+                visited_ids.add(object_id)
+            if isinstance(current, dict):
+                for key in file_id_keys:
+                    if key not in current:
+                        continue
+                    raw_value = current.get(key)
+                    if raw_value is None:
+                        continue
+                    value = str(raw_value).strip()
+                    if value:
+                        return value
+                for value in current.values():
+                    queue.append(value)
+                continue
+            if isinstance(current, list):
+                queue.extend(current)
+        return ""
 
     async def upload_image_bytes(
         self,
