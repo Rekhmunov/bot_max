@@ -1168,6 +1168,8 @@
       align-self: end;
     }
     .attach-wrap {
+      appearance: none;
+      -webkit-appearance: none;
       position: relative;
       width: 36px;
       height: 36px;
@@ -1182,11 +1184,18 @@
       cursor: pointer;
       user-select: none;
     }
-    .attach-wrap input[type="file"] {
+    .compose-file-input {
       position: absolute;
-      inset: 0;
+      width: 1px;
+      height: 1px;
+      margin: -1px;
+      padding: 0;
+      border: 0;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      clip-path: inset(50%);
       opacity: 0;
-      cursor: pointer;
+      pointer-events: none;
     }
     .emoji-wrap {
       position: relative;
@@ -2856,10 +2865,17 @@
               <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
             {% endif %}
             <div class="compose-row">
-              <label class="attach-wrap" title="Прикрепить файл">
+              <button class="attach-wrap" id="attach-btn" type="button" title="Прикрепить файл" aria-label="Прикрепить файл">
                 📎
-                <input type="file" name="photos" accept=".png,.jpg,.jpeg,.gif,.webp" multiple />
-              </label>
+              </button>
+              <input
+                id="compose-photo-input"
+                class="compose-file-input"
+                type="file"
+                name="photos"
+                accept=".png,.jpg,.jpeg,.gif,.webp"
+                multiple
+              />
               <div class="emoji-wrap">
                 <button
                   type="button"
@@ -3147,7 +3163,8 @@
 
     (() => {
       const messageInput = document.getElementById("message-input");
-      const photoInput = document.querySelector(".attach-wrap input[type='file']");
+      const attachBtn = document.getElementById("attach-btn");
+      const photoInput = document.getElementById("compose-photo-input");
       const emojiBtn = document.getElementById("emoji-btn");
       const emojiPop = document.getElementById("emoji-pop");
       const mediaPreview = document.getElementById("compose-media-preview");
@@ -3162,7 +3179,7 @@
       const scheduleSubmitBtn = document.getElementById("schedule-submit-btn");
       const scheduledAtInput = document.getElementById("scheduled-at-input");
       const composeForm = document.querySelector(".compose form");
-      if (!messageInput || !photoInput || !sendBtn || !scheduleBtnMobile || !scheduleTriggerMenu || !schedulePopup || !scheduleDateInput || !scheduleTimeInput || !scheduleHint || !scheduleSubmitBtn || !scheduledAtInput || !composeForm || !mediaPreview || !uploadStatus) return;
+      if (!messageInput || !attachBtn || !photoInput || !sendBtn || !scheduleBtnMobile || !scheduleTriggerMenu || !schedulePopup || !scheduleDateInput || !scheduleTimeInput || !scheduleHint || !scheduleSubmitBtn || !scheduledAtInput || !composeForm || !mediaPreview || !uploadStatus) return;
       const computeMessageInputMinHeight = () => {
         const styles = window.getComputedStyle(messageInput);
         const lineHeight = Number.parseFloat(styles.lineHeight || "") || Number.parseFloat(styles.fontSize || "") || 16;
@@ -3814,6 +3831,9 @@
       messageInput.addEventListener("input", () => {
         resizeMessageInput();
         syncSendVisibility();
+      });
+      attachBtn.addEventListener("click", () => {
+        photoInput.click();
       });
       messageInput.addEventListener("paste", (event) => {
         const imageFiles = extractImageFilesFromClipboard(event.clipboardData || null);
@@ -6454,7 +6474,7 @@
       const shouldDeferAutoRefresh = () => {
         const composeForm = document.querySelector(".compose form");
         const messageInputEl = document.getElementById("message-input");
-        const attachInputEl = document.querySelector(".attach-wrap input[type='file']");
+        const attachInputEl = document.getElementById("compose-photo-input");
         const mediaPreviewEl = document.getElementById("compose-media-preview");
         let isComposingMessage = false;
         if (composeForm instanceof HTMLFormElement) {
@@ -6483,7 +6503,7 @@
       (() => {
         const composeForm = document.querySelector(".compose form");
         const messageInputEl = document.getElementById("message-input");
-        const attachInputEl = document.querySelector(".attach-wrap input[type='file']");
+        const attachInputEl = document.getElementById("compose-photo-input");
         const sendBtnEl = document.getElementById("send-btn");
         const scheduleBtnEl = document.getElementById("schedule-btn-mobile");
         if (composeForm instanceof HTMLFormElement) {
