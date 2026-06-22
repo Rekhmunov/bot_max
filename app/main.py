@@ -2775,6 +2775,7 @@ def _build_quick_options_for_compose(
             if path:
                 media_urls.append(path)
         result.append({
+            "id": int(item.id),
             "command": item.command,
             "title": item.title,
             "text": item.text or "",
@@ -4680,20 +4681,46 @@ async def _handle_send_async(
     workspace_id: int,
     text_value: str,
     image_paths: list[str],
+    quick_reply_id: int = 0,
 ) -> JSONResponse:
-    """Enqueue a message without calling Max API. Returns JSON for optimistic UI insert."""
+    """Enqueue a message without calling Max API. Returns JSON for optimistic UI insert.
+
+    When quick_reply_id > 0, media is fetched from the DB quick reply (no re-upload).
+    When quick_reply_id = 0, image_paths from uploaded files are used.
+    """
     conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
     if conversation is None:
         return JSONResponse({"ok": False, "error": "Диалог не найден"}, status_code=404)
-    if not text_value and not image_paths:
+
+    qr_photo_urls: list[str] = []
+    if quick_reply_id > 0:
+        media_rows = (
+            db.query(QuickReplyMedia)
+            .filter(QuickReplyMedia.quick_reply_id == quick_reply_id)
+            .order_by(QuickReplyMedia.sort_order.asc(), QuickReplyMedia.id.asc())
+            .all()
+        )
+        if media_rows:
+            qr_photo_urls = [str(row.media_path or "").strip() for row in media_rows if str(row.media_path or "").strip()]
+        if not qr_photo_urls:
+            qr_photo_urls = get_quick_reply_media_paths(db, quick_reply_id=quick_reply_id)
+        if not qr_photo_urls:
+            qr = db.query(QuickReply).filter(QuickReply.id == quick_reply_id).first()
+            if qr and qr.image_path:
+                qr_photo_urls = [str(qr.image_path).strip()]
+
+    photo_urls = qr_photo_urls if qr_photo_urls else image_paths
+    has_content = bool(text_value or photo_urls)
+    if not has_content:
         return JSONResponse({"ok": False, "error": "Нет содержимого"}, status_code=400)
-    if image_paths:
+
+    if photo_urls:
         await queue_only_send_media_group(
             db,
             conversation_id=conversation_id,
             target_chat_id=conversation.chat_id,
             target_user_id=conversation.customer_account_id,
-            photo_urls=image_paths,
+            photo_urls=photo_urls,
             text=text_value,
             text_format="markdown",
             source="bot_system",
@@ -4719,6 +4746,7 @@ async def _handle_send_async(
     )
     msg_id = int(msg.id) if msg else 0
     created_at = getattr(msg, "created_at", None)
+    display_image_urls = photo_urls if photo_urls else image_paths
     return JSONResponse({
         "ok": True,
         "message": {
@@ -4728,8 +4756,8 @@ async def _handle_send_async(
             "source": "bot_system",
             "delivery_state": "queued",
             "is_read_by_customer": False,
-            "image_urls": image_paths,
-            "image_url": image_paths[0] if image_paths else "",
+            "image_urls": display_image_urls,
+            "image_url": display_image_urls[0] if display_image_urls else "",
             "created_at_label": _to_moscow_chat_label(created_at),
             "is_scheduled_pending": False,
             "delivery_next_retry_at": "",
@@ -4744,6 +4772,7 @@ async def admin_chats_send_message_async(
     conversation_id: int,
     text: str = Form(""),
     photos: list[UploadFile] = File(default=[]),
+    quick_reply_id: int = Form(0),
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
@@ -4754,20 +4783,23 @@ async def admin_chats_send_message_async(
     )
     workspace_id = DEFAULT_WORKSPACE_ID
     text_value = text.strip()
-    uploads_to_validate = [item for item in photos if item and item.filename]
-    if not uploads_to_validate:
-        form_data = await request.form()
-        legacy_photo = form_data.get("photo")
-        if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
-            uploads_to_validate = [legacy_photo]
-    validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
-    image_paths = _store_uploaded_images(validated_uploads) if validated_uploads else []
+    image_paths: list[str] = []
+    if not (quick_reply_id > 0):
+        uploads_to_validate = [item for item in photos if item and item.filename]
+        if not uploads_to_validate:
+            form_data = await request.form()
+            legacy_photo = form_data.get("photo")
+            if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
+                uploads_to_validate = [legacy_photo]
+        validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
+        image_paths = _store_uploaded_images(validated_uploads) if validated_uploads else []
     return await _handle_send_async(
         db=db,
         conversation_id=conversation_id,
         workspace_id=workspace_id,
         text_value=text_value,
         image_paths=image_paths,
+        quick_reply_id=int(quick_reply_id or 0),
     )
 
 
@@ -4777,6 +4809,7 @@ async def app_chats_send_message_async(
     conversation_id: int,
     text: str = Form(""),
     photos: list[UploadFile] = File(default=[]),
+    quick_reply_id: int = Form(0),
     workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
@@ -4792,20 +4825,23 @@ async def app_chats_send_message_async(
         workspace_id=workspace_id,
     )
     text_value = text.strip()
-    uploads_to_validate = [item for item in photos if item and item.filename]
-    if not uploads_to_validate:
-        form_data = await request.form()
-        legacy_photo = form_data.get("photo")
-        if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
-            uploads_to_validate = [legacy_photo]
-    validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
-    image_paths = _store_uploaded_images(validated_uploads) if validated_uploads else []
+    image_paths: list[str] = []
+    if not (quick_reply_id > 0):
+        uploads_to_validate = [item for item in photos if item and item.filename]
+        if not uploads_to_validate:
+            form_data = await request.form()
+            legacy_photo = form_data.get("photo")
+            if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
+                uploads_to_validate = [legacy_photo]
+        validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
+        image_paths = _store_uploaded_images(validated_uploads) if validated_uploads else []
     return await _handle_send_async(
         db=db,
         conversation_id=conversation_id,
         workspace_id=resolved_workspace_id,
         text_value=text_value,
         image_paths=image_paths,
+        quick_reply_id=int(quick_reply_id or 0),
     )
 
 
@@ -4816,6 +4852,7 @@ async def mini_manager_chats_send_message_async(
     token: str = Form(""),
     text: str = Form(""),
     photos: list[UploadFile] = File(default=[]),
+    quick_reply_id: int = Form(0),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     claims = _require_manager_mini_access(token=token, db=db)
@@ -4826,20 +4863,23 @@ async def mini_manager_chats_send_message_async(
         limit=max(1, int(settings.rate_limit_login_per_minute) * 5),
     )
     text_value = text.strip()
-    uploads_to_validate = [item for item in photos if item and item.filename]
-    if not uploads_to_validate:
-        form_data = await request.form()
-        legacy_photo = form_data.get("photo")
-        if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
-            uploads_to_validate = [legacy_photo]
-    validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
-    image_paths = _store_uploaded_images(validated_uploads) if validated_uploads else []
+    image_paths: list[str] = []
+    if not (quick_reply_id > 0):
+        uploads_to_validate = [item for item in photos if item and item.filename]
+        if not uploads_to_validate:
+            form_data = await request.form()
+            legacy_photo = form_data.get("photo")
+            if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
+                uploads_to_validate = [legacy_photo]
+        validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
+        image_paths = _store_uploaded_images(validated_uploads) if validated_uploads else []
     return await _handle_send_async(
         db=db,
         conversation_id=conversation_id,
         workspace_id=workspace_id,
         text_value=text_value,
         image_paths=image_paths,
+        quick_reply_id=int(quick_reply_id or 0),
     )
 
 
