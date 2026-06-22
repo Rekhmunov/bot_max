@@ -3949,7 +3949,7 @@
       photoInput.addEventListener("change", () => {
         addIncomingFilesToCompose(photoInput.files, { resetNativeInput: !canConstructDataTransfer });
       });
-      composeForm.addEventListener("submit", (event) => {
+      composeForm.addEventListener("submit", async (event) => {
         if (isComposeSubmitting) {
           event.preventDefault();
           return;
@@ -3959,6 +3959,53 @@
           setUploadStatus("Дождитесь подготовки фото к отправке.", "error");
           return;
         }
+
+        const editIdInput = document.getElementById("edit-message-id");
+        const isEditMode = editIdInput instanceof HTMLInputElement && editIdInput.value.trim() !== "";
+        const isScheduled = !!scheduledAtInput.value;
+
+        if (!isEditMode && !isScheduled) {
+          const hasText = (messageInput.value || "").trim().length > 0;
+          const hasFiles = selectedEntries.length > 0;
+          if (!hasText && !hasFiles) {
+            event.preventDefault();
+            return;
+          }
+          event.preventDefault();
+          event.stopPropagation();
+
+          isComposeSubmitting = true;
+          sendBtn.disabled = true;
+          scheduleBtnMobile.disabled = true;
+
+          const asyncUrl = (composeForm.action || "").replace(/\/send\b([^-]|$)/, "/send-async$1");
+          const formData = new FormData(composeForm);
+
+          try {
+            const resp = await fetch(asyncUrl, {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+            });
+            if (!resp.ok) throw new Error(`http_${resp.status}`);
+            const data = await resp.json();
+            if (!data.ok) throw new Error(data.error || "send_failed");
+
+            if (typeof window.__chatInsertOptimisticMessage === "function") {
+              window.__chatInsertOptimisticMessage(data.message);
+            }
+            clearCompose();
+          } catch (_) {
+            composeForm.submit();
+          } finally {
+            isComposeSubmitting = false;
+            sendBtn.disabled = false;
+            scheduleBtnMobile.disabled = false;
+            syncSendVisibility();
+          }
+          return;
+        }
+
         isComposeSubmitting = true;
         sendBtn.disabled = true;
         scheduleBtnMobile.disabled = true;
@@ -6491,6 +6538,22 @@
         return true;
       };
       applyMarkdownFormattingToExistingBubbles();
+
+      window.__chatInsertOptimisticMessage = (row) => {
+        if (!(messagesWrap instanceof HTMLElement)) return;
+        const emptyNode = messagesWrap.querySelector(".empty");
+        if (emptyNode) emptyNode.remove();
+        const bubble = createMessageBubbleNode(row);
+        if (!(bubble instanceof HTMLElement)) return;
+        messagesWrap.appendChild(bubble);
+        const msgId = Number(row.id || 0);
+        if (msgId > 0 && msgId > currentLastMessageId) {
+          currentLastMessageId = msgId;
+          seenMessageIds.add(msgId);
+        }
+        snapBottomOnce();
+      };
+
       let deferredLastMessageId = 0;
       let deferredIncomingCount = 0;
 

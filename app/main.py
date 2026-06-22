@@ -98,6 +98,9 @@ from app.manager_bridge import (
     send_admin_chat_message,
     send_admin_quick_reply,
     update_chat_message_text,
+    queue_only_send_text,
+    queue_only_send_media_group,
+    get_conversation_by_id,
     unpin_conversation_for_user,
     DEFAULT_BUSINESS_TIMEZONE,
     DEFAULT_OFFHOURS_COOLDOWN_SECONDS,
@@ -4668,6 +4671,176 @@ async def admin_chats_send_message(
     if view_value == "chat":
         redirect_url += "&view=chat"
     return RedirectResponse(url=redirect_url, status_code=302)
+
+
+async def _handle_send_async(
+    *,
+    db: Session,
+    conversation_id: int,
+    workspace_id: int,
+    text_value: str,
+    image_paths: list[str],
+) -> JSONResponse:
+    """Enqueue a message without calling Max API. Returns JSON for optimistic UI insert."""
+    conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
+    if conversation is None:
+        return JSONResponse({"ok": False, "error": "Диалог не найден"}, status_code=404)
+    if not text_value and not image_paths:
+        return JSONResponse({"ok": False, "error": "Нет содержимого"}, status_code=400)
+    if image_paths:
+        await queue_only_send_media_group(
+            db,
+            conversation_id=conversation_id,
+            target_chat_id=conversation.chat_id,
+            target_user_id=conversation.customer_account_id,
+            photo_urls=image_paths,
+            text=text_value,
+            text_format="markdown",
+            source="bot_system",
+        )
+    else:
+        await queue_only_send_text(
+            db,
+            conversation_id=conversation_id,
+            target_chat_id=conversation.chat_id,
+            target_user_id=conversation.customer_account_id,
+            text=text_value,
+            text_format="markdown",
+            source="bot_system",
+        )
+    msg = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.conversation_id == conversation_id,
+            ChatMessage.direction == "bot",
+        )
+        .order_by(ChatMessage.id.desc())
+        .first()
+    )
+    msg_id = int(msg.id) if msg else 0
+    created_at = getattr(msg, "created_at", None)
+    return JSONResponse({
+        "ok": True,
+        "message": {
+            "id": msg_id,
+            "text": text_value,
+            "direction": "bot",
+            "source": "bot_system",
+            "delivery_state": "queued",
+            "is_read_by_customer": False,
+            "image_urls": image_paths,
+            "image_url": image_paths[0] if image_paths else "",
+            "created_at_label": _to_moscow_chat_label(created_at),
+            "is_scheduled_pending": False,
+            "delivery_next_retry_at": "",
+            "delivery_error": "",
+        },
+    })
+
+
+@app.post("/admin/chats/{conversation_id}/send-async")
+async def admin_chats_send_message_async(
+    request: Request,
+    conversation_id: int,
+    text: str = Form(""),
+    photos: list[UploadFile] = File(default=[]),
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="admin_send",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 5),
+    )
+    workspace_id = DEFAULT_WORKSPACE_ID
+    text_value = text.strip()
+    uploads_to_validate = [item for item in photos if item and item.filename]
+    if not uploads_to_validate:
+        form_data = await request.form()
+        legacy_photo = form_data.get("photo")
+        if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
+            uploads_to_validate = [legacy_photo]
+    validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
+    image_paths = _store_uploaded_images(validated_uploads) if validated_uploads else []
+    return await _handle_send_async(
+        db=db,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+        text_value=text_value,
+        image_paths=image_paths,
+    )
+
+
+@app.post("/app/chats/{conversation_id}/send-async")
+async def app_chats_send_message_async(
+    request: Request,
+    conversation_id: int,
+    text: str = Form(""),
+    photos: list[UploadFile] = File(default=[]),
+    workspace_id: int | None = None,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="admin_send",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 5),
+    )
+    resolved_workspace_id, _scoped_workspace, _is_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    text_value = text.strip()
+    uploads_to_validate = [item for item in photos if item and item.filename]
+    if not uploads_to_validate:
+        form_data = await request.form()
+        legacy_photo = form_data.get("photo")
+        if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
+            uploads_to_validate = [legacy_photo]
+    validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
+    image_paths = _store_uploaded_images(validated_uploads) if validated_uploads else []
+    return await _handle_send_async(
+        db=db,
+        conversation_id=conversation_id,
+        workspace_id=resolved_workspace_id,
+        text_value=text_value,
+        image_paths=image_paths,
+    )
+
+
+@app.post("/mini/manager/chats/{conversation_id}/send-async")
+async def mini_manager_chats_send_message_async(
+    request: Request,
+    conversation_id: int,
+    token: str = Form(""),
+    text: str = Form(""),
+    photos: list[UploadFile] = File(default=[]),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    _check_rate_limit_or_raise(
+        request,
+        scope="admin_send",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 5),
+    )
+    text_value = text.strip()
+    uploads_to_validate = [item for item in photos if item and item.filename]
+    if not uploads_to_validate:
+        form_data = await request.form()
+        legacy_photo = form_data.get("photo")
+        if isinstance(legacy_photo, UploadFile) and legacy_photo.filename:
+            uploads_to_validate = [legacy_photo]
+    validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
+    image_paths = _store_uploaded_images(validated_uploads) if validated_uploads else []
+    return await _handle_send_async(
+        db=db,
+        conversation_id=conversation_id,
+        workspace_id=workspace_id,
+        text_value=text_value,
+        image_paths=image_paths,
+    )
 
 
 @app.post("/admin/chats/{conversation_id}/quick-reply", response_class=RedirectResponse)
