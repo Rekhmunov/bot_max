@@ -1055,6 +1055,38 @@
     .compose-upload-status.ok {
       color: #2f8a52;
     }
+    .compose-input-wrap {
+      position: relative;
+    }
+    .compose-clear-btn {
+      display: none;
+      position: absolute;
+      bottom: 7px;
+      right: 10px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 0;
+      background: rgba(88, 99, 125, 0.3);
+      color: #fff;
+      font-size: 13px;
+      line-height: 1;
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      z-index: 1;
+      transition: background-color var(--motion-fast) var(--ease-standard);
+    }
+    .compose-clear-btn.is-visible {
+      display: inline-flex;
+    }
+    .compose-clear-btn:hover {
+      background: rgba(88, 99, 125, 0.55);
+    }
+    .compose textarea.has-clear-btn {
+      padding-right: 32px;
+    }
     .media-lightbox {
       position: fixed;
       inset: 0;
@@ -1997,7 +2029,7 @@
       .emoji-wrap {
         display: none;
       }
-      #message-input {
+      .compose-input-wrap {
         grid-column: 2;
         grid-row: auto;
       }
@@ -2893,13 +2925,22 @@
                   aria-label="Популярные смайлики"
                 ></div>
               </div>
-              <textarea
-                id="message-input"
-                name="text"
-                autocomplete="off"
-                rows="1"
-                placeholder="Введите сообщение или / для быстрых ответов"
-              ></textarea>
+              <div class="compose-input-wrap">
+                <textarea
+                  id="message-input"
+                  name="text"
+                  autocomplete="off"
+                  rows="1"
+                  placeholder="Введите сообщение или / для быстрых ответов"
+                ></textarea>
+                <button
+                  type="button"
+                  id="compose-clear-btn"
+                  class="compose-clear-btn"
+                  title="Очистить"
+                  aria-label="Очистить сообщение"
+                >×</button>
+              </div>
               <div class="compose-actions-right">
                 <button class="send-btn" id="send-btn" type="submit" title="Отправить" aria-label="Отправить">
                   <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -3163,6 +3204,7 @@
 
     (() => {
       const messageInput = document.getElementById("message-input");
+      const clearBtn = document.getElementById("compose-clear-btn");
       const attachBtn = document.getElementById("attach-btn");
       const photoInput = document.getElementById("compose-photo-input");
       const emojiBtn = document.getElementById("emoji-btn");
@@ -3259,6 +3301,13 @@
         const canSend = visible && isUploadReady;
         sendBtn.disabled = !canSend;
         scheduleBtnMobile.disabled = !canSend;
+        const hasText = (messageInput.value || "").length > 0;
+        if (clearBtn) {
+          clearBtn.classList.toggle("is-visible", hasText);
+        }
+        if (messageInput) {
+          messageInput.classList.toggle("has-clear-btn", hasText);
+        }
       };
       const setUploadStatus = (text, kind = "") => {
         uploadStatus.textContent = String(text || "");
@@ -3285,6 +3334,56 @@
         });
         photoInput.files = dt.files;
       };
+
+      const clearCompose = () => {
+        messageInput.value = "";
+        selectedEntries = [];
+        if (canConstructDataTransfer) syncNativeFiles();
+        else photoInput.value = "";
+        clearPreviews();
+        setUploadStatus("");
+        syncSendVisibility();
+        messageInput.focus();
+        if (typeof window.__chatResizeMessageInput === "function") {
+          window.__chatResizeMessageInput();
+        }
+      };
+
+      if (clearBtn) {
+        clearBtn.addEventListener("click", clearCompose);
+      }
+
+      window.__chatLoadQuickReplyMedia = async (urls) => {
+        selectedEntries = [];
+        if (canConstructDataTransfer) syncNativeFiles();
+        else photoInput.value = "";
+        clearPreviews();
+        if (!urls || !urls.length) return;
+        isUploadReady = false;
+        setUploadStatus("Загружаем медиа...");
+        syncSendVisibility();
+        const files = [];
+        for (const url of urls) {
+          try {
+            const resp = await fetch(url, { cache: "force-cache" });
+            if (!resp.ok) continue;
+            const blob = await resp.blob();
+            const mime = blob.type || "image/jpeg";
+            const rawName = decodeURIComponent(url.split("/").pop().split("?")[0] || "image.jpg");
+            files.push(new File([blob], rawName, { type: mime }));
+          } catch (_) {
+            // ignore individual fetch failures
+          }
+        }
+        isUploadReady = true;
+        if (files.length) {
+          addIncomingFilesToCompose(files);
+        } else {
+          setUploadStatus(urls.length > 0 ? "Не удалось загрузить медиа" : "");
+          syncSendVisibility();
+        }
+      };
+
       const moveEntry = (fromIdx, toIdx) => {
         if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
         const [moved] = selectedEntries.splice(fromIdx, 1);
@@ -4460,13 +4559,18 @@
         menu.innerHTML = "";
       };
 
-      const applyCommand = (cmd) => {
-        input.value = "/" + cmd;
+      const applyQuickReply = (item) => {
+        input.value = String(item.text || "");
         input.focus();
         if (typeof window.__chatResizeMessageInput === "function") {
           window.__chatResizeMessageInput();
         }
+        input.dispatchEvent(new Event("input", { bubbles: true }));
         hideMenu();
+        const mediaUrls = Array.isArray(item.media_urls) ? item.media_urls : [];
+        if (mediaUrls.length > 0 && typeof window.__chatLoadQuickReplyMedia === "function") {
+          window.__chatLoadQuickReplyMedia(mediaUrls);
+        }
       };
 
       const renderMenu = (items) => {
@@ -4485,7 +4589,9 @@
         const target = e.target.closest(".slash-item");
         if (!target) return;
         e.preventDefault();
-        applyCommand(target.dataset.cmd || "");
+        const cmd = target.dataset.cmd || "";
+        const found = options.find((o) => o.command === cmd);
+        if (found) applyQuickReply(found);
       });
 
       input.addEventListener("input", () => {
@@ -4495,7 +4601,11 @@
           return;
         }
         const needle = val.slice(1).trim().toLowerCase();
-        const filtered = options.filter((opt) => opt.command.toLowerCase().includes(needle)).slice(0, 30);
+        const filtered = options.filter(
+          (opt) =>
+            opt.command.toLowerCase().includes(needle) ||
+            (opt.title || "").toLowerCase().includes(needle)
+        ).slice(0, 30);
         renderMenu(filtered);
       });
 
@@ -4506,7 +4616,7 @@
         }
         if (e.key === "Enter" && menu.style.display === "block" && visible.length === 1) {
           e.preventDefault();
-          applyCommand(visible[0].command);
+          applyQuickReply(visible[0]);
         }
       });
 
