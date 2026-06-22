@@ -2743,6 +2743,43 @@ def _workspace_quick_replies_count(db: Session, *, workspace_id: int) -> int:
     return db.query(QuickReply).filter(QuickReply.workspace_id == workspace_id).count()
 
 
+def _build_quick_options_for_compose(
+    db: Session,
+    *,
+    workspace_id: int,
+    owner_user_id: int,
+) -> list[dict]:
+    """Return quick reply data for the slash-menu compose fill feature.
+
+    Each item includes ``text`` and ``media_urls`` so the frontend can populate
+    the message input and media preview without a separate API round-trip.
+    """
+    replies = _attach_media_to_quick_replies(
+        db,
+        list_active_quick_replies(db, workspace_id=workspace_id, owner_user_id=owner_user_id),
+    )
+    result: list[dict] = []
+    for item in replies:
+        media_items: list = getattr(item, "media_items", None) or []
+        media_urls: list[str] = []
+        if media_items:
+            for row in media_items:
+                path = str(row.media_path or "").strip()
+                if path:
+                    media_urls.append(path)
+        elif item.image_path:
+            path = str(item.image_path or "").strip()
+            if path:
+                media_urls.append(path)
+        result.append({
+            "command": item.command,
+            "title": item.title,
+            "text": item.text or "",
+            "media_urls": media_urls,
+        })
+    return result
+
+
 def _manager_ids_from_settings_row(settings_row: BotSettings | None) -> set[str]:
     if settings_row is None:
         return set()
@@ -9740,14 +9777,11 @@ async def _render_chat_workspace(
         "message": op_message,
         "error": op_error,
         "mobile_chat_view": mobile_chat_view,
-        "admin_quick_options": [
-            {"command": item.command, "title": item.title}
-            for item in list_active_quick_replies(
-                db,
-                workspace_id=workspace_id,
-                owner_user_id=quick_reply_owner_id,
-            )
-        ],
+        "admin_quick_options": _build_quick_options_for_compose(
+            db,
+            workspace_id=workspace_id,
+            owner_user_id=quick_reply_owner_id,
+        ),
         "chat_folders": [
             {
                 "id": folder.id,
