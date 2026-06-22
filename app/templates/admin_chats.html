@@ -2915,6 +2915,7 @@
             <div class="compose-media-preview" id="compose-media-preview" aria-live="polite"></div>
             <div class="compose-upload-status" id="compose-upload-status" aria-live="polite"></div>
             <input type="hidden" id="scheduled-at-input" name="schedule_at" value="" />
+            <input type="hidden" id="prefilled-media-input" name="prefilled_media_paths" value="" />
             {% if allow_message_edit_actions %}
               <div id="edit-mode-hint" class="thread-meta" style="display:none; padding: 0 4px;">
                 Режим редактирования сообщения
@@ -3178,8 +3179,9 @@
       const scheduleHint = document.getElementById("schedule-hint");
       const scheduleSubmitBtn = document.getElementById("schedule-submit-btn");
       const scheduledAtInput = document.getElementById("scheduled-at-input");
+      const prefilledMediaInput = document.getElementById("prefilled-media-input");
       const composeForm = document.querySelector(".compose form");
-      if (!messageInput || !attachBtn || !photoInput || !sendBtn || !scheduleBtnMobile || !scheduleTriggerMenu || !schedulePopup || !scheduleDateInput || !scheduleTimeInput || !scheduleHint || !scheduleSubmitBtn || !scheduledAtInput || !composeForm || !mediaPreview || !uploadStatus) return;
+      if (!messageInput || !attachBtn || !photoInput || !sendBtn || !scheduleBtnMobile || !scheduleTriggerMenu || !schedulePopup || !scheduleDateInput || !scheduleTimeInput || !scheduleHint || !scheduleSubmitBtn || !scheduledAtInput || !prefilledMediaInput || !composeForm || !mediaPreview || !uploadStatus) return;
       const computeMessageInputMinHeight = () => {
         const styles = window.getComputedStyle(messageInput);
         const lineHeight = Number.parseFloat(styles.lineHeight || "") || Number.parseFloat(styles.fontSize || "") || 16;
@@ -3279,11 +3281,18 @@
         if (!canConstructDataTransfer) return;
         const dt = new DataTransfer();
         selectedEntries.forEach((entry) => {
-          if (entry.file instanceof File) {
+          if (entry.kind === "file" && entry.file instanceof File) {
             dt.items.add(entry.file);
           }
         });
         photoInput.files = dt.files;
+      };
+      const syncPrefilledMediaInput = () => {
+        const mediaUrls = selectedEntries
+          .filter((entry) => entry.kind === "prefilled")
+          .map((entry) => String(entry.url || "").trim())
+          .filter((value) => value.length > 0);
+        prefilledMediaInput.value = mediaUrls.length ? JSON.stringify(mediaUrls) : "";
       };
       const moveEntry = (fromIdx, toIdx) => {
         if (fromIdx < 0 || toIdx < 0 || fromIdx === toIdx) return;
@@ -3294,23 +3303,30 @@
       const renderPreview = () => {
         clearPreviews();
         if (!selectedEntries.length) {
+          syncPrefilledMediaInput();
           setUploadStatus("");
           syncSendVisibility();
           return;
         }
         selectedEntries.forEach((entry, idx) => {
-          const file = entry.file;
           const token = String(entry.token || "");
-          if (!(file instanceof File)) return;
+          const isFileEntry = entry.kind === "file" && entry.file instanceof File;
+          const prefilledUrl = String(entry.url || "").trim();
+          if (!isFileEntry && !prefilledUrl) return;
           const chip = document.createElement("div");
           chip.className = "compose-media-chip";
           chip.setAttribute("draggable", "true");
           chip.dataset.token = token;
           const img = document.createElement("img");
-          const objectUrl = URL.createObjectURL(file);
-          fileViewUrls.push(objectUrl);
-          img.src = objectUrl;
-          img.alt = file.name || `photo-${idx + 1}`;
+          if (isFileEntry) {
+            const objectUrl = URL.createObjectURL(entry.file);
+            fileViewUrls.push(objectUrl);
+            img.src = objectUrl;
+            img.alt = entry.file.name || `photo-${idx + 1}`;
+          } else {
+            img.src = prefilledUrl;
+            img.alt = String(entry.name || "") || `photo-${idx + 1}`;
+          }
           chip.appendChild(img);
           const removeBtn = document.createElement("button");
           removeBtn.type = "button";
@@ -3350,6 +3366,7 @@
           mediaPreview.appendChild(chip);
         });
         mediaPreview.classList.add("is-visible");
+        syncPrefilledMediaInput();
         setUploadStatus(`Выбрано файлов: ${selectedEntries.length}`, "ok");
         syncSendVisibility();
       };
@@ -3389,9 +3406,9 @@
         }
         const existingTokens = new Set(selectedEntries.map((entry) => String(entry.token || "")));
         validated.forEach((file) => {
-          const token = `${file.name}|${file.size}|${file.lastModified}`;
+          const token = `file:${file.name}|${file.size}|${file.lastModified}`;
           if (existingTokens.has(token)) return;
-          selectedEntries.push({ file, token });
+          selectedEntries.push({ kind: "file", file, token });
           existingTokens.add(token);
         });
         syncNativeFiles();
@@ -3402,6 +3419,43 @@
         renderPreview();
         return true;
       };
+      const addPrefilledMediaToCompose = (incomingUrls, { replaceExistingPrefilled = true } = {}) => {
+        const normalizedUrls = Array.from(incomingUrls || [])
+          .map((value) => String(value || "").trim())
+          .filter((value) => value.length > 0);
+        if (replaceExistingPrefilled) {
+          selectedEntries = selectedEntries.filter((entry) => entry.kind !== "prefilled");
+        }
+        const existingTokens = new Set(selectedEntries.map((entry) => String(entry.token || "")));
+        normalizedUrls.forEach((urlValue, idx) => {
+          const token = `prefilled:${urlValue}`;
+          if (existingTokens.has(token)) return;
+          selectedEntries.push({
+            kind: "prefilled",
+            token,
+            url: urlValue,
+            name: `quick-image-${idx + 1}`,
+          });
+          existingTokens.add(token);
+        });
+        syncNativeFiles();
+        isUploadReady = true;
+        renderPreview();
+      };
+      const applyQuickReplyPrefill = (option) => {
+        const nextText = String(option?.text || "");
+        const nextMediaUrls = Array.isArray(option?.media_urls) ? option.media_urls : [];
+        messageInput.value = nextText;
+        addPrefilledMediaToCompose(nextMediaUrls, { replaceExistingPrefilled: true });
+        messageInput.focus();
+        if (messageInput instanceof HTMLTextAreaElement) {
+          const caret = messageInput.value.length;
+          messageInput.setSelectionRange(caret, caret);
+        }
+        resizeMessageInput();
+        syncSendVisibility();
+      };
+      window.__chatApplyQuickReplyPrefill = applyQuickReplyPrefill;
       const extractImageFilesFromClipboard = (clipboardData) => {
         if (!clipboardData) return [];
         const prepared = [];
@@ -3588,6 +3642,7 @@
         selectedEntries = [];
         photoInput.value = "";
         syncNativeFiles();
+        syncPrefilledMediaInput();
         clearPreviews();
         setUploadStatus("");
         isUploadReady = true;
@@ -4461,10 +4516,15 @@
       };
 
       const applyCommand = (cmd) => {
-        input.value = "/" + cmd;
-        input.focus();
-        if (typeof window.__chatResizeMessageInput === "function") {
-          window.__chatResizeMessageInput();
+        const selected = options.find((item) => String(item.command || "") === String(cmd || ""));
+        if (typeof window.__chatApplyQuickReplyPrefill === "function" && selected) {
+          window.__chatApplyQuickReplyPrefill(selected);
+        } else {
+          input.value = "/" + cmd;
+          input.focus();
+          if (typeof window.__chatResizeMessageInput === "function") {
+            window.__chatResizeMessageInput();
+          }
         }
         hideMenu();
       };
