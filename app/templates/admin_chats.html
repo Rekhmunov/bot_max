@@ -4089,11 +4089,10 @@
             if (typeof window.__chatInsertOptimisticMessage === "function") {
               window.__chatInsertOptimisticMessage(data.message);
             }
-          } catch (_) {
+          } catch (err) {
+            console.error("[send-async] failed:", String(err), "url:", asyncUrl);
             messageInput.value = savedText;
             syncSendVisibility();
-            composeForm.setAttribute(SOFT_NAV_ATTR, "");
-            composeForm.submit();
           } finally {
             isComposeSubmitting = false;
             sendBtn.disabled = false;
