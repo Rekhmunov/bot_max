@@ -2739,72 +2739,6 @@ def _chat_scope_quick_reply_owner_id(
     return 0
 
 
-def _quick_reply_media_paths_for_compose(
-    db: Session,
-    *,
-    quick_reply: QuickReply,
-) -> list[str]:
-    media_paths = [
-        str(item).strip()
-        for item in get_quick_reply_media_paths(db, quick_reply_id=int(quick_reply.id))
-        if str(item).strip()
-    ]
-    if not media_paths:
-        legacy_path = str(getattr(quick_reply, "image_path", "") or "").strip()
-        if legacy_path:
-            media_paths.append(legacy_path)
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for item in media_paths:
-        if item in seen:
-            continue
-        seen.add(item)
-        deduped.append(item)
-    return deduped
-
-
-def _safe_json_list(raw: str) -> list:
-    try:
-        parsed = json.loads(raw or "[]")
-    except Exception:
-        return []
-    return parsed if isinstance(parsed, list) else []
-
-
-def _resolve_prefilled_quick_reply_media_paths(
-    db: Session,
-    *,
-    raw_value: str,
-    workspace_id: int,
-    owner_user_id: int,
-) -> list[str]:
-    requested_values = [
-        str(item).strip()
-        for item in _safe_json_list(raw_value)
-        if isinstance(item, str) and str(item).strip()
-    ]
-    if not requested_values:
-        return []
-    allowed_values: set[str] = set()
-    for quick_reply in list_active_quick_replies(
-        db,
-        workspace_id=int(workspace_id),
-        owner_user_id=int(owner_user_id or 0),
-    ):
-        for media_path in _quick_reply_media_paths_for_compose(db, quick_reply=quick_reply):
-            allowed_values.add(media_path)
-    if not allowed_values:
-        return []
-    resolved: list[str] = []
-    seen: set[str] = set()
-    for item in requested_values:
-        if item not in allowed_values or item in seen:
-            continue
-        seen.add(item)
-        resolved.append(item)
-    return resolved
-
-
 def _workspace_quick_replies_count(db: Session, *, workspace_id: int) -> int:
     return db.query(QuickReply).filter(QuickReply.workspace_id == workspace_id).count()
 
@@ -4609,7 +4543,6 @@ async def admin_chats_send_message(
     text: str = Form(""),
     edit_message_id: int | None = Form(default=None),
     photos: list[UploadFile] = File(default=[]),
-    prefilled_media_paths: str = Form(""),
     q: str = Form(""),
     view: str = Form(""),
     schedule_at: str = Form(""),
@@ -4634,14 +4567,6 @@ async def admin_chats_send_message(
     validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
     if validated_uploads:
         image_paths = _store_uploaded_images(validated_uploads)
-    for media_path in _resolve_prefilled_quick_reply_media_paths(
-        db,
-        raw_value=prefilled_media_paths,
-        workspace_id=int(workspace_id),
-        owner_user_id=0,
-    ):
-        if media_path not in image_paths:
-            image_paths.append(media_path)
 
     if edit_message_id is not None:
         updated = None
@@ -8444,7 +8369,6 @@ async def app_chats_send_message(
     text: str = Form(""),
     edit_message_id: int | None = Form(default=None),
     photos: list[UploadFile] = File(default=[]),
-    prefilled_media_paths: str = Form(""),
     q: str = Form(""),
     view: str = Form(""),
     schedule_at: str = Form(""),
@@ -8476,15 +8400,6 @@ async def app_chats_send_message(
             uploads_to_validate = [legacy_photo]
     validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
     image_paths = _store_uploaded_images(validated_uploads)
-    quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
-    for media_path in _resolve_prefilled_quick_reply_media_paths(
-        db,
-        raw_value=prefilled_media_paths,
-        workspace_id=int(workspace_id),
-        owner_user_id=int(quick_reply_owner_id or 0),
-    ):
-        if media_path not in image_paths:
-            image_paths.append(media_path)
 
     if edit_message_id is not None:
         updated = None
@@ -8504,6 +8419,7 @@ async def app_chats_send_message(
         return RedirectResponse(url=f"{redirect_url}{workspace_qs}", status_code=302)
 
     if text_value.startswith("/") and not image_paths:
+        quick_reply_owner_id = _quick_reply_owner_user_id(current_user)
         sent_ok, quick_error = await send_admin_quick_reply(
             db=db,
             conversation_id=conversation_id,
@@ -9813,21 +9729,6 @@ async def _render_chat_workspace(
         current_user=ui.get("current_user") if isinstance(ui.get("current_user"), ServiceUser) else None,
         manager_claims=ui.get("manager_claims") if isinstance(ui.get("manager_claims"), dict) else None,
     )
-    quick_reply_options = []
-    for item in list_active_quick_replies(
-        db,
-        workspace_id=workspace_id,
-        owner_user_id=quick_reply_owner_id,
-    ):
-        quick_reply_options.append(
-            {
-                "command": str(item.command or ""),
-                "title": str(item.title or ""),
-                "text": str(item.text or ""),
-                "media_urls": _quick_reply_media_paths_for_compose(db, quick_reply=item),
-            }
-        )
-
     context: dict = {
         "request": request,
         "threads": threads,
@@ -9839,7 +9740,14 @@ async def _render_chat_workspace(
         "message": op_message,
         "error": op_error,
         "mobile_chat_view": mobile_chat_view,
-        "admin_quick_options": quick_reply_options,
+        "admin_quick_options": [
+            {"command": item.command, "title": item.title}
+            for item in list_active_quick_replies(
+                db,
+                workspace_id=workspace_id,
+                owner_user_id=quick_reply_owner_id,
+            )
+        ],
         "chat_folders": [
             {
                 "id": folder.id,
@@ -10405,7 +10313,6 @@ async def manager_mini_send_message(
     token: str,
     text: str = Form(""),
     photos: list[UploadFile] = File(default=[]),
-    prefilled_media_paths: str = Form(""),
     q: str = Form(""),
     view: str = Form(""),
     schedule_at: str = Form(""),
@@ -10429,17 +10336,9 @@ async def manager_mini_send_message(
             uploads_to_validate = [legacy_photo]
     validated_uploads = await _read_and_validate_uploads(uploads_to_validate)
     image_paths = _store_uploaded_images(validated_uploads)
-    quick_reply_owner_id = _chat_scope_quick_reply_owner_id(manager_claims=claims)
-    for media_path in _resolve_prefilled_quick_reply_media_paths(
-        db,
-        raw_value=prefilled_media_paths,
-        workspace_id=int(workspace_id),
-        owner_user_id=int(quick_reply_owner_id or 0),
-    ):
-        if media_path not in image_paths:
-            image_paths.append(media_path)
 
     if text_value.startswith("/") and not image_paths:
+        quick_reply_owner_id = _chat_scope_quick_reply_owner_id(manager_claims=claims)
         sent_ok, quick_error = await send_admin_quick_reply(
             db=db,
             conversation_id=conversation_id,
