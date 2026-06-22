@@ -997,9 +997,12 @@
       gap: 6px;
       margin-top: 2px;
       overflow-x: auto;
+      overflow-y: hidden;
       padding-bottom: 2px;
       min-width: 0;
-      max-width: 100%;
+      width: 100%;
+      box-sizing: border-box;
+      flex-wrap: nowrap;
     }
     .compose-media-preview.is-visible {
       display: flex;
@@ -1063,16 +1066,18 @@
       gap: 6px;
       margin-top: 4px;
       min-width: 0;
-      max-width: 100%;
-      overflow: hidden;
+      width: 100%;
+      box-sizing: border-box;
     }
     .compose-qr-media-chips {
       display: flex;
       gap: 6px;
       overflow-x: auto;
+      overflow-y: hidden;
       flex: 1;
       min-width: 0;
       padding-bottom: 2px;
+      flex-wrap: nowrap;
     }
     .compose-qr-chip {
       width: 52px;
@@ -1240,7 +1245,10 @@
       position: sticky;
       bottom: var(--keyboard-offset, 0px);
       z-index: 6;
-      overflow: hidden;
+    }
+    .compose form {
+      overflow-x: hidden;
+      min-width: 0;
     }
     .compose-row {
       display: grid;
@@ -2073,9 +2081,21 @@
         bottom: var(--keyboard-offset, 0px);
         padding-bottom: max(10px, env(safe-area-inset-bottom));
       }
+      .compose form {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        overflow-x: hidden;
+      }
+      .compose-qr-media  { order: 1; }
+      .compose-media-preview { order: 2; }
+      .compose-upload-status { order: 3; }
+      #edit-mode-hint    { order: 4; }
+      #slash-menu        { order: 5; }
       .compose-row {
         grid-template-columns: auto minmax(0, 1fr) auto;
         align-items: end;
+        order: 6;
       }
       .attach-wrap {
         grid-column: 1;
