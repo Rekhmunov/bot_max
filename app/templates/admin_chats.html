@@ -3336,6 +3336,11 @@
       };
 
       const clearCompose = () => {
+        if (_mediaLoadAbortController) {
+          _mediaLoadAbortController.abort();
+          _mediaLoadAbortController = null;
+        }
+        isUploadReady = true;
         messageInput.value = "";
         selectedEntries = [];
         if (canConstructDataTransfer) syncNativeFiles();
@@ -3353,7 +3358,13 @@
         clearBtn.addEventListener("click", clearCompose);
       }
 
+      let _mediaLoadAbortController = null;
+
       window.__chatLoadQuickReplyMedia = async (urls) => {
+        if (_mediaLoadAbortController) _mediaLoadAbortController.abort();
+        _mediaLoadAbortController = new AbortController();
+        const signal = _mediaLoadAbortController.signal;
+
         selectedEntries = [];
         if (canConstructDataTransfer) syncNativeFiles();
         else photoInput.value = "";
@@ -3364,16 +3375,22 @@
         syncSendVisibility();
         const files = [];
         for (const url of urls) {
+          if (signal.aborted) break;
           try {
-            const resp = await fetch(url, { cache: "force-cache" });
+            const resp = await fetch(url, { cache: "force-cache", signal });
             if (!resp.ok) continue;
             const blob = await resp.blob();
             const mime = blob.type || "image/jpeg";
             const rawName = decodeURIComponent(url.split("/").pop().split("?")[0] || "image.jpg");
             files.push(new File([blob], rawName, { type: mime }));
           } catch (_) {
-            // ignore individual fetch failures
+            // ignore individual fetch failures and abort errors
           }
+        }
+        if (signal.aborted) {
+          isUploadReady = true;
+          syncSendVisibility();
+          return;
         }
         isUploadReady = true;
         if (files.length) {
@@ -3984,6 +4001,9 @@
 
           clearCompose();
 
+          const SOFT_NAV_ATTR = "data-soft-nav";
+          composeForm.removeAttribute(SOFT_NAV_ATTR);
+
           try {
             const resp = await fetch(asyncUrl, {
               method: "POST",
@@ -4000,11 +4020,13 @@
           } catch (_) {
             messageInput.value = savedText;
             syncSendVisibility();
+            composeForm.setAttribute(SOFT_NAV_ATTR, "");
             composeForm.submit();
           } finally {
             isComposeSubmitting = false;
             sendBtn.disabled = false;
             scheduleBtnMobile.disabled = false;
+            composeForm.setAttribute(SOFT_NAV_ATTR, "");
             syncSendVisibility();
           }
           return;
