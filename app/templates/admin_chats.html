@@ -998,6 +998,8 @@
       margin-top: 2px;
       overflow-x: auto;
       padding-bottom: 2px;
+      min-width: 0;
+      max-width: 100%;
     }
     .compose-media-preview.is-visible {
       display: flex;
@@ -1060,12 +1062,16 @@
       align-items: center;
       gap: 6px;
       margin-top: 4px;
+      min-width: 0;
+      max-width: 100%;
+      overflow: hidden;
     }
     .compose-qr-media-chips {
       display: flex;
       gap: 6px;
       overflow-x: auto;
       flex: 1;
+      min-width: 0;
       padding-bottom: 2px;
     }
     .compose-qr-chip {
@@ -1234,6 +1240,7 @@
       position: sticky;
       bottom: var(--keyboard-offset, 0px);
       z-index: 6;
+      overflow: hidden;
     }
     .compose-row {
       display: grid;
