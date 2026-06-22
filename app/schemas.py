@@ -203,11 +203,17 @@ class MaxWebhookEvent(BaseModel):
         link = message.get("link") if isinstance(message.get("link"), dict) else {}
         link_message = link.get("message") if isinstance(link.get("message"), dict) else {}
 
+        # For forwarded messages: attachments live under link.message.body
+        link_body = link_message.get("body") if isinstance(link_message.get("body"), dict) else {}
+
         attachments: list[Any] = []
         attachment_candidates = [
             body.get("attachments") if isinstance(body.get("attachments"), list) else None,
             message.get("attachments") if isinstance(message.get("attachments"), list) else None,
             message_data.get("attachments") if isinstance(message_data.get("attachments"), list) else None,
+            # Forwarded messages: Max puts original attachments inside link.message.body
+            link_body.get("attachments") if isinstance(link_body.get("attachments"), list) else None,
+            link_message.get("attachments") if isinstance(link_message.get("attachments"), list) else None,
         ]
         has_structured_message_block = bool(message) or bool(body) or bool(message_data)
         if not has_structured_message_block:
@@ -227,14 +233,17 @@ class MaxWebhookEvent(BaseModel):
             if not isinstance(item, dict):
                 continue
             attachment_type = str(item.get("type") or "").strip().lower()
-            if attachment_type in {"image", "photo", "image_url"}:
+            if attachment_type in {"image", "photo", "image_url", "sticker"}:
                 payload_item = item.get("payload") if isinstance(item.get("payload"), dict) else {}
                 image_candidates: list[str] = []
                 image_url = _pick_first(
                     payload_item.get("url"),
+                    payload_item.get("photo_url"),
+                    payload_item.get("original_url"),
                     payload_item.get("src"),
                     payload_item.get("link"),
                     item.get("url"),
+                    item.get("photo_url"),
                 )
                 if image_url:
                     image_candidates.append(str(image_url))
