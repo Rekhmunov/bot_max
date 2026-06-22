@@ -3980,6 +3980,9 @@
 
           const asyncUrl = (composeForm.action || "").replace(/\/send\b([^-]|$)/, "/send-async$1");
           const formData = new FormData(composeForm);
+          const savedText = messageInput.value;
+
+          clearCompose();
 
           try {
             const resp = await fetch(asyncUrl, {
@@ -3994,8 +3997,9 @@
             if (typeof window.__chatInsertOptimisticMessage === "function") {
               window.__chatInsertOptimisticMessage(data.message);
             }
-            clearCompose();
           } catch (_) {
+            messageInput.value = savedText;
+            syncSendVisibility();
             composeForm.submit();
           } finally {
             isComposeSubmitting = false;
