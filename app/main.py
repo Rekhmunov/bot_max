@@ -10686,6 +10686,19 @@ async def max_webhook(
         # Ignore non-message updates or malformed events without failing webhook delivery.
         return {"ok": True, "ignored": "unsupported_payload"}
 
+    import logging as _logging
+    _wh_log = _logging.getLogger("webhook.debug")
+    if not event.image_urls and event.update_type == "message_created":
+        _message_node = payload.get("message") or {}
+        _link_node = _message_node.get("link") or {}
+        if _link_node:
+            _wh_log.warning(
+                "[FORWARDED_NO_IMAGE] link keys=%s link_message_keys=%s full_payload=%s",
+                list(_link_node.keys()),
+                list((_link_node.get("message") or {}).keys()),
+                payload,
+            )
+
     # Webhook dedup by stable event UID.
     event_uid = event.event_uid_value()
     if event_uid:
