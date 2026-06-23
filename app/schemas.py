@@ -233,7 +233,12 @@ class MaxWebhookEvent(BaseModel):
             if not isinstance(item, dict):
                 continue
             attachment_type = str(item.get("type") or "").strip().lower()
-            if attachment_type in {"image", "photo", "image_url", "sticker"}:
+            _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".heic")
+            _is_file_image = (
+                attachment_type == "file"
+                and str(item.get("filename") or item.get("name") or "").lower().endswith(_IMAGE_EXTS)
+            )
+            if attachment_type in {"image", "photo", "image_url", "sticker"} or _is_file_image:
                 payload_item = item.get("payload") if isinstance(item.get("payload"), dict) else {}
                 image_candidates: list[str] = []
                 image_url = _pick_first(
