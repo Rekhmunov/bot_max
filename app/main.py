@@ -10688,16 +10688,13 @@ async def max_webhook(
 
     import logging as _logging
     _wh_log = _logging.getLogger("webhook.debug")
-    if not event.image_urls and event.update_type == "message_created":
-        _message_node = payload.get("message") or {}
-        _link_node = _message_node.get("link") or {}
-        if _link_node:
-            _wh_log.warning(
-                "[FORWARDED_NO_IMAGE] link keys=%s link_message_keys=%s full_payload=%s",
-                list(_link_node.keys()),
-                list((_link_node.get("message") or {}).keys()),
-                payload,
-            )
+    if event.update_type == "message_created":
+        _wh_log.warning(
+            "[WEBHOOK_MSG] image_urls=%s text=%s full_payload=%s",
+            event.image_urls,
+            repr((event.text or "")[:80]),
+            payload,
+        )
 
     # Webhook dedup by stable event UID.
     event_uid = event.event_uid_value()
