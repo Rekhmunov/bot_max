@@ -4112,8 +4112,12 @@
             const data = await resp.json();
             if (!data.ok) throw new Error(data.error || "send_failed");
 
-            if (typeof window.__chatInsertOptimisticMessage === "function") {
-              window.__chatInsertOptimisticMessage(data.message);
+            try {
+              if (typeof window.__chatInsertOptimisticMessage === "function") {
+                window.__chatInsertOptimisticMessage(data.message);
+              }
+            } catch (_) {
+              // Bubble insert errors must not propagate to outer catch
             }
           } catch (err) {
             console.error("[send-async] failed:", String(err), "url:", asyncUrl);
