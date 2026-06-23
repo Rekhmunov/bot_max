@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.auth import create_manager_mini_token
 from app.config import settings as app_settings
 from app.max_client import MaxClient
+from app.security import safe_json_dumps
 from app.storage import (
     delete_by_public_url,
     iter_local_upload_files,
