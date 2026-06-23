@@ -4096,7 +4096,6 @@
 
           const asyncUrl = (composeForm.action || "").replace(/\/send\b([^-]|$)/, "/send-async$1");
           const formData = new FormData(composeForm);
-          const savedText = messageInput.value;
 
           clearCompose();
 
@@ -4118,8 +4117,6 @@
             }
           } catch (err) {
             console.error("[send-async] failed:", String(err), "url:", asyncUrl);
-            messageInput.value = savedText;
-            syncSendVisibility();
           } finally {
             isComposeSubmitting = false;
             sendBtn.disabled = false;
