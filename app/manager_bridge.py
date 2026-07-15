@@ -2500,101 +2500,26 @@ def _find_recent_outbox_duplicate(
     time_window_seconds: int = 180,
 ) -> OutboxMessage | None:
     """
-    Find a queued/sending outbox row with the same idempotency fingerprint
-    created within the time window.
+    Find a recent duplicate outbox row for the same fingerprint.
 
-    Performance rules (prod measured ~7s/send before fixes):
-    1) Prefer in-process cache (double-click / retries) — no DB.
-    2) Never ORM ORDER BY on this fat table — SQLite may full-scan payload_json.
-    3) Use indexed equality only; fail-open if the lookup is unexpectedly slow
-       so operator send latency stays low even on a bloated outbox.
+    IMPORTANT: never SELECT outbox_messages by idempotency_key on the send path.
+    That table stores multi-MB payload_json blobs; prod measured 5-7s per such
+    SELECT. Fail-open-after-query does not help — the wait already happened.
+
+    Dedup for double-click uses an in-process TTL cache, then a PK fetch by id
+    (always cheap). Adequate for single uvicorn worker.
     """
     fp = str(fingerprint or "").strip()
     if not fp:
         return None
-    window_from = _as_naive_utc(_utc_now() - timedelta(seconds=max(1, int(time_window_seconds or 1))))
     ws = int(workspace_id)
+    _ = time_window_seconds  # reserved if we add a slim fingerprint table later
 
     cached_id = _cached_outbox_fingerprint(workspace_id=ws, fingerprint=fp)
-    if cached_id is not None:
-        cached_row = (
-            db.query(OutboxMessage)
-            .options(
-                load_only(
-                    OutboxMessage.id,
-                    OutboxMessage.workspace_id,
-                    OutboxMessage.state,
-                    OutboxMessage.created_at,
-                    OutboxMessage.idempotency_key,
-                    OutboxMessage.chat_message_id,
-                    OutboxMessage.conversation_id,
-                    OutboxMessage.operation,
-                )
-            )
-            .filter(OutboxMessage.id == cached_id)
-            .first()
-        )
-        if cached_row is not None:
-            state = str(getattr(cached_row, "state", "") or "").strip().lower()
-            if state in {"queued", "sending"}:
-                return cached_row
-
-    if not hasattr(OutboxMessage, "idempotency_key"):
+    if cached_id is None:
         return None
 
-    _ensure_outbox_idempotency_index(db)
-
-    t0 = time.monotonic()
-    try:
-        rows = db.execute(
-            text(
-                "SELECT id, state, created_at "
-                "FROM outbox_messages "
-                "WHERE workspace_id = :ws AND idempotency_key = :fp "
-                "LIMIT 32"
-            ),
-            {"ws": ws, "fp": fp},
-        ).fetchall()
-    except Exception as exc:
-        logger.warning(
-            "[SEND_DIAG] dedupe_query_FAIL err=%s — fail-open (skip dedupe)",
-            f"{type(exc).__name__}: {exc}",
-        )
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        return None
-
-    elapsed = time.monotonic() - t0
-    if elapsed > 0.25:
-        logger.warning(
-            "[SEND_DIAG] dedupe_query_SLOW elapsed=%.3f — fail-open (skip dedupe)",
-            elapsed,
-        )
-        return None
-
-    best_id: int | None = None
-    for row in rows:
-        row_id = int(row[0] or 0)
-        state = str(row[1] or "").strip().lower()
-        if state not in {"queued", "sending"}:
-            continue
-        created_raw = row[2]
-        if created_raw is not None:
-            try:
-                created_at = _as_naive_utc(created_raw)
-            except Exception:
-                created_at = None
-            if created_at is not None and created_at < window_from:
-                continue
-        if best_id is None or row_id > best_id:
-            best_id = row_id
-
-    if best_id is None:
-        return None
-
-    found = (
+    cached_row = (
         db.query(OutboxMessage)
         .options(
             load_only(
@@ -2608,12 +2533,15 @@ def _find_recent_outbox_duplicate(
                 OutboxMessage.operation,
             )
         )
-        .filter(OutboxMessage.id == best_id)
+        .filter(OutboxMessage.id == int(cached_id))
         .first()
     )
-    if found is not None:
-        _remember_outbox_fingerprint(workspace_id=ws, fingerprint=fp, outbox_id=int(found.id))
-    return found
+    if cached_row is None:
+        return None
+    state = str(getattr(cached_row, "state", "") or "").strip().lower()
+    if state not in {"queued", "sending"}:
+        return None
+    return cached_row
 
 
 def _update_chat_message_delivery(
