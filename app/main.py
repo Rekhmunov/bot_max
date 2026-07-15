@@ -3268,6 +3268,27 @@ async def _maintenance_worker_loop() -> None:
 async def startup() -> None:
     global _outbox_worker_task, _maintenance_worker_task
     init_db()
+    import logging as _lg
+    import subprocess
+
+    _blog = _lg.getLogger("bot_max.build")
+    try:
+        _rev = subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd="/var/www/www-root/data/www/bot_max",
+            stderr=subprocess.DEVNULL,
+            text=True,
+        ).strip()
+    except Exception:
+        try:
+            _rev = subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        except Exception:
+            _rev = "unknown"
+    _blog.warning("[BUILD] rev=%s send_diag=1", _rev)
     from app.database import SessionLocal
 
     with SessionLocal() as db:
@@ -4756,6 +4777,14 @@ async def _handle_send_async(
     has_content = bool(text_value or photo_urls)
     if not has_content:
         return JSONResponse({"ok": False, "error": "Нет содержимого"}, status_code=400)
+
+    _log.warning(
+        "[SEND_DIAG] mode=%s n_photos=%s text_len=%s qr_id=%s",
+        "media" if photo_urls else "text",
+        len(photo_urls or []),
+        len(text_value or ""),
+        int(quick_reply_id or 0),
+    )
 
     # Release request-session read txn before waiting. Enqueue in a worker thread
     # with its own Session so SQLite busy-waits cannot stall the event loop

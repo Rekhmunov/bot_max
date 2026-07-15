@@ -2148,6 +2148,27 @@ def _format_delivery_error(result: dict) -> str:
     return f"{human} ({detail_text})"[:2000] if detail_text else human
 
 
+def _timed_commit(db: Session, *, label: str) -> float:
+    """Commit and return seconds spent. Logs SQLITE busy/lock errors explicitly."""
+    import time as _time
+
+    t0 = _time.monotonic()
+    try:
+        db.commit()
+    except Exception as exc:
+        elapsed = _time.monotonic() - t0
+        logger.warning(
+            "[SEND_DIAG] %s commit_FAIL elapsed=%.3f err=%s",
+            label,
+            elapsed,
+            f"{type(exc).__name__}: {exc}",
+        )
+        raise
+    elapsed = _time.monotonic() - t0
+    logger.warning("[SEND_DIAG] %s commit_ok elapsed=%.3f", label, elapsed)
+    return elapsed
+
+
 def _release_db_connection(db: Session) -> None:
     """
     End any open SQLAlchemy transaction on this session.
@@ -2191,24 +2212,47 @@ def _enqueue_outbox_message(
     if resolved_workspace_id is None:
         resolved_workspace_id = DEFAULT_WORKSPACE_ID
     normalized_payload = payload if isinstance(payload, dict) else {}
+    import time as _time
+
+    _te0 = _time.monotonic()
     payload_json = json.dumps(normalized_payload, ensure_ascii=False)
+    payload_bytes = len(payload_json.encode("utf-8", errors="ignore"))
+    logger.warning(
+        "[SEND_DIAG] enqueue json_dumps=%.3f payload_bytes=%s operation=%s",
+        _time.monotonic() - _te0,
+        payload_bytes,
+        str(operation or "").strip().lower(),
+    )
+    _te1 = _time.monotonic()
     fingerprint = _outbox_dedupe_fingerprint(
         operation=operation,
         target_chat_id=target_chat_id,
         target_user_id=target_user_id,
         payload=normalized_payload,
     )
+    logger.warning("[SEND_DIAG] enqueue fingerprint=%.3f", _time.monotonic() - _te1)
     if hasattr(OutboxMessage, "idempotency_fingerprint"):
         idempotency_attr = "idempotency_fingerprint"
     elif hasattr(OutboxMessage, "idempotency_key"):
         idempotency_attr = "idempotency_key"
     else:
         idempotency_attr = ""
-    if idempotency_attr and _recent_outbox_duplicate_exists(
-        db,
-        workspace_id=int(resolved_workspace_id),
-        fingerprint=fingerprint,
-    ):
+    _te2 = _time.monotonic()
+    dedupe_hit = bool(
+        idempotency_attr
+        and _recent_outbox_duplicate_exists(
+            db,
+            workspace_id=int(resolved_workspace_id),
+            fingerprint=fingerprint,
+        )
+    )
+    logger.warning(
+        "[SEND_DIAG] enqueue dedupe_check=%.3f hit=%s",
+        _time.monotonic() - _te2,
+        dedupe_hit,
+    )
+    if dedupe_hit:
+        _te3 = _time.monotonic()
         existing = (
             db.query(OutboxMessage)
             .filter(
@@ -2217,6 +2261,11 @@ def _enqueue_outbox_message(
             )
             .order_by(OutboxMessage.id.desc())
             .all()
+        )
+        logger.warning(
+            "[SEND_DIAG] enqueue dedupe_load_all=%.3f rows=%s",
+            _time.monotonic() - _te3,
+            len(existing),
         )
         for row in existing:
             if idempotency_attr and str(getattr(row, idempotency_attr, "") or "").strip() == fingerprint:
@@ -2251,8 +2300,10 @@ def _enqueue_outbox_message(
         **outbox_kwargs,
     )
     db.add(item)
-    db.commit()
+    _timed_commit(db, label="enqueue_outbox")
+    _te4 = _time.monotonic()
     db.refresh(item)
+    logger.warning("[SEND_DIAG] enqueue refresh=%.3f", _time.monotonic() - _te4)
     logger.info(
         "[OUTBOX_ENQUEUE] created id=%s workspace=%s operation=%s chat_message_id=%s fingerprint=%s",
         int(getattr(item, "id", 0) or 0),
@@ -3306,6 +3357,10 @@ def queue_only_send_text_sync(
     _t0 = _time.monotonic()
     next_retry_at = _as_naive_utc(scheduled_for or _utc_now())
     is_scheduled_message = scheduled_for is not None
+    logger.warning(
+        "[SEND_DIAG] text_start text_len=%s",
+        len(text or ""),
+    )
     msg = _store_chat_message(
         db,
         conversation_id=conversation_id,
@@ -3375,12 +3430,20 @@ def queue_only_send_media_group_sync(
     source: str,
     scheduled_for: datetime | None = None,
 ) -> None:
+    import time as _time
+
+    _t0 = _time.monotonic()
     urls = [str(item).strip() for item in (photo_urls or []) if str(item).strip()]
     if not urls:
         return
     next_retry_at = _as_naive_utc(scheduled_for or _utc_now())
     is_scheduled_message = scheduled_for is not None
     first_image = urls[0]
+    logger.warning(
+        "[SEND_DIAG] media_start n_photos=%s text_len=%s",
+        len(urls),
+        len((text or "").strip()),
+    )
     msg = _store_chat_message(
         db,
         conversation_id=conversation_id,
@@ -3395,19 +3458,42 @@ def queue_only_send_media_group_sync(
         delivery_next_retry_at=next_retry_at,
         is_scheduled_message=is_scheduled_message,
     )
+    logger.warning("[SEND_DIAG] media store=%.3f", _time.monotonic() - _t0)
     attachments = [{"type": "image", "payload": {"url": _to_external_media_url(value)}} for value in urls]
     attachments = [item for item in attachments if str((item.get("payload") or {}).get("url") or "").strip()]
     image_payloads: list[tuple[str, bytes]] = []
+    _tr = _time.monotonic()
+    total_bytes = 0
     for value in urls:
         local_file = _resolve_local_static_media_file(value)
         if local_file is None:
             image_payloads = []
             break
         try:
-            image_payloads.append((local_file.name or "image.jpg", local_file.read_bytes()))
+            content = local_file.read_bytes()
+            total_bytes += len(content)
+            image_payloads.append((local_file.name or "image.jpg", content))
         except Exception:
             image_payloads = []
             break
+    logger.warning(
+        "[SEND_DIAG] media read_files=%.3f n=%s bytes=%s",
+        _time.monotonic() - _tr,
+        len(image_payloads),
+        total_bytes,
+    )
+    _tb = _time.monotonic()
+    encoded_images = (
+        [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads]
+        if image_payloads
+        else []
+    )
+    logger.warning(
+        "[SEND_DIAG] media b64_encode=%.3f n=%s",
+        _time.monotonic() - _tb,
+        len(encoded_images),
+    )
+    _te = _time.monotonic()
     _enqueue_outbox_message(
         db,
         conversation_id=conversation_id,
@@ -3419,14 +3505,19 @@ def queue_only_send_media_group_sync(
             {
                 "text": (text or "").strip() or None,
                 "format": text_format,
-                "images": [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads],
+                "images": encoded_images,
                 # Preserve URL attachments for retry/fallback path.
                 "attachments": attachments,
             }
-            if image_payloads
+            if encoded_images
             else {"text": (text or "").strip() or None, "format": text_format, "attachments": attachments}
         ),
         next_retry_at=next_retry_at,
+    )
+    logger.warning(
+        "[SEND_DIAG] media enqueue=%.3f total=%.3f",
+        _time.monotonic() - _te,
+        _time.monotonic() - _t0,
     )
 
 
@@ -3515,7 +3606,7 @@ def _store_chat_message(
         read_at=(_as_naive_utc(_utc_now()) if is_read_by_customer else None),
     )
     db.add(item)
-    db.commit()
+    _timed_commit(db, label="store_chat_message")
     db.refresh(item)
     linked_media_paths = _chat_message_media_paths(item)
     if linked_media_paths:
