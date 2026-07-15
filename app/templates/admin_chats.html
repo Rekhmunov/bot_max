@@ -992,6 +992,20 @@
       aspect-ratio: 1 / 1;
       border: 0;
     }
+    .bubble-media-item.is-video {
+      cursor: default;
+      grid-column: 1 / -1;
+    }
+    .bubble-media-item video {
+      margin-top: 0;
+      display: block;
+      width: 100%;
+      max-height: 280px;
+      background: #0b1220;
+      aspect-ratio: 16 / 9;
+      object-fit: contain;
+      border: 0;
+    }
     .compose-media-preview {
       display: none;
       gap: 6px;
@@ -2893,9 +2907,17 @@
                 {% if message_images %}
                   <div class="bubble-media-grid">
                     {% for image_url in message_images %}
-                      <a href="{{ image_url }}" class="bubble-media-item" data-media-open>
-                        <img src="{{ image_url }}" alt="image" loading="lazy" />
-                      </a>
+                      {% set media_path = (image_url.split('?')[0]|lower) %}
+                      {% set is_video = ('bot_max_video=1' in image_url) or media_path.endswith('.mp4') or media_path.endswith('.mov') or media_path.endswith('.webm') or media_path.endswith('.mkv') or media_path.endswith('.m4v') %}
+                      {% if is_video %}
+                        <div class="bubble-media-item is-video">
+                          <video src="{{ image_url }}" controls playsinline preload="metadata"></video>
+                        </div>
+                      {% else %}
+                        <a href="{{ image_url }}" class="bubble-media-item" data-media-open>
+                          <img src="{{ image_url }}" alt="image" loading="lazy" />
+                        </a>
+                      {% endif %}
                     {% endfor %}
                   </div>
                 {% endif %}
@@ -6425,6 +6447,19 @@
         const pad = (value) => String(value).padStart(2, "0");
         return `Отправится ${pad(when.getDate())}.${pad(when.getMonth() + 1)}.${when.getFullYear()} ${pad(when.getHours())}:${pad(when.getMinutes())}`;
       };
+      const isVideoMediaUrl = (url) => {
+        const raw = String(url || "").trim();
+        if (!raw) return false;
+        if (raw.includes("bot_max_video=1")) return true;
+        const path = raw.toLowerCase().split("?")[0];
+        return (
+          path.endsWith(".mp4") ||
+          path.endsWith(".mov") ||
+          path.endsWith(".webm") ||
+          path.endsWith(".mkv") ||
+          path.endsWith(".m4v")
+        );
+      };
       const messageRenderMeta = (row) => {
         if (!row || typeof row !== "object") return null;
         const messageId = Number(row.id || 0);
@@ -6526,6 +6561,18 @@
           imageUrls.forEach((url) => {
             const href = String(url || "").trim();
             if (!href) return;
+            if (isVideoMediaUrl(href)) {
+              const mediaItem = document.createElement("div");
+              mediaItem.className = "bubble-media-item is-video";
+              const video = document.createElement("video");
+              video.src = href;
+              video.controls = true;
+              video.playsInline = true;
+              video.preload = "metadata";
+              mediaItem.appendChild(video);
+              mediaGrid.appendChild(mediaItem);
+              return;
+            }
             const mediaItem = document.createElement("a");
             mediaItem.href = href;
             mediaItem.className = "bubble-media-item";

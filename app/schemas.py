@@ -120,6 +120,8 @@ class MaxWebhookEvent(BaseModel):
     start_payload: str | None = Field(default=None)
     read_message_mid: str | None = Field(default=None)
     image_urls: list[str] = Field(default_factory=list)
+    video_urls: list[str] = Field(default_factory=list)
+    video_tokens: list[str] = Field(default_factory=list)
 
     def event_uid_value(self) -> str | None:
         if self.update_id:
@@ -228,18 +230,42 @@ class MaxWebhookEvent(BaseModel):
                 attachments = candidate
                 break
         image_urls: list[str] = []
+        video_urls: list[str] = []
+        video_tokens: list[str] = []
         contact_phone = None
         for item in attachments:
             if not isinstance(item, dict):
                 continue
             attachment_type = str(item.get("type") or "").strip().lower()
+            file_name = str(item.get("filename") or item.get("name") or "").lower()
             _IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".heic")
-            _is_file_image = (
-                attachment_type == "file"
-                and str(item.get("filename") or item.get("name") or "").lower().endswith(_IMAGE_EXTS)
-            )
-            if attachment_type in {"image", "photo", "image_url", "sticker"} or _is_file_image:
-                payload_item = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            _VIDEO_EXTS = (".mp4", ".mov", ".mkv", ".webm", ".m4v")
+            _is_file_image = attachment_type == "file" and file_name.endswith(_IMAGE_EXTS)
+            _is_file_video = attachment_type == "file" and file_name.endswith(_VIDEO_EXTS)
+            payload_item = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            if attachment_type in {"video"} or _is_file_video:
+                # Max video attachments: payload.url and/or payload.token
+                # (token resolved later via GET /videos/{videoToken}).
+                video_url = _pick_first(
+                    payload_item.get("url"),
+                    payload_item.get("video_url"),
+                    payload_item.get("src"),
+                    payload_item.get("link"),
+                    item.get("url"),
+                )
+                if video_url:
+                    normalized_video_url = str(video_url).strip()
+                    if normalized_video_url and normalized_video_url not in video_urls:
+                        video_urls.append(normalized_video_url)
+                video_token = _pick_first(
+                    payload_item.get("token"),
+                    item.get("token"),
+                )
+                if video_token and not video_url:
+                    normalized_token = str(video_token).strip()
+                    if normalized_token and normalized_token not in video_tokens:
+                        video_tokens.append(normalized_token)
+            elif attachment_type in {"image", "photo", "image_url", "sticker"} or _is_file_image:
                 image_candidates: list[str] = []
                 image_url = _pick_first(
                     payload_item.get("url"),
@@ -274,7 +300,6 @@ class MaxWebhookEvent(BaseModel):
                         image_urls.append(normalized_candidate)
             if item.get("type") != "contact":
                 continue
-            payload_item = item.get("payload") if isinstance(item.get("payload"), dict) else {}
             tam_info = payload_item.get("tam_info") if isinstance(payload_item.get("tam_info"), dict) else {}
             contact_phone = _pick_first(
                 payload_item.get("vcf_phone"),
@@ -291,7 +316,7 @@ class MaxWebhookEvent(BaseModel):
             message_data.get("type_message"),
             payload.get("typeMessage"),
         ) or "").strip().lower()
-        if type_message in {"imagemessage", "image_message"}:
+        if type_message in {"imagemessage", "image_message", "videomessage", "video_message"}:
             file_message_data = (
                 message_data.get("fileMessageData")
                 if isinstance(message_data.get("fileMessageData"), dict)
@@ -306,8 +331,12 @@ class MaxWebhookEvent(BaseModel):
             )
             if media_url:
                 normalized_media_url = str(media_url).strip()
-                if normalized_media_url and normalized_media_url not in image_urls:
-                    image_urls.append(normalized_media_url)
+                if normalized_media_url:
+                    if type_message in {"videomessage", "video_message"}:
+                        if normalized_media_url not in video_urls:
+                            video_urls.append(normalized_media_url)
+                    elif normalized_media_url not in image_urls:
+                        image_urls.append(normalized_media_url)
             caption_text = _pick_first(
                 file_message_data.get("caption"),
                 message_data.get("caption"),
@@ -620,4 +649,6 @@ class MaxWebhookEvent(BaseModel):
             start_payload=str(start_payload) if start_payload is not None else None,
             read_message_mid=str(read_message_mid) if read_message_mid is not None else None,
             image_urls=image_urls,
+            video_urls=video_urls,
+            video_tokens=video_tokens,
         )

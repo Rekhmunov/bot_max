@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 import re
 from typing import Any
+from urllib.parse import parse_qs
 from urllib.parse import quote
 from urllib.parse import quote_plus
 from urllib.parse import urlsplit
-from urllib.parse import parse_qs
 import logging
 
 import asyncio
@@ -227,6 +227,76 @@ class MaxClient:
                 "error": "http_error",
                 "details": str(exc),
             }
+
+    async def _get(self, endpoint: str, *, timeout: float = 15) -> dict[str, Any]:
+        if not self.token:
+            return {"mock": True, "endpoint": endpoint}
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}{endpoint}",
+                    headers=self._headers(),
+                )
+                try:
+                    data: Any = response.json()
+                except ValueError:
+                    data = {"raw": response.text}
+                if response.is_error:
+                    return {
+                        "success": False,
+                        "status_code": response.status_code,
+                        "endpoint": endpoint,
+                        "response": data,
+                    }
+                if isinstance(data, dict):
+                    return data
+                return {"success": True, "data": data}
+        except httpx.HTTPError as exc:
+            return {
+                "success": False,
+                "endpoint": endpoint,
+                "error": "http_error",
+                "details": str(exc),
+            }
+
+    @staticmethod
+    def pick_video_download_url(payload: Any) -> str | None:
+        """Pick best progressive MP4 URL from GET /videos/{token} response."""
+        if not isinstance(payload, dict):
+            return None
+        urls = payload.get("urls")
+        if not isinstance(urls, dict):
+            return None
+        preferred_keys = (
+            "mp4_1080",
+            "mp4_720",
+            "mp4_480",
+            "mp4_360",
+            "mp4_240",
+            "mp4_144",
+        )
+        for key in preferred_keys:
+            value = urls.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        for key, value in urls.items():
+            key_normalized = str(key or "").strip().lower()
+            if not key_normalized.startswith("mp4"):
+                continue
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return None
+
+    async def get_video_info(self, video_token: str) -> dict[str, Any]:
+        """
+        Resolve playback/download URLs for an incoming video attachment token.
+        Docs: GET /videos/{videoToken}
+        """
+        token_value = str(video_token or "").strip()
+        if not token_value:
+            return {"success": False, "error": "video_token_required"}
+        encoded = quote(token_value, safe="")
+        return await self._get(f"/videos/{encoded}", timeout=30)
 
     async def send_message(
         self,
