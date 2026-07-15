@@ -10769,8 +10769,31 @@ async def max_webhook(
         ):
             raise HTTPException(status_code=403, detail="invalid_webhook_signature")
     event = MaxWebhookEvent.from_payload(payload)
+    _wh_log = logging.getLogger(__name__)
     if event is None:
         # Ignore non-message updates or malformed events without failing webhook delivery.
+        try:
+            message_node = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+            body_node = message_node.get("body") if isinstance(message_node.get("body"), dict) else {}
+            raw_attachments = body_node.get("attachments") if isinstance(body_node.get("attachments"), list) else []
+            attach_types = [
+                str(item.get("type") or "").strip().lower() or "?"
+                for item in raw_attachments[:8]
+                if isinstance(item, dict)
+            ]
+            _wh_log.warning(
+                "[WEBHOOK] ignored=unsupported_payload update_type=%s keys=%s attach=%s",
+                str(
+                    payload.get("update_type")
+                    or payload.get("updateType")
+                    or payload.get("typeWebhook")
+                    or ""
+                ),
+                ",".join(sorted(str(k) for k in list(payload.keys())[:12])),
+                ",".join(attach_types) or "-",
+            )
+        except Exception:
+            _wh_log.exception("[WEBHOOK] unsupported_payload diag failed")
         return {"ok": True, "ignored": "unsupported_payload"}
 
     try:
@@ -10781,7 +10804,7 @@ async def max_webhook(
         for item in raw_attachments[:8]:
             if isinstance(item, dict):
                 attach_types.append(str(item.get("type") or "").strip().lower() or "?")
-        logging.getLogger(__name__).info(
+        _wh_log.warning(
             "[WEBHOOK] type=%s chat=%s sender=%s images=%s videos=%s tokens=%s attach=%s",
             str(event.update_type or ""),
             str(event.chat_id or "")[:32],
@@ -10792,13 +10815,14 @@ async def max_webhook(
             ",".join(attach_types) or "-",
         )
     except Exception:
-        logging.getLogger(__name__).exception("[WEBHOOK] diag failed")
+        _wh_log.exception("[WEBHOOK] diag failed")
 
     # Webhook dedup by stable event UID.
     event_uid = event.event_uid_value()
     if event_uid:
         seen = db.query(WebhookEvent).filter(WebhookEvent.event_uid == event_uid).first()
         if seen:
+            _wh_log.warning("[WEBHOOK] ignored=duplicate_event uid=%s", str(event_uid)[:64])
             return {"ok": True, "ignored": "duplicate_event"}
         db.add(WebhookEvent(event_uid=event_uid, update_type=event.update_type))
         db.commit()
@@ -10816,16 +10840,19 @@ async def max_webhook(
         "bot_start",
     }
     if event.update_type and event.update_type not in accepted_update_types:
+        _wh_log.warning("[WEBHOOK] ignored=update_type type=%s", str(event.update_type))
         return {"ok": True, "ignored": event.update_type}
 
     workspace_id = _resolve_workspace_by_webhook_key(db, webhook_key) or _resolve_workspace_id_from_event(db, event)
     settings_db = get_or_create_settings(db, workspace_id=workspace_id)
     max_client, client_error = _workspace_client_or_error(settings_db)
     if client_error or max_client is None:
+        _wh_log.warning("[WEBHOOK] ignored=bot_token_not_configured key=%s", str(webhook_key)[:16])
         return {"ok": True, "ignored": "bot_token_not_configured"}
 
     sender_id = (event.sender_id or "").strip()
     if settings_db.admin_account_id and sender_id == (settings_db.admin_account_id or "").strip():
+        _wh_log.warning("[WEBHOOK] ignored=admin sender=%s", sender_id[:32])
         return {"ok": True, "ignored": "admin"}
 
     if sender_id in _manager_ids_from_settings_row(settings_db):

@@ -1325,12 +1325,12 @@ async def _resolve_incoming_video_tokens(
             if not isinstance(info, dict):
                 info = {}
             if not bool(info.get("success", True)) and info.get("error"):
-                logger.info(
-                    "[INCOMING_VIDEO] get_video_info error token=%s err=%s status=%s",
-                    token_value[:24],
-                    info.get("error"),
-                    info.get("status_code"),
-                )
+            logger.warning(
+                "[INCOMING_VIDEO] get_video_info error token=%s err=%s status=%s",
+                token_value[:24],
+                info.get("error"),
+                info.get("status_code"),
+            )
             download_url = MaxClient.pick_video_download_url(info)
             if download_url:
                 break
@@ -1339,13 +1339,13 @@ async def _resolve_incoming_video_tokens(
                 await asyncio.sleep(0.6)
         if download_url:
             resolved.append(download_url)
-            logger.info(
+            logger.warning(
                 "[INCOMING_VIDEO] resolved token=%s url_host=%s",
                 token_value[:24],
                 urlsplit(download_url).netloc,
             )
         else:
-            logger.info(
+            logger.warning(
                 "[INCOMING_VIDEO] failed to resolve video token=%s",
                 token_value[:24],
             )
@@ -4841,7 +4841,7 @@ async def handle_customer_event(
         for token in (getattr(event, "video_tokens", []) or [])
         if str(token).strip()
     ]
-    logger.info(
+    logger.warning(
         "[INCOMING] chat=%s sender=%s text_len=%s images=%s videos=%s tokens=%s mid=%s",
         str(event.chat_id or "")[:32],
         str(event.sender_id or "")[:32],
@@ -4909,11 +4909,11 @@ async def handle_customer_event(
     if had_video_intent and not normalized_image_urls and not message_text.strip():
         # Keep the bubble visible even if Max video URLs are not ready yet.
         message_text = "Видео"
-        logger.info(
+        logger.warning(
             "[INCOMING_VIDEO] stored placeholder text (no media resolved) chat=%s",
             str(event.chat_id or "")[:32],
         )
-    logger.info(
+    logger.warning(
         "[INCOMING] stored media_n=%s video_intent=%s first=%s",
         len(normalized_image_urls),
         had_video_intent,
