@@ -3607,14 +3607,29 @@ def _store_chat_message(
     )
     db.add(item)
     _timed_commit(db, label="store_chat_message")
+    import time as _time
+
+    _tr = _time.monotonic()
     db.refresh(item)
+    logger.warning("[SEND_DIAG] store refresh=%.3f", _time.monotonic() - _tr)
+    _tl = _time.monotonic()
     linked_media_paths = _chat_message_media_paths(item)
+    logger.warning(
+        "[SEND_DIAG] store media_paths=%.3f n=%s",
+        _time.monotonic() - _tl,
+        len(linked_media_paths or []),
+    )
     if linked_media_paths:
+        _tlink = _time.monotonic()
         _link_chat_message_media_assets(
             db,
             chat_message_id=int(item.id),
             workspace_id=int(item.workspace_id or DEFAULT_WORKSPACE_ID),
             media_paths=linked_media_paths,
+        )
+        logger.warning(
+            "[SEND_DIAG] store link_media_assets=%.3f",
+            _time.monotonic() - _tlink,
         )
     return item
 

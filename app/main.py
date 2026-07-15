@@ -4800,8 +4800,13 @@ async def _handle_send_async(
 
     def _enqueue_in_thread() -> None:
         from app.database import SessionLocal
+        import time as _t
+        import logging as _lg
 
+        _dlog = _lg.getLogger("send_async.timing")
+        _ts = _t.monotonic()
         with SessionLocal() as qdb:
+            _dlog.warning("[SEND_DIAG] thread_session_open=%.3f", _t.monotonic() - _ts)
             if photo_urls_snapshot:
                 queue_only_send_media_group_sync(
                     qdb,
@@ -4823,6 +4828,7 @@ async def _handle_send_async(
                     text_format="markdown",
                     source="bot_system",
                 )
+        _dlog.warning("[SEND_DIAG] thread_enqueue_done=%.3f", _t.monotonic() - _ts)
 
     await asyncio.to_thread(_enqueue_in_thread)
     _log.warning("[SEND_T] t=%.3f after_queue", _time.monotonic() - _t0)
