@@ -15,7 +15,7 @@ from urllib.parse import quote_plus, urlsplit
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, func, or_, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, load_only
 
@@ -2383,9 +2383,11 @@ def _find_recent_outbox_duplicate(
     Find a queued/sending outbox row with the same idempotency fingerprint
     created within the time window.
 
-    Important: lookup MUST use the indexed idempotency_key column first.
-    Filtering primarily by state/created_at forces SQLite to scan fat rows
-    (payload_json with base64 images) and was measured at ~7s per send.
+    Critical performance note (prod measured ~7s/send):
+    Do NOT use ORM ORDER BY id DESC with equality filters on this table.
+    SQLite may ignore the idempotency index and scan the whole outbox
+    table (including multi‑MB payload_json blobs) when no row matches.
+    Use a covering indexed lookup without ORDER BY instead.
     """
     fp = str(fingerprint or "").strip()
     if not fp:
@@ -2393,42 +2395,60 @@ def _find_recent_outbox_duplicate(
     window_from = _as_naive_utc(_utc_now() - timedelta(seconds=max(1, int(time_window_seconds or 1))))
     ws = int(workspace_id)
 
-    # Indexed path: (workspace_id, idempotency_key) → tiny result set, then
-    # apply state/created_at filters in Python so the planner cannot choose a
-    # full scan of outbox_messages just to evaluate those predicates.
-    if hasattr(OutboxMessage, "idempotency_key"):
-        candidates = (
-            db.query(OutboxMessage)
-            .options(
-                load_only(
-                    OutboxMessage.id,
-                    OutboxMessage.workspace_id,
-                    OutboxMessage.state,
-                    OutboxMessage.created_at,
-                    OutboxMessage.idempotency_key,
-                )
-            )
-            .filter(
-                OutboxMessage.workspace_id == ws,
-                OutboxMessage.idempotency_key == fp,
-            )
-            .order_by(OutboxMessage.id.desc())
-            .limit(32)
-            .all()
-        )
-        for row in candidates:
-            state = str(getattr(row, "state", "") or "").strip().lower()
-            if state not in {"queued", "sending"}:
-                continue
-            created_at = getattr(row, "created_at", None)
-            if created_at is not None and _as_naive_utc(created_at) < window_from:
-                continue
-            return row
+    if not hasattr(OutboxMessage, "idempotency_key"):
+        # Legacy schema without idempotency columns: cannot match cheaply without
+        # scanning payload_json blobs — skip rather than burning seconds per send.
         return None
 
-    # Legacy schema without idempotency columns: cannot match cheaply without
-    # scanning payload_json blobs — skip rather than burning seconds per send.
-    return None
+    # Lightweight indexed seek. No ORDER BY — that alone caused full-table scans
+    # on miss. Index: ix_outbox_messages_idempotency_key (workspace_id, idempotency_key).
+    rows = db.execute(
+        text(
+            "SELECT id, state, created_at "
+            "FROM outbox_messages "
+            "WHERE workspace_id = :ws AND idempotency_key = :fp "
+            "LIMIT 32"
+        ),
+        {"ws": ws, "fp": fp},
+    ).fetchall()
+
+    best_id: int | None = None
+    for row in rows:
+        row_id = int(row[0] or 0)
+        state = str(row[1] or "").strip().lower()
+        if state not in {"queued", "sending"}:
+            continue
+        created_raw = row[2]
+        if created_raw is not None:
+            try:
+                created_at = _as_naive_utc(created_raw)
+            except Exception:
+                created_at = None
+            if created_at is not None and created_at < window_from:
+                continue
+        if best_id is None or row_id > best_id:
+            best_id = row_id
+
+    if best_id is None:
+        return None
+
+    return (
+        db.query(OutboxMessage)
+        .options(
+            load_only(
+                OutboxMessage.id,
+                OutboxMessage.workspace_id,
+                OutboxMessage.state,
+                OutboxMessage.created_at,
+                OutboxMessage.idempotency_key,
+                OutboxMessage.chat_message_id,
+                OutboxMessage.conversation_id,
+                OutboxMessage.operation,
+            )
+        )
+        .filter(OutboxMessage.id == best_id)
+        .first()
+    )
 
 
 def _update_chat_message_delivery(
