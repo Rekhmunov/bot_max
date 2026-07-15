@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
 
 from app.auth import create_manager_mini_token
 from app.config import settings as app_settings
@@ -2238,45 +2238,29 @@ def _enqueue_outbox_message(
     else:
         idempotency_attr = ""
     _te2 = _time.monotonic()
-    dedupe_hit = bool(
-        idempotency_attr
-        and _recent_outbox_duplicate_exists(
+    existing_dup = (
+        _find_recent_outbox_duplicate(
             db,
             workspace_id=int(resolved_workspace_id),
             fingerprint=fingerprint,
         )
+        if idempotency_attr
+        else None
     )
     logger.warning(
         "[SEND_DIAG] enqueue dedupe_check=%.3f hit=%s",
         _time.monotonic() - _te2,
-        dedupe_hit,
+        bool(existing_dup),
     )
-    if dedupe_hit:
-        _te3 = _time.monotonic()
-        existing = (
-            db.query(OutboxMessage)
-            .filter(
-                OutboxMessage.workspace_id == int(resolved_workspace_id),
-                OutboxMessage.state.in_(["queued", "sending"]),
-            )
-            .order_by(OutboxMessage.id.desc())
-            .all()
+    if existing_dup is not None:
+        logger.info(
+            "[OUTBOX_ENQUEUE_DEDUP] hit workspace=%s operation=%s fingerprint=%s existing_id=%s",
+            int(resolved_workspace_id or 0),
+            str(operation or "").strip().lower(),
+            fingerprint[:12],
+            int(getattr(existing_dup, "id", 0) or 0),
         )
-        logger.warning(
-            "[SEND_DIAG] enqueue dedupe_load_all=%.3f rows=%s",
-            _time.monotonic() - _te3,
-            len(existing),
-        )
-        for row in existing:
-            if idempotency_attr and str(getattr(row, idempotency_attr, "") or "").strip() == fingerprint:
-                logger.info(
-                    "[OUTBOX_ENQUEUE_DEDUP] hit workspace=%s operation=%s fingerprint=%s existing_id=%s",
-                    int(resolved_workspace_id or 0),
-                    str(operation or "").strip().lower(),
-                    fingerprint[:12],
-                    int(getattr(row, "id", 0) or 0),
-                )
-                return row
+        return existing_dup
     outbox_kwargs: dict[str, object] = {
         "workspace_id": resolved_workspace_id,
         "conversation_id": conversation_id,
@@ -2380,28 +2364,77 @@ def _recent_outbox_duplicate_exists(
     fingerprint: str,
     time_window_seconds: int = 180,
 ) -> bool:
+    return _find_recent_outbox_duplicate(
+        db,
+        workspace_id=workspace_id,
+        fingerprint=fingerprint,
+        time_window_seconds=time_window_seconds,
+    ) is not None
+
+
+def _find_recent_outbox_duplicate(
+    db: Session,
+    *,
+    workspace_id: int,
+    fingerprint: str,
+    time_window_seconds: int = 180,
+) -> OutboxMessage | None:
+    """
+    Find a queued/sending outbox row with the same idempotency fingerprint
+    created within the time window.
+
+    Important: lookup MUST use the indexed idempotency_key column first.
+    Filtering primarily by state/created_at forces SQLite to scan fat rows
+    (payload_json with base64 images) and was measured at ~7s per send.
+    """
     fp = str(fingerprint or "").strip()
     if not fp:
-        return False
+        return None
     window_from = _as_naive_utc(_utc_now() - timedelta(seconds=max(1, int(time_window_seconds or 1))))
+    ws = int(workspace_id)
+
+    # Indexed path: (workspace_id, idempotency_key) → tiny result set, then
+    # apply state/created_at filters in Python so the planner cannot choose a
+    # full scan of outbox_messages just to evaluate those predicates.
     if hasattr(OutboxMessage, "idempotency_key"):
-        idempotency_field = getattr(OutboxMessage, "idempotency_key")
-    else:
-        # Legacy schema without idempotency columns: fallback to payload hash only.
-        # Keep dedupe conservative and avoid referencing missing ORM attributes.
-        idempotency_field = None
+        candidates = (
+            db.query(OutboxMessage)
+            .filter(
+                OutboxMessage.workspace_id == ws,
+                OutboxMessage.idempotency_key == fp,
+            )
+            .order_by(OutboxMessage.id.desc())
+            .limit(32)
+            .all()
+        )
+        for row in candidates:
+            state = str(getattr(row, "state", "") or "").strip().lower()
+            if state not in {"queued", "sending"}:
+                continue
+            created_at = getattr(row, "created_at", None)
+            if created_at is not None and _as_naive_utc(created_at) < window_from:
+                continue
+            return row
+        return None
+
+    # Legacy schema without idempotency columns — last resort only.
+    # Never compare fingerprint to full payload_json (table scan of TEXT blobs).
     existing = (
-        db.query(OutboxMessage.id)
+        db.query(OutboxMessage)
         .filter(
-            OutboxMessage.workspace_id == int(workspace_id),
-            (idempotency_field == fp) if idempotency_field is not None else (OutboxMessage.payload_json == fp),
-            OutboxMessage.created_at >= window_from,
+            OutboxMessage.workspace_id == ws,
             OutboxMessage.state.in_(["queued", "sending"]),
+            OutboxMessage.created_at >= window_from,
         )
         .order_by(OutboxMessage.id.desc())
-        .first()
+        .limit(32)
+        .all()
     )
-    return bool(existing)
+    for row in existing:
+        # Without an idempotency column we cannot match cheaply; skip false
+        # positives by refusing payload_json equality scans.
+        return None
+    return None
 
 
 def _update_chat_message_delivery(
