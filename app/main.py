@@ -3202,15 +3202,6 @@ def _ensure_superadmin_credentials(db: Session) -> ServiceUser:
     return super_user
 
 
-async def _kick_outbox_once() -> None:
-    """Process outbox immediately after a new message is queued (no wait for next poll cycle)."""
-    from app.database import SessionLocal
-    try:
-        with SessionLocal() as db:
-            await process_outbox_queue(db, limit=settings.outbox_worker_batch_size)
-    except Exception:
-        pass
-
 
 async def _outbox_worker_loop() -> None:
     from app.database import SessionLocal
@@ -4789,7 +4780,6 @@ async def _handle_send_async(
         .first()
     )
     _log.warning("[SEND_T] t=%.3f after_msg_query", _time.monotonic() - _t0)
-    asyncio.create_task(_kick_outbox_once())
     msg_id = int(msg.id) if msg else 0
     created_at = getattr(msg, "created_at", None)
     display_image_urls = photo_urls if photo_urls else image_paths
