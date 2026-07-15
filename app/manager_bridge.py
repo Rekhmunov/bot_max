@@ -2399,6 +2399,15 @@ def _find_recent_outbox_duplicate(
     if hasattr(OutboxMessage, "idempotency_key"):
         candidates = (
             db.query(OutboxMessage)
+            .options(
+                load_only(
+                    OutboxMessage.id,
+                    OutboxMessage.workspace_id,
+                    OutboxMessage.state,
+                    OutboxMessage.created_at,
+                    OutboxMessage.idempotency_key,
+                )
+            )
             .filter(
                 OutboxMessage.workspace_id == ws,
                 OutboxMessage.idempotency_key == fp,
@@ -2417,23 +2426,8 @@ def _find_recent_outbox_duplicate(
             return row
         return None
 
-    # Legacy schema without idempotency columns — last resort only.
-    # Never compare fingerprint to full payload_json (table scan of TEXT blobs).
-    existing = (
-        db.query(OutboxMessage)
-        .filter(
-            OutboxMessage.workspace_id == ws,
-            OutboxMessage.state.in_(["queued", "sending"]),
-            OutboxMessage.created_at >= window_from,
-        )
-        .order_by(OutboxMessage.id.desc())
-        .limit(32)
-        .all()
-    )
-    for row in existing:
-        # Without an idempotency column we cannot match cheaply; skip false
-        # positives by refusing payload_json equality scans.
-        return None
+    # Legacy schema without idempotency columns: cannot match cheaply without
+    # scanning payload_json blobs — skip rather than burning seconds per send.
     return None
 
 
