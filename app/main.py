@@ -2409,6 +2409,7 @@ webhook_path = settings.webhook_path if settings.webhook_path.startswith("/") el
 ensure_storage_ready()
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 _outbox_worker_task: asyncio.Task | None = None
+_maintenance_worker_task: asyncio.Task | None = None
 _storage_cleanup_last_run_at: datetime | None = None
 _rate_limiter = InMemoryRateLimiter()
 _MAX_UPLOAD_BYTES = int(settings.max_upload_bytes)
@@ -3231,20 +3232,39 @@ async def _outbox_worker_loop() -> None:
                 if should_run_cleanup:
                     run_storage_cleanup_for_all_workspaces(db)
                     _storage_cleanup_last_run_at = now_utc
-                # P1 backfill runs in small batches during normal worker cycles
-                # to avoid downtime and reduce migration risk.
-                cleanup_orphan_chat_message_media_links(db, limit=500)
-                backfill_chat_message_media_assets(db, limit=250)
-                backfill_quick_reply_media_assets(db, limit=250)
         except Exception:
             # Keep worker alive even if one cycle fails.
             pass
         await asyncio.sleep(max(settings.outbox_poll_interval_seconds, 1))
 
 
+async def _maintenance_worker_loop() -> None:
+    """Runs heavy maintenance ops (backfill, orphan cleanup) in a thread pool
+    every 30 minutes. Using run_in_executor ensures these never block the
+    asyncio event loop or delay message delivery."""
+    from app.database import SessionLocal
+
+    # Wait 5 minutes after startup before the first maintenance run.
+    await asyncio.sleep(300)
+    while True:
+        try:
+            loop = asyncio.get_running_loop()
+
+            def _run_maintenance() -> None:
+                with SessionLocal() as db:
+                    cleanup_orphan_chat_message_media_links(db, limit=500)
+                    backfill_chat_message_media_assets(db, limit=250)
+                    backfill_quick_reply_media_assets(db, limit=250)
+
+            await loop.run_in_executor(None, _run_maintenance)
+        except Exception:
+            pass
+        await asyncio.sleep(1800)  # 30 minutes
+
+
 @app.on_event("startup")
 async def startup() -> None:
-    global _outbox_worker_task
+    global _outbox_worker_task, _maintenance_worker_task
     init_db()
     from app.database import SessionLocal
 
@@ -3256,17 +3276,19 @@ async def startup() -> None:
         _ensure_superadmin_credentials(db)
     if settings.outbox_worker_enabled:
         _outbox_worker_task = asyncio.create_task(_outbox_worker_loop())
+        _maintenance_worker_task = asyncio.create_task(_maintenance_worker_loop())
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
-    global _outbox_worker_task
-    if _outbox_worker_task is None:
-        return
-    _outbox_worker_task.cancel()
-    with suppress(asyncio.CancelledError):
-        await _outbox_worker_task
+    global _outbox_worker_task, _maintenance_worker_task
+    for task in (_outbox_worker_task, _maintenance_worker_task):
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
     _outbox_worker_task = None
+    _maintenance_worker_task = None
 
 
 @app.get("/", response_class=RedirectResponse)
