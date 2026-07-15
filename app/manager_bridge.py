@@ -1177,6 +1177,8 @@ def _incoming_media_extension(*, source_url: str, content_type: str) -> str:
     path_ext = Path(urlsplit(str(source_url or "").strip()).path).suffix.lower()
     if path_ext in {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}:
         return path_ext
+    if path_ext in {".mp4", ".mov", ".mkv", ".webm", ".m4v"}:
+        return path_ext
     mime = str(content_type or "").strip().lower().split(";", 1)[0]
     if mime == "image/jpeg":
         return ".jpg"
@@ -1188,6 +1190,16 @@ def _incoming_media_extension(*, source_url: str, content_type: str) -> str:
         return ".webp"
     if mime == "image/bmp":
         return ".bmp"
+    if mime in {"video/mp4", "video/mpeg4"}:
+        return ".mp4"
+    if mime in {"video/quicktime", "video/x-quicktime"}:
+        return ".mov"
+    if mime == "video/webm":
+        return ".webm"
+    if mime in {"video/x-matroska", "video/mkv"}:
+        return ".mkv"
+    if mime.startswith("video/"):
+        return ".mp4"
     return ".jpg"
 
 
@@ -1210,20 +1222,36 @@ def _incoming_media_auth_headers(client: MaxClient) -> list[dict[str, str]]:
     return headers
 
 
+def _is_video_content_type(content_type: str | None) -> bool:
+    mime = str(content_type or "").strip().lower().split(";", 1)[0]
+    return mime.startswith("video/")
+
+
+def _looks_like_video_url(value: str | None) -> bool:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return False
+    path = urlsplit(raw).path.lower()
+    return path.endswith((".mp4", ".mov", ".mkv", ".webm", ".m4v"))
+
+
 async def _download_and_store_incoming_media(
     *,
     media_url: str,
     client: MaxClient,
     workspace_id: int,
+    force_video: bool = False,
 ) -> str | None:
     url = str(media_url or "").strip()
     if not url or not (url.startswith("http://") or url.startswith("https://")):
         return None
-    max_bytes = 20 * 1024 * 1024
+    image_max_bytes = 20 * 1024 * 1024
+    video_max_bytes = 100 * 1024 * 1024
     headers_candidates = _incoming_media_auth_headers(client)
+    request_timeout = 120 if (force_video or _looks_like_video_url(url)) else 30
     for headers in headers_candidates:
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as http_client:
+            async with httpx.AsyncClient(timeout=request_timeout, follow_redirects=True) as http_client:
                 response = await http_client.get(url, headers=headers)
         except Exception as exc:
             logger.info("[INCOMING_MEDIA] download failed transport: %s", str(exc))
@@ -1239,6 +1267,13 @@ async def _download_and_store_incoming_media(
         if not payload:
             logger.info("[INCOMING_MEDIA] download returned empty payload url=%s", url)
             continue
+        content_type = str(response.headers.get("content-type", "") or "")
+        treat_as_video = (
+            force_video
+            or _is_video_content_type(content_type)
+            or _looks_like_video_url(url)
+        )
+        max_bytes = video_max_bytes if treat_as_video else image_max_bytes
         if len(payload) > max_bytes:
             logger.warning(
                 "[INCOMING_MEDIA] download skipped: payload too large bytes=%s url=%s",
@@ -1248,8 +1283,17 @@ async def _download_and_store_incoming_media(
             continue
         extension = _incoming_media_extension(
             source_url=url,
-            content_type=str(response.headers.get("content-type", "") or ""),
+            content_type=content_type,
         )
+        if treat_as_video and extension in {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".gif",
+            ".webp",
+            ".bmp",
+        }:
+            extension = ".mp4"
         safe_name = f"incoming-{int(workspace_id)}-{uuid4().hex[:12]}{extension}"
         try:
             stored_url = save_upload_bytes(file_name=safe_name, content=payload)
@@ -1261,11 +1305,45 @@ async def _download_and_store_incoming_media(
     return None
 
 
+async def _resolve_incoming_video_tokens(
+    *,
+    video_tokens: list[str],
+    client: MaxClient,
+) -> list[str]:
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for raw_token in video_tokens or []:
+        token_value = str(raw_token or "").strip()
+        if not token_value or token_value in seen:
+            continue
+        seen.add(token_value)
+        download_url: str | None = None
+        for attempt in range(3):
+            info = await client.get_video_info(token_value)
+            if not isinstance(info, dict):
+                info = {}
+            download_url = MaxClient.pick_video_download_url(info)
+            if download_url:
+                break
+            # Video may still be processing on Max side (urls=null).
+            if attempt < 2:
+                await asyncio.sleep(0.8 * (attempt + 1))
+        if download_url:
+            resolved.append(download_url)
+        else:
+            logger.info(
+                "[INCOMING_VIDEO] failed to resolve video token=%s",
+                token_value[:24],
+            )
+    return resolved
+
+
 async def _materialize_incoming_image_urls(
     *,
     image_urls: list[str],
     client: MaxClient,
     workspace_id: int,
+    force_video: bool = False,
 ) -> list[str]:
     prepared: list[str] = []
     seen: set[str] = set()
@@ -1275,6 +1353,9 @@ async def _materialize_incoming_image_urls(
             continue
         local_candidate = _to_local_static_media_path(candidate)
         if local_candidate:
+            if force_video and not _looks_like_video_url(local_candidate):
+                # Keep legacy local paths as-is; video detection also accepts marker query.
+                pass
             if local_candidate not in seen:
                 seen.add(local_candidate)
                 prepared.append(local_candidate)
@@ -1283,6 +1364,7 @@ async def _materialize_incoming_image_urls(
             media_url=candidate,
             client=client,
             workspace_id=workspace_id,
+            force_video=force_video,
         )
         if downloaded_local:
             if downloaded_local not in seen:
@@ -1290,10 +1372,13 @@ async def _materialize_incoming_image_urls(
                 prepared.append(downloaded_local)
             continue
         # Keep original URL as graceful fallback when remote content cannot be downloaded.
-        # This preserves previous behavior and prevents data loss in history rows.
-        if candidate not in seen:
-            seen.add(candidate)
-            prepared.append(candidate)
+        # Mark unmarked remote video URLs so the chat UI renders <video>, not <img>.
+        fallback = candidate
+        if force_video and not _looks_like_video_url(fallback) and "bot_max_video=1" not in fallback:
+            fallback = f"{fallback}{'&' if '?' in fallback else '?'}bot_max_video=1"
+        if fallback not in seen:
+            seen.add(fallback)
+            prepared.append(fallback)
     return prepared
 
 
@@ -1309,6 +1394,16 @@ def _mime_from_extension(path_value: str | None) -> str:
         return "image/webp"
     if ext == ".bmp":
         return "image/bmp"
+    if ext == ".mp4":
+        return "video/mp4"
+    if ext == ".mov":
+        return "video/quicktime"
+    if ext == ".webm":
+        return "video/webm"
+    if ext == ".mkv":
+        return "video/x-matroska"
+    if ext == ".m4v":
+        return "video/x-m4v"
     return "application/octet-stream"
 
 
@@ -1752,6 +1847,17 @@ def _is_onboarding_template_echo_event(
     ]
     if incoming_images:
         return False
+    incoming_videos = [
+        str(url).strip()
+        for url in (getattr(event, "video_urls", []) or [])
+        if str(url).strip()
+    ] + [
+        str(token).strip()
+        for token in (getattr(event, "video_tokens", []) or [])
+        if str(token).strip()
+    ]
+    if incoming_videos:
+        return False
     incoming_text = _normalize_template_like_text(str(getattr(event, "text", "") or ""))
     if not incoming_text:
         return False
@@ -1809,6 +1915,17 @@ def _is_probable_duplicate_customer_event(
         if str(url).strip()
     ]
     if incoming_images:
+        return False
+    incoming_videos = [
+        str(url).strip()
+        for url in (getattr(event, "video_urls", []) or [])
+        if str(url).strip()
+    ] + [
+        str(token).strip()
+        for token in (getattr(event, "video_tokens", []) or [])
+        if str(token).strip()
+    ]
+    if incoming_videos:
         return False
 
     incoming_text = _normalize_template_like_text(str(getattr(event, "text", "") or ""))
@@ -4688,11 +4805,45 @@ async def handle_customer_event(
         )
     )
     db.commit()
+    resolved_video_urls = await _resolve_incoming_video_tokens(
+        video_tokens=[
+            str(token).strip()
+            for token in (getattr(event, "video_tokens", []) or [])
+            if str(token).strip()
+        ],
+        client=client,
+    )
+    incoming_image_urls = [
+        str(url).strip()
+        for url in (getattr(event, "image_urls", []) or [])
+        if str(url).strip()
+    ]
+    incoming_video_urls = [
+        str(url).strip()
+        for url in (list(getattr(event, "video_urls", []) or []) + list(resolved_video_urls or []))
+        if str(url).strip()
+    ]
     normalized_image_urls = await _materialize_incoming_image_urls(
-        image_urls=[str(url).strip() for url in (getattr(event, "image_urls", []) or []) if str(url).strip()],
+        image_urls=incoming_image_urls,
         client=client,
         workspace_id=int(workspace_id),
     )
+    normalized_video_urls = await _materialize_incoming_image_urls(
+        image_urls=incoming_video_urls,
+        client=client,
+        workspace_id=int(workspace_id),
+        force_video=True,
+    )
+    # Keep images first, then videos, dedupe while preserving order.
+    merged_media_urls: list[str] = []
+    seen_media: set[str] = set()
+    for media_url in list(normalized_image_urls or []) + list(normalized_video_urls or []):
+        value = str(media_url or "").strip()
+        if not value or value in seen_media:
+            continue
+        seen_media.add(value)
+        merged_media_urls.append(value)
+    normalized_image_urls = merged_media_urls
     _store_chat_message(
         db,
         conversation_id=conversation.id,

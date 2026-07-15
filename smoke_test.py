@@ -1247,8 +1247,15 @@ def run() -> None:
         incoming_photo_chat_id_max = f"chat_{uuid4().hex[:8]}"
         incoming_photo_sender_max = f"buyer_{uuid4().hex[:6]}"
         incoming_photo_url_max = "https://cdn.example.com/customer-photo-max.jpg"
+        incoming_video_chat_id = f"chat_{uuid4().hex[:8]}"
+        incoming_video_sender = f"buyer_{uuid4().hex[:6]}"
+        incoming_video_url = "https://cdn.example.com/customer-video.mp4"
+        incoming_video_token_chat_id = f"chat_{uuid4().hex[:8]}"
+        incoming_video_token_sender = f"buyer_{uuid4().hex[:6]}"
+        incoming_video_token = "videoTok_abc123"
+        incoming_video_resolved_url = "https://cdn.example.com/resolved-from-token.mp4"
 
-        async def _fake_materialize_incoming(*, image_urls, client, workspace_id):
+        async def _fake_materialize_incoming(*, image_urls, client, workspace_id, force_video=False):
             normalized = []
             for raw in list(image_urls or []):
                 value = str(raw or "").strip()
@@ -1256,7 +1263,15 @@ def run() -> None:
                     normalized.append("/static/uploads/incoming-customer-photo.jpg")
                 elif value == incoming_photo_url_max:
                     normalized.append("/static/uploads/incoming-customer-photo-max.jpg")
+                elif value == incoming_video_url:
+                    normalized.append("/static/uploads/incoming-customer-video.mp4")
+                elif value == incoming_video_resolved_url:
+                    normalized.append("/static/uploads/incoming-customer-video-token.mp4")
                 elif value:
+                    if force_video and "bot_max_video=1" not in value and not value.lower().endswith(
+                        (".mp4", ".mov", ".webm", ".mkv", ".m4v")
+                    ):
+                        value = f"{value}{'&' if '?' in value else '?'}bot_max_video=1"
                     normalized.append(value)
             return normalized
 
@@ -1316,6 +1331,62 @@ def run() -> None:
             )
             assert webhook_customer_photo_max_style.status_code == 200
 
+            webhook_customer_video = client.post(
+                "/webhook/max/ws1key",
+                json={
+                    "update_type": "message_created",
+                    "chat_id": incoming_video_chat_id,
+                    "sender_id": incoming_video_sender,
+                    "message": {
+                        "sender": {"user_id": incoming_video_sender},
+                        "recipient": {"chat_id": incoming_video_chat_id, "chat_type": "dialog"},
+                        "body": {
+                            "text": "",
+                            "attachments": [
+                                {
+                                    "type": "video",
+                                    "payload": {
+                                        "url": incoming_video_url,
+                                        "token": "video_token_unused_when_url_present",
+                                    },
+                                }
+                            ],
+                        },
+                    },
+                },
+            )
+            assert webhook_customer_video.status_code == 200
+
+            with patch(
+                "app.manager_bridge._resolve_incoming_video_tokens",
+                new=AsyncMock(return_value=[incoming_video_resolved_url]),
+            ):
+                webhook_customer_video_token = client.post(
+                    "/webhook/max/ws1key",
+                    json={
+                        "update_type": "message_created",
+                        "chat_id": incoming_video_token_chat_id,
+                        "sender_id": incoming_video_token_sender,
+                        "message": {
+                            "sender": {"user_id": incoming_video_token_sender},
+                            "recipient": {
+                                "chat_id": incoming_video_token_chat_id,
+                                "chat_type": "dialog",
+                            },
+                            "body": {
+                                "text": "",
+                                "attachments": [
+                                    {
+                                        "type": "video",
+                                        "payload": {"token": incoming_video_token},
+                                    }
+                                ],
+                            },
+                        },
+                    },
+                )
+                assert webhook_customer_video_token.status_code == 200
+
         with SessionLocal() as db:
             photo_conv = (
                 db.query(Conversation)
@@ -1370,6 +1441,57 @@ def run() -> None:
             assert incoming_photo_url_max not in str(getattr(photo_msg_max, "image_urls_json", "") or "")
             assert str(getattr(photo_msg_max, "text", "") or "").strip() == ""
 
+            video_conv = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.workspace_id == 1,
+                    Conversation.chat_id == incoming_video_chat_id,
+                    Conversation.customer_account_id == incoming_video_sender,
+                )
+                .first()
+            )
+            assert video_conv is not None
+            video_msg = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == 1,
+                    ChatMessage.conversation_id == int(video_conv.id),
+                    ChatMessage.direction == "customer",
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            assert video_msg is not None
+            video_urls = json.loads(str(getattr(video_msg, "image_urls_json", "[]") or "[]"))
+            assert isinstance(video_urls, list) and video_urls
+            assert str(video_urls[0]).endswith(".mp4")
+            assert incoming_video_url not in str(getattr(video_msg, "image_urls_json", "") or "")
+
+            video_token_conv = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.workspace_id == 1,
+                    Conversation.chat_id == incoming_video_token_chat_id,
+                    Conversation.customer_account_id == incoming_video_token_sender,
+                )
+                .first()
+            )
+            assert video_token_conv is not None
+            video_token_msg = (
+                db.query(ChatMessage)
+                .filter(
+                    ChatMessage.workspace_id == 1,
+                    ChatMessage.conversation_id == int(video_token_conv.id),
+                    ChatMessage.direction == "customer",
+                )
+                .order_by(ChatMessage.id.desc())
+                .first()
+            )
+            assert video_token_msg is not None
+            video_token_urls = json.loads(str(getattr(video_token_msg, "image_urls_json", "[]") or "[]"))
+            assert isinstance(video_token_urls, list) and video_token_urls
+            assert "/static/uploads/incoming-customer-video-token.mp4" in video_token_urls
+
         customer_photo_page = client.get(
             f"/admin/chats?conversation_id={int(photo_conv.id)}",
             follow_redirects=True,
@@ -1386,6 +1508,23 @@ def run() -> None:
         assert customer_photo_max_page.status_code == 200
         assert "/static/uploads/incoming-customer-photo-max.jpg" in customer_photo_max_page.text
         assert incoming_photo_url_max not in customer_photo_max_page.text
+
+        customer_video_page = client.get(
+            f"/admin/chats?conversation_id={int(video_conv.id)}",
+            follow_redirects=True,
+        )
+        assert customer_video_page.status_code == 200
+        assert "/static/uploads/incoming-customer-video.mp4" in customer_video_page.text
+        assert "<video" in customer_video_page.text
+        assert incoming_video_url not in customer_video_page.text
+
+        customer_video_token_page = client.get(
+            f"/admin/chats?conversation_id={int(video_token_conv.id)}",
+            follow_redirects=True,
+        )
+        assert customer_video_token_page.status_code == 200
+        assert "/static/uploads/incoming-customer-video-token.mp4" in customer_video_token_page.text
+        assert "<video" in customer_video_token_page.text
 
         webhook_manager_tickets = client.post(
             "/webhook/max/ws1key",
