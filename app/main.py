@@ -98,8 +98,8 @@ from app.manager_bridge import (
     send_admin_chat_message,
     send_admin_quick_reply,
     update_chat_message_text,
-    queue_only_send_text,
-    queue_only_send_media_group,
+    queue_only_send_text_sync,
+    queue_only_send_media_group_sync,
     get_conversation_by_id,
     unpin_conversation_for_user,
     DEFAULT_BUSINESS_TIMEZONE,
@@ -3216,6 +3216,11 @@ async def _outbox_worker_loop() -> None:
             with SessionLocal() as db:
                 await process_outbox_queue(db, limit=settings.outbox_worker_batch_size)
                 _wlog.warning("[WORKER_T] t=%.3f after_outbox", _time.monotonic() - _wt0)
+                # Don't keep any outbox-related transaction open while doing billing work.
+                try:
+                    db.rollback()
+                except Exception:
+                    pass
                 workspace_ids = [row[0] for row in db.query(Workspace.id).all()]
                 for workspace_id in workspace_ids:
                     refresh_tenant_alerts(db, workspace_id=int(workspace_id))
@@ -4726,6 +4731,10 @@ async def _handle_send_async(
     if conversation is None:
         return JSONResponse({"ok": False, "error": "Диалог не найден"}, status_code=404)
 
+    # Snapshot fields for thread enqueue; do not pass the request Session across threads.
+    chat_id = str(conversation.chat_id or "")
+    customer_account_id = str(conversation.customer_account_id or "")
+
     qr_photo_urls: list[str] = []
     if quick_reply_id > 0:
         media_rows = (
@@ -4748,27 +4757,45 @@ async def _handle_send_async(
     if not has_content:
         return JSONResponse({"ok": False, "error": "Нет содержимого"}, status_code=400)
 
-    if photo_urls:
-        await queue_only_send_media_group(
-            db,
-            conversation_id=conversation_id,
-            target_chat_id=conversation.chat_id,
-            target_user_id=conversation.customer_account_id,
-            photo_urls=photo_urls,
-            text=text_value,
-            text_format="markdown",
-            source="bot_system",
-        )
-    else:
-        await queue_only_send_text(
-            db,
-            conversation_id=conversation_id,
-            target_chat_id=conversation.chat_id,
-            target_user_id=conversation.customer_account_id,
-            text=text_value,
-            text_format="markdown",
-            source="bot_system",
-        )
+    # Release request-session read txn before waiting. Enqueue in a worker thread
+    # with its own Session so SQLite busy-waits cannot stall the event loop
+    # (deadlock with outbox worker holding a lock across Max HTTP).
+    try:
+        db.rollback()
+    except Exception:
+        pass
+    _log.warning("[SEND_T] t=%.3f before_queue_thread", _time.monotonic() - _t0)
+
+    photo_urls_snapshot = list(photo_urls)
+    text_snapshot = text_value
+
+    def _enqueue_in_thread() -> None:
+        from app.database import SessionLocal
+
+        with SessionLocal() as qdb:
+            if photo_urls_snapshot:
+                queue_only_send_media_group_sync(
+                    qdb,
+                    conversation_id=conversation_id,
+                    target_chat_id=chat_id,
+                    target_user_id=customer_account_id,
+                    photo_urls=photo_urls_snapshot,
+                    text=text_snapshot,
+                    text_format="markdown",
+                    source="bot_system",
+                )
+            else:
+                queue_only_send_text_sync(
+                    qdb,
+                    conversation_id=conversation_id,
+                    target_chat_id=chat_id,
+                    target_user_id=customer_account_id,
+                    text=text_snapshot,
+                    text_format="markdown",
+                    source="bot_system",
+                )
+
+    await asyncio.to_thread(_enqueue_in_thread)
     _log.warning("[SEND_T] t=%.3f after_queue", _time.monotonic() - _t0)
     msg = (
         db.query(ChatMessage)

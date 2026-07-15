@@ -2148,6 +2148,27 @@ def _format_delivery_error(result: dict) -> str:
     return f"{human} ({detail_text})"[:2000] if detail_text else human
 
 
+def _release_db_connection(db: Session) -> None:
+    """
+    End any open SQLAlchemy transaction on this session.
+
+    Critical for SQLite: holding a BEGIN across `await` (Max HTTP / sleep) keeps
+    a lock that blocks other writers. If an async handler then does a sync
+    `commit()` on the event loop, the worker cannot resume to release the lock
+    → multi-second stalls (seen as SEND_T after_queue ≈ 7s).
+    """
+    try:
+        if db.new or db.dirty or db.deleted:
+            db.commit()
+        else:
+            db.rollback()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
 def _enqueue_outbox_message(
     db: Session,
     *,
@@ -2667,6 +2688,8 @@ async def _dispatch_outbox(
         wait_seconds = 0.6
         attempts = max(1, int(max_attempts or 1))
         for idx in range(attempts):
+            # Never hold a SQLite transaction across Max HTTP or retry sleeps.
+            _release_db_connection(db)
             result_value = await client.send_message(
                 chat_id=chat_id,
                 user_id=user_id,
@@ -2682,6 +2705,7 @@ async def _dispatch_outbox(
                 return result_value
             if idx >= attempts - 1:
                 return result_value
+            _release_db_connection(db)
             await asyncio.sleep(wait_seconds)
             wait_seconds = min(wait_seconds * 2.0, 5.0)
         return {"success": False, "error": "attachment_not_ready_retry_exhausted"}
@@ -2689,12 +2713,14 @@ async def _dispatch_outbox(
     async def _send_by_chat() -> dict:
 
         if item.operation == "send_text":
+            _release_db_connection(db)
             return await client.send_text(
                 chat_id=target_chat_id,
                 text=str(payload.get("text") or ""),
                 text_format=str(payload.get("format") or "").strip().lower() or None,
             )
         if item.operation == "send_photo":
+            _release_db_connection(db)
             return await client.send_photo(
                 chat_id=target_chat_id,
                 photo_url=str(payload.get("photo_url") or ""),
@@ -2725,6 +2751,7 @@ async def _dispatch_outbox(
                         int(images_count or 0),
                         str(target_chat_id or "").strip(),
                     )
+                    _release_db_connection(db)
                     images_result = await client.send_images(
                         chat_id=target_chat_id,
                         images=images,
@@ -2769,12 +2796,14 @@ async def _dispatch_outbox(
         if not target_user_id:
             return {"success": False, "error": "user_id_unavailable"}
         if item.operation == "send_text":
+            _release_db_connection(db)
             return await client.send_text_to_user(
                 user_id=target_user_id,
                 text=str(payload.get("text") or ""),
                 text_format=str(payload.get("format") or "").strip().lower() or None,
             )
         if item.operation == "send_photo":
+            _release_db_connection(db)
             return await client.send_photo_to_user(
                 user_id=target_user_id,
                 photo_url=str(payload.get("photo_url") or ""),
@@ -2805,6 +2834,7 @@ async def _dispatch_outbox(
                         int(images_count or 0),
                         str(target_user_id or "").strip(),
                     )
+                    _release_db_connection(db)
                     images_result = await client.send_images(
                         user_id=target_user_id,
                         images=images,
@@ -2861,10 +2891,13 @@ async def _dispatch_outbox(
         message = str(response.get("message") or "").strip().lower()
         return "chat.not_found" in code or "chat " in message and " not found" in message
 
+    # Release any read transaction opened by pre-send queries before HTTP.
+    _release_db_connection(db)
     if target_chat_id:
         result = await _send_by_chat()
         if not (bool(result.get("success", True) or result.get("message"))) and _is_chat_not_found_error(result):
             # For dialogs Max may reject chat_id while accepting user_id. Try fallback.
+            _release_db_connection(db)
             fallback = await _send_by_user()
             result = fallback
     elif target_user_id:
@@ -3020,6 +3053,9 @@ async def process_outbox_queue(
         query = query.filter(OutboxMessage.workspace_id == workspace_id)
     items = query.order_by(OutboxMessage.next_retry_at.asc(), OutboxMessage.id.asc()).limit(limit).all()
     if not items:
+        # End the SELECT transaction immediately so writers are not blocked until
+        # the worker finishes billing/alert work or closes the session.
+        _release_db_connection(db)
         return 0
     processed = 0
     for item in items:
@@ -3044,6 +3080,8 @@ async def process_outbox_queue(
             continue
         db.refresh(item)
         client = _workspace_client(db, workspace_id=item.workspace_id)
+        # SQLite: must not hold a read txn across Max HTTP / attachment retries.
+        _release_db_connection(db)
         await _dispatch_outbox(db, client=client, item=item)
         processed += 1
     return processed
@@ -3069,6 +3107,7 @@ async def retry_failed_outbox_message(
     db.add(item)
     db.commit()
     client = _workspace_client(db, workspace_id=item.workspace_id)
+    _release_db_connection(db)
     ok, _, _ = await _dispatch_outbox(db, client=client, item=item)
     return ok
 
@@ -3236,6 +3275,35 @@ async def queue_only_send_text(
     scheduled_for: datetime | None = None,
     text_format: str | None = None,
 ) -> None:
+    queue_only_send_text_sync(
+        db,
+        conversation_id=conversation_id,
+        target_chat_id=target_chat_id,
+        target_user_id=target_user_id,
+        text=text,
+        source=source,
+        link_mid=link_mid,
+        scheduled_for=scheduled_for,
+        text_format=text_format,
+    )
+
+
+def queue_only_send_text_sync(
+    db: Session,
+    *,
+    conversation_id: int,
+    target_chat_id: str,
+    target_user_id: str | None = None,
+    text: str,
+    source: str,
+    link_mid: str | None = None,
+    scheduled_for: datetime | None = None,
+    text_format: str | None = None,
+) -> None:
+    """Sync enqueue for thread-pool callers (must not share request Session)."""
+    import time as _time
+
+    _t0 = _time.monotonic()
     next_retry_at = _as_naive_utc(scheduled_for or _utc_now())
     is_scheduled_message = scheduled_for is not None
     msg = _store_chat_message(
@@ -3251,6 +3319,8 @@ async def queue_only_send_text(
         delivery_next_retry_at=next_retry_at,
         is_scheduled_message=is_scheduled_message,
     )
+    logger.warning("[SEND_T] queue_text store=%.3f", _time.monotonic() - _t0)
+    _t1 = _time.monotonic()
     _enqueue_outbox_message(
         db,
         conversation_id=conversation_id,
@@ -3261,9 +3331,39 @@ async def queue_only_send_text(
         payload={"text": text, "format": text_format},
         next_retry_at=next_retry_at,
     )
+    logger.warning(
+        "[SEND_T] queue_text enqueue=%.3f total=%.3f",
+        _time.monotonic() - _t1,
+        _time.monotonic() - _t0,
+    )
 
 
 async def queue_only_send_media_group(
+    db: Session,
+    *,
+    conversation_id: int,
+    target_chat_id: str,
+    target_user_id: str | None = None,
+    photo_urls: list[str],
+    text: str = "",
+    text_format: str | None = None,
+    source: str,
+    scheduled_for: datetime | None = None,
+) -> None:
+    queue_only_send_media_group_sync(
+        db,
+        conversation_id=conversation_id,
+        target_chat_id=target_chat_id,
+        target_user_id=target_user_id,
+        photo_urls=photo_urls,
+        text=text,
+        text_format=text_format,
+        source=source,
+        scheduled_for=scheduled_for,
+    )
+
+
+def queue_only_send_media_group_sync(
     db: Session,
     *,
     conversation_id: int,
