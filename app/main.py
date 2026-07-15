@@ -10773,6 +10773,26 @@ async def max_webhook(
         # Ignore non-message updates or malformed events without failing webhook delivery.
         return {"ok": True, "ignored": "unsupported_payload"}
 
+    try:
+        attach_types: list[str] = []
+        message_node = payload.get("message") if isinstance(payload.get("message"), dict) else {}
+        body_node = message_node.get("body") if isinstance(message_node.get("body"), dict) else {}
+        raw_attachments = body_node.get("attachments") if isinstance(body_node.get("attachments"), list) else []
+        for item in raw_attachments[:8]:
+            if isinstance(item, dict):
+                attach_types.append(str(item.get("type") or "").strip().lower() or "?")
+        logging.getLogger(__name__).info(
+            "[WEBHOOK] type=%s chat=%s sender=%s images=%s videos=%s tokens=%s attach=%s",
+            str(event.update_type or ""),
+            str(event.chat_id or "")[:32],
+            str(event.sender_id or "")[:32],
+            len(getattr(event, "image_urls", []) or []),
+            len(getattr(event, "video_urls", []) or []),
+            len(getattr(event, "video_tokens", []) or []),
+            ",".join(attach_types) or "-",
+        )
+    except Exception:
+        logging.getLogger(__name__).exception("[WEBHOOK] diag failed")
 
     # Webhook dedup by stable event UID.
     event_uid = event.event_uid_value()

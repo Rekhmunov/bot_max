@@ -1246,9 +1246,10 @@ async def _download_and_store_incoming_media(
     if not url or not (url.startswith("http://") or url.startswith("https://")):
         return None
     image_max_bytes = 20 * 1024 * 1024
-    video_max_bytes = 100 * 1024 * 1024
+    # Keep webhook latency bounded: Max may drop/retry slow webhook handlers.
+    video_max_bytes = 40 * 1024 * 1024
     headers_candidates = _incoming_media_auth_headers(client)
-    request_timeout = 120 if (force_video or _looks_like_video_url(url)) else 30
+    request_timeout = 12 if (force_video or _looks_like_video_url(url)) else 20
     for headers in headers_candidates:
         try:
             async with httpx.AsyncClient(timeout=request_timeout, follow_redirects=True) as http_client:
@@ -1318,24 +1319,46 @@ async def _resolve_incoming_video_tokens(
             continue
         seen.add(token_value)
         download_url: str | None = None
-        for attempt in range(5):
+        # Keep webhook path short: one quick retry only.
+        for attempt in range(2):
             info = await client.get_video_info(token_value)
             if not isinstance(info, dict):
                 info = {}
+            if not bool(info.get("success", True)) and info.get("error"):
+                logger.info(
+                    "[INCOMING_VIDEO] get_video_info error token=%s err=%s status=%s",
+                    token_value[:24],
+                    info.get("error"),
+                    info.get("status_code"),
+                )
             download_url = MaxClient.pick_video_download_url(info)
             if download_url:
                 break
             # Video may still be processing on Max side (urls=null).
-            if attempt < 4:
-                await asyncio.sleep(0.7 * (attempt + 1))
+            if attempt < 1:
+                await asyncio.sleep(0.6)
         if download_url:
             resolved.append(download_url)
+            logger.info(
+                "[INCOMING_VIDEO] resolved token=%s url_host=%s",
+                token_value[:24],
+                urlsplit(download_url).netloc,
+            )
         else:
             logger.info(
                 "[INCOMING_VIDEO] failed to resolve video token=%s",
                 token_value[:24],
             )
     return resolved
+
+
+def _mark_remote_video_url(url: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        return ""
+    if _looks_like_video_url(value) or "bot_max_video=1" in value:
+        return value
+    return f"{value}{'&' if '?' in value else '?'}bot_max_video=1"
 
 
 async def _materialize_incoming_image_urls(
@@ -1373,9 +1396,7 @@ async def _materialize_incoming_image_urls(
             continue
         # Keep original URL as graceful fallback when remote content cannot be downloaded.
         # Mark unmarked remote video URLs so the chat UI renders <video>, not <img>.
-        fallback = candidate
-        if force_video and not _looks_like_video_url(fallback) and "bot_max_video=1" not in fallback:
-            fallback = f"{fallback}{'&' if '?' in fallback else '?'}bot_max_video=1"
+        fallback = _mark_remote_video_url(candidate) if force_video else candidate
         if fallback not in seen:
             seen.add(fallback)
             prepared.append(fallback)
@@ -4820,6 +4841,16 @@ async def handle_customer_event(
         for token in (getattr(event, "video_tokens", []) or [])
         if str(token).strip()
     ]
+    logger.info(
+        "[INCOMING] chat=%s sender=%s text_len=%s images=%s videos=%s tokens=%s mid=%s",
+        str(event.chat_id or "")[:32],
+        str(event.sender_id or "")[:32],
+        len(str(event.text or "")),
+        len(incoming_image_urls),
+        len(incoming_video_urls),
+        len(video_tokens),
+        str(event.message_mid or "")[:24],
+    )
     normalized_image_urls = await _materialize_incoming_image_urls(
         image_urls=incoming_image_urls,
         client=client,
@@ -4873,12 +4904,27 @@ async def handle_customer_event(
         seen_media.add(value)
         merged_media_urls.append(value)
     normalized_image_urls = merged_media_urls
+    message_text = str(event.text or "")
+    had_video_intent = bool(incoming_video_urls or video_tokens)
+    if had_video_intent and not normalized_image_urls and not message_text.strip():
+        # Keep the bubble visible even if Max video URLs are not ready yet.
+        message_text = "Видео"
+        logger.info(
+            "[INCOMING_VIDEO] stored placeholder text (no media resolved) chat=%s",
+            str(event.chat_id or "")[:32],
+        )
+    logger.info(
+        "[INCOMING] stored media_n=%s video_intent=%s first=%s",
+        len(normalized_image_urls),
+        had_video_intent,
+        (normalized_image_urls[0][:80] if normalized_image_urls else ""),
+    )
     _store_chat_message(
         db,
         conversation_id=conversation.id,
         direction="customer",
         source="customer",
-        text=event.text or "",
+        text=message_text,
         image_url=(normalized_image_urls[0] if normalized_image_urls else None),
         image_urls_json=(
             json.dumps(normalized_image_urls, ensure_ascii=False)

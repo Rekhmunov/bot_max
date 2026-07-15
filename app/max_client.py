@@ -296,7 +296,8 @@ class MaxClient:
         if not token_value:
             return {"success": False, "error": "video_token_required"}
         encoded = quote(token_value, safe="")
-        return await self._get(f"/videos/{encoded}", timeout=30)
+        # Bound webhook latency: video metadata fetch must fail fast.
+        return await self._get(f"/videos/{encoded}", timeout=6)
 
     async def send_message(
         self,
