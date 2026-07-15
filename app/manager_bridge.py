@@ -3460,16 +3460,13 @@ async def enqueue_and_process_send_media_group(
         delivery_next_retry_at=now_utc_naive,
     )
     image_payloads: list[tuple[str, bytes]] = []
+    local_paths: list[str] = []
     for value in urls:
         local_file = _resolve_local_static_media_file(value)
         if local_file is None:
-            image_payloads = []
+            local_paths = []
             break
-        try:
-            image_payloads.append((local_file.name or "image.jpg", local_file.read_bytes()))
-        except Exception:
-            image_payloads = []
-            break
+        local_paths.append(str(local_file))
     item = _enqueue_outbox_message(
         db,
         conversation_id=conversation_id,
@@ -3477,18 +3474,12 @@ async def enqueue_and_process_send_media_group(
         target_chat_id=target_chat_id,
         target_user_id=target_user_id,
         operation="send_message",
-        payload=(
-            {
-                "text": (text or "").strip() or None,
-                "format": text_format,
-                "images": [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads],
-                # Keep URL attachments even on byte-upload path so fallback
-                # after upload_token_missing can resend without payload loss.
-                "attachments": attachments,
-            }
-            if image_payloads
-            else {"text": (text or "").strip() or None, "format": text_format, "attachments": attachments}
-        ),
+        payload={
+            "text": (text or "").strip() or None,
+            "format": text_format,
+            "attachments": attachments,
+            "local_image_paths": local_paths,
+        },
     )
     claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
     if claimed_item is None:
