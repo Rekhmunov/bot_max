@@ -6,6 +6,7 @@ import json
 import re
 import logging
 import httpx
+import time
 from datetime import UTC, date, datetime, timedelta
 from dataclasses import dataclass
 from typing import Optional
@@ -1450,6 +1451,58 @@ def _decode_image_bytes_from_payload(value: object) -> bytes:
         return b""
 
 
+def _load_dispatch_images_from_payload(payload: dict) -> list[tuple[str, bytes]]:
+    """
+    Build (filename, bytes) for Max byte-upload from outbox payload.
+    Prefer explicit legacy base64 `images`, else read `local_image_paths`,
+    else try resolving attachment URLs to local files.
+    """
+    images_payload = payload.get("images")
+    if isinstance(images_payload, list) and images_payload:
+        images: list[tuple[str, bytes]] = []
+        for row in images_payload:
+            if not isinstance(row, list) or len(row) != 2:
+                return []
+            file_name = str(row[0] or "").strip() or "image.jpg"
+            content_bytes = _decode_image_bytes_from_payload(row[1])
+            if not content_bytes:
+                return []
+            images.append((file_name, content_bytes))
+        return images
+
+    path_values: list[str] = []
+    local_paths = payload.get("local_image_paths")
+    if isinstance(local_paths, list):
+        path_values.extend(str(item or "").strip() for item in local_paths if str(item or "").strip())
+    if not path_values:
+        attachments_payload = payload.get("attachments")
+        if isinstance(attachments_payload, list):
+            for row in attachments_payload:
+                if not isinstance(row, dict):
+                    continue
+                row_payload = row.get("payload")
+                if not isinstance(row_payload, dict):
+                    continue
+                url = str(row_payload.get("url") or "").strip()
+                if url:
+                    path_values.append(url)
+
+    images = []
+    for value in path_values:
+        local_file = _resolve_local_static_media_file(value)
+        if local_file is None:
+            # Also accept absolute paths recorded at enqueue time.
+            candidate = Path(str(value))
+            local_file = candidate if candidate.is_file() else None
+        if local_file is None:
+            return []
+        try:
+            images.append((local_file.name or "image.jpg", local_file.read_bytes()))
+        except Exception:
+            return []
+    return images
+
+
 def _chat_message_media_paths(item: ChatMessage) -> list[str]:
     linked_paths = _media_paths_from_asset_links(
         db=Session.object_session(item),  # type: ignore[arg-type]
@@ -2169,6 +2222,63 @@ def _timed_commit(db: Session, *, label: str) -> float:
     return elapsed
 
 
+# Recent enqueue fingerprints (workspace_id, fingerprint) -> (expires_monotonic, outbox_id).
+# Prevents double-click duplicates without touching the fat outbox table.
+_RECENT_OUTBOX_FINGERPRINTS: dict[tuple[int, str], tuple[float, int]] = {}
+_RECENT_OUTBOX_FINGERPRINT_TTL_SECONDS = 180.0
+_OUTBOX_IDEM_INDEX_ENSURED = False
+
+
+def _remember_outbox_fingerprint(*, workspace_id: int, fingerprint: str, outbox_id: int) -> None:
+    fp = str(fingerprint or "").strip()
+    if not fp or int(outbox_id or 0) <= 0:
+        return
+    now = time.monotonic()
+    key = (int(workspace_id), fp)
+    _RECENT_OUTBOX_FINGERPRINTS[key] = (now + _RECENT_OUTBOX_FINGERPRINT_TTL_SECONDS, int(outbox_id))
+    # Opportunistic prune to keep the map small.
+    if len(_RECENT_OUTBOX_FINGERPRINTS) > 2048:
+        stale = [k for k, (exp, _) in _RECENT_OUTBOX_FINGERPRINTS.items() if exp <= now]
+        for k in stale:
+            _RECENT_OUTBOX_FINGERPRINTS.pop(k, None)
+
+
+def _cached_outbox_fingerprint(*, workspace_id: int, fingerprint: str) -> int | None:
+    fp = str(fingerprint or "").strip()
+    if not fp:
+        return None
+    key = (int(workspace_id), fp)
+    entry = _RECENT_OUTBOX_FINGERPRINTS.get(key)
+    if entry is None:
+        return None
+    expires_at, outbox_id = entry
+    if expires_at <= time.monotonic():
+        _RECENT_OUTBOX_FINGERPRINTS.pop(key, None)
+        return None
+    return int(outbox_id)
+
+
+def _ensure_outbox_idempotency_index(db: Session) -> None:
+    """Create the composite idempotency index once per process if missing."""
+    global _OUTBOX_IDEM_INDEX_ENSURED
+    if _OUTBOX_IDEM_INDEX_ENSURED:
+        return
+    try:
+        db.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_outbox_messages_idempotency_key "
+                "ON outbox_messages (workspace_id, idempotency_key)"
+            )
+        )
+        db.commit()
+    except Exception:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+    _OUTBOX_IDEM_INDEX_ENSURED = True
+
+
 def _release_db_connection(db: Session) -> None:
     """
     End any open SQLAlchemy transaction on this session.
@@ -2260,6 +2370,11 @@ def _enqueue_outbox_message(
             fingerprint[:12],
             int(getattr(existing_dup, "id", 0) or 0),
         )
+        _remember_outbox_fingerprint(
+            workspace_id=int(resolved_workspace_id),
+            fingerprint=fingerprint,
+            outbox_id=int(getattr(existing_dup, "id", 0) or 0),
+        )
         return existing_dup
     outbox_kwargs: dict[str, object] = {
         "workspace_id": resolved_workspace_id,
@@ -2285,9 +2400,14 @@ def _enqueue_outbox_message(
     )
     db.add(item)
     _timed_commit(db, label="enqueue_outbox")
-    _te4 = _time.monotonic()
+    _te4 = time.monotonic()
     db.refresh(item)
-    logger.warning("[SEND_DIAG] enqueue refresh=%.3f", _time.monotonic() - _te4)
+    _remember_outbox_fingerprint(
+        workspace_id=int(resolved_workspace_id or 0),
+        fingerprint=fingerprint,
+        outbox_id=int(getattr(item, "id", 0) or 0),
+    )
+    logger.warning("[SEND_DIAG] enqueue refresh=%.3f", time.monotonic() - _te4)
     logger.info(
         "[OUTBOX_ENQUEUE] created id=%s workspace=%s operation=%s chat_message_id=%s fingerprint=%s",
         int(getattr(item, "id", 0) or 0),
@@ -2383,11 +2503,11 @@ def _find_recent_outbox_duplicate(
     Find a queued/sending outbox row with the same idempotency fingerprint
     created within the time window.
 
-    Critical performance note (prod measured ~7s/send):
-    Do NOT use ORM ORDER BY id DESC with equality filters on this table.
-    SQLite may ignore the idempotency index and scan the whole outbox
-    table (including multi‑MB payload_json blobs) when no row matches.
-    Use a covering indexed lookup without ORDER BY instead.
+    Performance rules (prod measured ~7s/send before fixes):
+    1) Prefer in-process cache (double-click / retries) — no DB.
+    2) Never ORM ORDER BY on this fat table — SQLite may full-scan payload_json.
+    3) Use indexed equality only; fail-open if the lookup is unexpectedly slow
+       so operator send latency stays low even on a bloated outbox.
     """
     fp = str(fingerprint or "").strip()
     if not fp:
@@ -2395,22 +2515,64 @@ def _find_recent_outbox_duplicate(
     window_from = _as_naive_utc(_utc_now() - timedelta(seconds=max(1, int(time_window_seconds or 1))))
     ws = int(workspace_id)
 
+    cached_id = _cached_outbox_fingerprint(workspace_id=ws, fingerprint=fp)
+    if cached_id is not None:
+        cached_row = (
+            db.query(OutboxMessage)
+            .options(
+                load_only(
+                    OutboxMessage.id,
+                    OutboxMessage.workspace_id,
+                    OutboxMessage.state,
+                    OutboxMessage.created_at,
+                    OutboxMessage.idempotency_key,
+                    OutboxMessage.chat_message_id,
+                    OutboxMessage.conversation_id,
+                    OutboxMessage.operation,
+                )
+            )
+            .filter(OutboxMessage.id == cached_id)
+            .first()
+        )
+        if cached_row is not None:
+            state = str(getattr(cached_row, "state", "") or "").strip().lower()
+            if state in {"queued", "sending"}:
+                return cached_row
+
     if not hasattr(OutboxMessage, "idempotency_key"):
-        # Legacy schema without idempotency columns: cannot match cheaply without
-        # scanning payload_json blobs — skip rather than burning seconds per send.
         return None
 
-    # Lightweight indexed seek. No ORDER BY — that alone caused full-table scans
-    # on miss. Index: ix_outbox_messages_idempotency_key (workspace_id, idempotency_key).
-    rows = db.execute(
-        text(
-            "SELECT id, state, created_at "
-            "FROM outbox_messages "
-            "WHERE workspace_id = :ws AND idempotency_key = :fp "
-            "LIMIT 32"
-        ),
-        {"ws": ws, "fp": fp},
-    ).fetchall()
+    _ensure_outbox_idempotency_index(db)
+
+    t0 = time.monotonic()
+    try:
+        rows = db.execute(
+            text(
+                "SELECT id, state, created_at "
+                "FROM outbox_messages "
+                "WHERE workspace_id = :ws AND idempotency_key = :fp "
+                "LIMIT 32"
+            ),
+            {"ws": ws, "fp": fp},
+        ).fetchall()
+    except Exception as exc:
+        logger.warning(
+            "[SEND_DIAG] dedupe_query_FAIL err=%s — fail-open (skip dedupe)",
+            f"{type(exc).__name__}: {exc}",
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        return None
+
+    elapsed = time.monotonic() - t0
+    if elapsed > 0.25:
+        logger.warning(
+            "[SEND_DIAG] dedupe_query_SLOW elapsed=%.3f — fail-open (skip dedupe)",
+            elapsed,
+        )
+        return None
 
     best_id: int | None = None
     for row in rows:
@@ -2432,7 +2594,7 @@ def _find_recent_outbox_duplicate(
     if best_id is None:
         return None
 
-    return (
+    found = (
         db.query(OutboxMessage)
         .options(
             load_only(
@@ -2449,6 +2611,9 @@ def _find_recent_outbox_duplicate(
         .filter(OutboxMessage.id == best_id)
         .first()
     )
+    if found is not None:
+        _remember_outbox_fingerprint(workspace_id=ws, fingerprint=fp, outbox_id=int(found.id))
+    return found
 
 
 def _update_chat_message_delivery(
@@ -2826,56 +2991,42 @@ async def _dispatch_outbox(
             )
         if item.operation == "send_message":
             direct_attachments = _resolve_direct_attachments()
-            images_payload = payload.get("images")
-            if isinstance(images_payload, list) and images_payload:
-                images: list[tuple[str, bytes]] = []
-                images_count = 0
-                for row in images_payload:
-                    if not isinstance(row, list) or len(row) != 2:
-                        images = []
-                        break
-                    file_name = str(row[0] or "").strip() or "image.jpg"
-                    content_raw = row[1]
-                    content_bytes = _decode_image_bytes_from_payload(content_raw)
-                    if not content_bytes:
-                        images = []
-                        break
-                    images.append((file_name, content_bytes))
+            images = _load_dispatch_images_from_payload(payload)
+            if images:
                 images_count = len(images)
-                if images:
+                logger.info(
+                    "[MEDIA_SEND] outbox_id=%s mode=byte_upload route=chat images=%s target_chat=%s",
+                    int(getattr(item, "id", 0) or 0),
+                    int(images_count or 0),
+                    str(target_chat_id or "").strip(),
+                )
+                _release_db_connection(db)
+                images_result = await client.send_images(
+                    chat_id=target_chat_id,
+                    images=images,
+                    text=str(payload.get("text")) if payload.get("text") is not None else None,
+                    text_format=str(payload.get("format") or "").strip().lower() or None,
+                )
+                if isinstance(images_result, dict) and (
+                    str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
+                    or _is_proto_payload_upload_error(images_result)
+                    or _is_multi_image_proto_payload_error(images_result, image_count=images_count)
+                ):
                     logger.info(
-                        "[MEDIA_SEND] outbox_id=%s mode=byte_upload route=chat images=%s target_chat=%s",
+                        "[MEDIA_SEND_FALLBACK] outbox_id=%s route=chat images=%s reason=%s",
                         int(getattr(item, "id", 0) or 0),
                         int(images_count or 0),
-                        str(target_chat_id or "").strip(),
+                        str(_format_delivery_error(images_result) or "").strip()[:240],
                     )
-                    _release_db_connection(db)
-                    images_result = await client.send_images(
+                    # Fallback for upload providers returning non-standard token response:
+                    # send by URL attachments to avoid blocking operator flow.
+                    return await _send_message_with_attachment_ready_retry(
                         chat_id=target_chat_id,
-                        images=images,
                         text=str(payload.get("text")) if payload.get("text") is not None else None,
+                        attachments=_resolve_fallback_attachments(),
                         text_format=str(payload.get("format") or "").strip().lower() or None,
                     )
-                    if isinstance(images_result, dict) and (
-                        str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
-                        or _is_proto_payload_upload_error(images_result)
-                        or _is_multi_image_proto_payload_error(images_result, image_count=images_count)
-                    ):
-                        logger.info(
-                            "[MEDIA_SEND_FALLBACK] outbox_id=%s route=chat images=%s reason=%s",
-                            int(getattr(item, "id", 0) or 0),
-                            int(images_count or 0),
-                            str(_format_delivery_error(images_result) or "").strip()[:240],
-                        )
-                        # Fallback for upload providers returning non-standard token response:
-                        # send by URL attachments to avoid blocking operator flow.
-                        return await _send_message_with_attachment_ready_retry(
-                            chat_id=target_chat_id,
-                            text=str(payload.get("text")) if payload.get("text") is not None else None,
-                            attachments=_resolve_fallback_attachments(),
-                            text_format=str(payload.get("format") or "").strip().lower() or None,
-                        )
-                    return images_result
+                return images_result
             attachments_to_send = (
                 direct_attachments
                 if direct_attachments
@@ -2909,56 +3060,42 @@ async def _dispatch_outbox(
             )
         if item.operation == "send_message":
             direct_attachments = _resolve_direct_attachments()
-            images_payload = payload.get("images")
-            if isinstance(images_payload, list) and images_payload:
-                images: list[tuple[str, bytes]] = []
-                images_count = 0
-                for row in images_payload:
-                    if not isinstance(row, list) or len(row) != 2:
-                        images = []
-                        break
-                    file_name = str(row[0] or "").strip() or "image.jpg"
-                    content_raw = row[1]
-                    content_bytes = _decode_image_bytes_from_payload(content_raw)
-                    if not content_bytes:
-                        images = []
-                        break
-                    images.append((file_name, content_bytes))
+            images = _load_dispatch_images_from_payload(payload)
+            if images:
                 images_count = len(images)
-                if images:
+                logger.info(
+                    "[MEDIA_SEND] outbox_id=%s mode=byte_upload route=user images=%s target_user=%s",
+                    int(getattr(item, "id", 0) or 0),
+                    int(images_count or 0),
+                    str(target_user_id or "").strip(),
+                )
+                _release_db_connection(db)
+                images_result = await client.send_images(
+                    user_id=target_user_id,
+                    images=images,
+                    text=str(payload.get("text")) if payload.get("text") is not None else None,
+                    text_format=str(payload.get("format") or "").strip().lower() or None,
+                )
+                if isinstance(images_result, dict) and (
+                    str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
+                    or _is_proto_payload_upload_error(images_result)
+                    or _is_multi_image_proto_payload_error(images_result, image_count=images_count)
+                ):
                     logger.info(
-                        "[MEDIA_SEND] outbox_id=%s mode=byte_upload route=user images=%s target_user=%s",
+                        "[MEDIA_SEND_FALLBACK] outbox_id=%s route=user images=%s reason=%s",
                         int(getattr(item, "id", 0) or 0),
                         int(images_count or 0),
-                        str(target_user_id or "").strip(),
+                        str(_format_delivery_error(images_result) or "").strip()[:240],
                     )
-                    _release_db_connection(db)
-                    images_result = await client.send_images(
+                    # Fallback for upload providers returning non-standard token response:
+                    # send by URL attachments to avoid blocking operator flow.
+                    return await _send_message_with_attachment_ready_retry(
                         user_id=target_user_id,
-                        images=images,
                         text=str(payload.get("text")) if payload.get("text") is not None else None,
+                        attachments=_resolve_fallback_attachments(),
                         text_format=str(payload.get("format") or "").strip().lower() or None,
                     )
-                    if isinstance(images_result, dict) and (
-                        str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
-                        or _is_proto_payload_upload_error(images_result)
-                        or _is_multi_image_proto_payload_error(images_result, image_count=images_count)
-                    ):
-                        logger.info(
-                            "[MEDIA_SEND_FALLBACK] outbox_id=%s route=user images=%s reason=%s",
-                            int(getattr(item, "id", 0) or 0),
-                            int(images_count or 0),
-                            str(_format_delivery_error(images_result) or "").strip()[:240],
-                        )
-                        # Fallback for upload providers returning non-standard token response:
-                        # send by URL attachments to avoid blocking operator flow.
-                        return await _send_message_with_attachment_ready_retry(
-                            user_id=target_user_id,
-                            text=str(payload.get("text")) if payload.get("text") is not None else None,
-                            attachments=_resolve_fallback_attachments(),
-                            text_format=str(payload.get("format") or "").strip().lower() or None,
-                        )
-                    return images_result
+                return images_result
             attachments_to_send = (
                 direct_attachments
                 if direct_attachments
@@ -3508,37 +3645,19 @@ def queue_only_send_media_group_sync(
     logger.warning("[SEND_DIAG] media store=%.3f", _time.monotonic() - _t0)
     attachments = [{"type": "image", "payload": {"url": _to_external_media_url(value)}} for value in urls]
     attachments = [item for item in attachments if str((item.get("payload") or {}).get("url") or "").strip()]
-    image_payloads: list[tuple[str, bytes]] = []
-    _tr = _time.monotonic()
-    total_bytes = 0
+    # Keep local path hints for dispatch to upload bytes without bloating outbox
+    # payload_json (base64 images made outbox rows multi‑MB and slowed every send).
+    local_paths: list[str] = []
     for value in urls:
         local_file = _resolve_local_static_media_file(value)
         if local_file is None:
-            image_payloads = []
+            local_paths = []
             break
-        try:
-            content = local_file.read_bytes()
-            total_bytes += len(content)
-            image_payloads.append((local_file.name or "image.jpg", content))
-        except Exception:
-            image_payloads = []
-            break
+        local_paths.append(str(local_file))
     logger.warning(
-        "[SEND_DIAG] media read_files=%.3f n=%s bytes=%s",
-        _time.monotonic() - _tr,
-        len(image_payloads),
-        total_bytes,
-    )
-    _tb = _time.monotonic()
-    encoded_images = (
-        [[name, _encode_image_bytes_for_payload(content)] for name, content in image_payloads]
-        if image_payloads
-        else []
-    )
-    logger.warning(
-        "[SEND_DIAG] media b64_encode=%.3f n=%s",
-        _time.monotonic() - _tb,
-        len(encoded_images),
+        "[SEND_DIAG] media local_paths n=%s of=%s",
+        len(local_paths),
+        len(urls),
     )
     _te = _time.monotonic()
     _enqueue_outbox_message(
@@ -3548,17 +3667,13 @@ def queue_only_send_media_group_sync(
         target_chat_id=target_chat_id,
         target_user_id=target_user_id,
         operation="send_message",
-        payload=(
-            {
-                "text": (text or "").strip() or None,
-                "format": text_format,
-                "images": encoded_images,
-                # Preserve URL attachments for retry/fallback path.
-                "attachments": attachments,
-            }
-            if encoded_images
-            else {"text": (text or "").strip() or None, "format": text_format, "attachments": attachments}
-        ),
+        payload={
+            "text": (text or "").strip() or None,
+            "format": text_format,
+            "attachments": attachments,
+            # Optional local file paths for byte-upload at dispatch time.
+            "local_image_paths": local_paths,
+        },
         next_retry_at=next_retry_at,
     )
     logger.warning(
