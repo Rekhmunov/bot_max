@@ -261,7 +261,9 @@ class MaxWebhookEvent(BaseModel):
                     payload_item.get("token"),
                     item.get("token"),
                 )
-                if video_token and not video_url:
+                # Keep token even when url is present: Max MediaPayload usually has both,
+                # and CDN url can expire or fail download — token resolves via GET /videos/{token}.
+                if video_token:
                     normalized_token = str(video_token).strip()
                     if normalized_token and normalized_token not in video_tokens:
                         video_tokens.append(normalized_token)
@@ -316,6 +318,7 @@ class MaxWebhookEvent(BaseModel):
             message_data.get("type_message"),
             payload.get("typeMessage"),
         ) or "").strip().lower()
+        caption_from_file_message = None
         if type_message in {"imagemessage", "image_message", "videomessage", "video_message"}:
             file_message_data = (
                 message_data.get("fileMessageData")
@@ -337,12 +340,10 @@ class MaxWebhookEvent(BaseModel):
                             video_urls.append(normalized_media_url)
                     elif normalized_media_url not in image_urls:
                         image_urls.append(normalized_media_url)
-            caption_text = _pick_first(
+            caption_from_file_message = _pick_first(
                 file_message_data.get("caption"),
                 message_data.get("caption"),
             )
-            if caption_text is not None and str(caption_text).strip():
-                text = str(caption_text).strip()
 
         contact_phone = _pick_first(
             contact_phone,
@@ -409,6 +410,11 @@ class MaxWebhookEvent(BaseModel):
             _deep_find_first(payload, {"text", "message_text", "messageText"}),
             "",
         )
+        # Green-API style caption lives under fileMessageData; apply only when body text is empty.
+        if not str(text or "").strip() and caption_from_file_message is not None:
+            caption_value = str(caption_from_file_message).strip()
+            if caption_value:
+                text = caption_value
         message_mid = _pick_first(
             payload.get("idMessage"),
             payload.get("id_message"),

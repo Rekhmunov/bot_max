@@ -1318,7 +1318,7 @@ async def _resolve_incoming_video_tokens(
             continue
         seen.add(token_value)
         download_url: str | None = None
-        for attempt in range(3):
+        for attempt in range(5):
             info = await client.get_video_info(token_value)
             if not isinstance(info, dict):
                 info = {}
@@ -1326,8 +1326,8 @@ async def _resolve_incoming_video_tokens(
             if download_url:
                 break
             # Video may still be processing on Max side (urls=null).
-            if attempt < 2:
-                await asyncio.sleep(0.8 * (attempt + 1))
+            if attempt < 4:
+                await asyncio.sleep(0.7 * (attempt + 1))
         if download_url:
             resolved.append(download_url)
         else:
@@ -4805,14 +4805,6 @@ async def handle_customer_event(
         )
     )
     db.commit()
-    resolved_video_urls = await _resolve_incoming_video_tokens(
-        video_tokens=[
-            str(token).strip()
-            for token in (getattr(event, "video_tokens", []) or [])
-            if str(token).strip()
-        ],
-        client=client,
-    )
     incoming_image_urls = [
         str(url).strip()
         for url in (getattr(event, "image_urls", []) or [])
@@ -4820,8 +4812,13 @@ async def handle_customer_event(
     ]
     incoming_video_urls = [
         str(url).strip()
-        for url in (list(getattr(event, "video_urls", []) or []) + list(resolved_video_urls or []))
+        for url in (getattr(event, "video_urls", []) or [])
         if str(url).strip()
+    ]
+    video_tokens = [
+        str(token).strip()
+        for token in (getattr(event, "video_tokens", []) or [])
+        if str(token).strip()
     ]
     normalized_image_urls = await _materialize_incoming_image_urls(
         image_urls=incoming_image_urls,
@@ -4834,6 +4831,38 @@ async def handle_customer_event(
         workspace_id=int(workspace_id),
         force_video=True,
     )
+    # If payload.url failed to land as a local file, resolve token via GET /videos/{token}.
+    has_local_video = any(
+        bool(_to_local_static_media_path(str(url or "").strip()))
+        for url in (normalized_video_urls or [])
+    )
+    if video_tokens and (not normalized_video_urls or not has_local_video):
+        resolved_video_urls = await _resolve_incoming_video_tokens(
+            video_tokens=video_tokens,
+            client=client,
+        )
+        if resolved_video_urls:
+            materialized_from_tokens = await _materialize_incoming_image_urls(
+                image_urls=resolved_video_urls,
+                client=client,
+                workspace_id=int(workspace_id),
+                force_video=True,
+            )
+            if not has_local_video:
+                # Prefer token-resolved local files over stale remote URL fallbacks.
+                token_locals = [
+                    str(url).strip()
+                    for url in (materialized_from_tokens or [])
+                    if _to_local_static_media_path(str(url or "").strip())
+                ]
+                if token_locals:
+                    normalized_video_urls = token_locals
+                else:
+                    # Merge without dropping an earlier remote fallback.
+                    for media_url in materialized_from_tokens or []:
+                        value = str(media_url or "").strip()
+                        if value and value not in normalized_video_urls:
+                            normalized_video_urls.append(value)
     # Keep images first, then videos, dedupe while preserving order.
     merged_media_urls: list[str] = []
     seen_media: set[str] = set()

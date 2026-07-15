@@ -1439,7 +1439,7 @@ def run() -> None:
             assert isinstance(photo_urls_max, list) and photo_urls_max
             assert str(photo_urls_max[0]).startswith("/static/uploads/")
             assert incoming_photo_url_max not in str(getattr(photo_msg_max, "image_urls_json", "") or "")
-            assert str(getattr(photo_msg_max, "text", "") or "").strip() == ""
+            assert str(getattr(photo_msg_max, "text", "") or "").strip() == "подпись к фото"
 
             video_conv = (
                 db.query(Conversation)
