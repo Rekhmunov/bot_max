@@ -3214,12 +3214,17 @@ async def _kick_outbox_once() -> None:
 
 async def _outbox_worker_loop() -> None:
     from app.database import SessionLocal
+    import time as _time
+    import logging as _lg
+    _wlog = _lg.getLogger("outbox_worker.timing")
 
     global _storage_cleanup_last_run_at
     while True:
+        _wt0 = _time.monotonic()
         try:
             with SessionLocal() as db:
                 await process_outbox_queue(db, limit=settings.outbox_worker_batch_size)
+                _wlog.warning("[WORKER_T] t=%.3f after_outbox", _time.monotonic() - _wt0)
                 workspace_ids = [row[0] for row in db.query(Workspace.id).all()]
                 for workspace_id in workspace_ids:
                     refresh_tenant_alerts(db, workspace_id=int(workspace_id))
@@ -3235,6 +3240,7 @@ async def _outbox_worker_loop() -> None:
         except Exception:
             # Keep worker alive even if one cycle fails.
             pass
+        _wlog.warning("[WORKER_T] cycle_total=%.3f", _time.monotonic() - _wt0)
         await asyncio.sleep(max(settings.outbox_poll_interval_seconds, 1))
 
 
@@ -4720,7 +4726,12 @@ async def _handle_send_async(
     When quick_reply_id > 0, media is fetched from the DB quick reply (no re-upload).
     When quick_reply_id = 0, image_paths from uploaded files are used.
     """
+    import time as _time
+    import logging as _lg
+    _t0 = _time.monotonic()
+    _log = _lg.getLogger("send_async.timing")
     conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
+    _log.warning("[SEND_T] t=%.3f get_conversation", _time.monotonic() - _t0)
     if conversation is None:
         return JSONResponse({"ok": False, "error": "Диалог не найден"}, status_code=404)
 
@@ -4767,6 +4778,7 @@ async def _handle_send_async(
             text_format="markdown",
             source="bot_system",
         )
+    _log.warning("[SEND_T] t=%.3f after_queue", _time.monotonic() - _t0)
     msg = (
         db.query(ChatMessage)
         .filter(
@@ -4776,6 +4788,7 @@ async def _handle_send_async(
         .order_by(ChatMessage.id.desc())
         .first()
     )
+    _log.warning("[SEND_T] t=%.3f after_msg_query", _time.monotonic() - _t0)
     asyncio.create_task(_kick_outbox_once())
     msg_id = int(msg.id) if msg else 0
     created_at = getattr(msg, "created_at", None)
