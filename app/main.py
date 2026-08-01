@@ -10936,16 +10936,6 @@ async def max_webhook(
     except Exception:
         _wh_log.exception("[WEBHOOK] diag failed")
 
-    # Webhook dedup by stable event UID.
-    event_uid = event.event_uid_value()
-    if event_uid:
-        seen = db.query(WebhookEvent).filter(WebhookEvent.event_uid == event_uid).first()
-        if seen:
-            _wh_log.warning("[WEBHOOK] ignored=duplicate_event uid=%s", str(event_uid)[:64])
-            return {"ok": True, "ignored": "duplicate_event"}
-        db.add(WebhookEvent(event_uid=event_uid, update_type=event.update_type))
-        db.commit()
-
     accepted_update_types = {
         "message_created",
         "message_callback",
@@ -10962,7 +10952,26 @@ async def max_webhook(
         _wh_log.warning("[WEBHOOK] ignored=update_type type=%s", str(event.update_type))
         return {"ok": True, "ignored": event.update_type}
 
+    # Resolve workspace before dedupe: Max may fan-out the same update to every
+    # subscribed webhook URL. Global event_uid dedupe made only the first
+    # workspace process the event; others returned duplicate_event and dropped
+    # welcome/incoming handling for the correct bot.
     workspace_id = _resolve_workspace_by_webhook_key(db, webhook_key) or _resolve_workspace_id_from_event(db, event)
+    event_uid = event.event_uid_value()
+    if event_uid:
+        dedupe_uid = f"ws:{int(workspace_id)}:{event_uid}"
+        seen = db.query(WebhookEvent).filter(WebhookEvent.event_uid == dedupe_uid).first()
+        if seen:
+            _wh_log.warning(
+                "[WEBHOOK] ignored=duplicate_event uid=%s key=%s workspace=%s",
+                str(event_uid)[:64],
+                str(webhook_key or "")[:24],
+                int(workspace_id),
+            )
+            return {"ok": True, "ignored": "duplicate_event"}
+        db.add(WebhookEvent(event_uid=dedupe_uid, update_type=event.update_type or ""))
+        db.commit()
+
     settings_db = get_or_create_settings(db, workspace_id=workspace_id)
     max_client, client_error = _workspace_client_or_error(settings_db)
     if client_error or max_client is None:
