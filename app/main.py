@@ -11029,6 +11029,18 @@ async def max_webhook(
         settings=settings_db,
         event=event,
     )
+    flow_name = ""
+    if isinstance(result, dict):
+        flow_name = str(result.get("flow") or result.get("ignored") or "")
+    _wh_log.warning(
+        "[WEBHOOK] handled type=%s key=%s workspace=%s flow=%s chat=%s sender=%s",
+        str(event.update_type or ""),
+        str(webhook_key or "")[:24],
+        int(workspace_id),
+        flow_name or "-",
+        str(event.chat_id or "")[:32],
+        str(event.sender_id or "")[:32],
+    )
     # This branch handles non-admin/non-manager, non-read events,
     # i.e. customer-originated message flow. Always emit WS hint.
     with suppress(Exception):
