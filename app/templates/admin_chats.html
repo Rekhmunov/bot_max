@@ -1675,6 +1675,76 @@
     .msg-context-menu button:hover {
       background: #f2f6ff;
     }
+    .bubble-quote {
+      margin: 0 0 8px;
+      padding: 6px 8px 6px 10px;
+      border-left: 3px solid #6b8cff;
+      border-radius: 0 8px 8px 0;
+      background: rgba(31, 42, 69, 0.06);
+    }
+    .bubble.bot .bubble-quote {
+      border-left-color: #4f6ef7;
+      background: rgba(255, 255, 255, 0.55);
+    }
+    .bubble-quote-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #4f6ef7;
+      margin-bottom: 2px;
+    }
+    .bubble-quote-text {
+      font-size: 12px;
+      line-height: 1.35;
+      color: #42506d;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+    .compose-reply-bar {
+      display: none;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      margin: 0 0 6px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: #f7f9ff;
+    }
+    .compose-reply-bar.is-active {
+      display: flex;
+    }
+    .compose-reply-bar-body {
+      min-width: 0;
+      flex: 1;
+    }
+    .compose-reply-bar-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #4f6ef7;
+      margin-bottom: 2px;
+    }
+    .compose-reply-bar-text {
+      font-size: 13px;
+      color: #42506d;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .compose-reply-cancel {
+      border: 0;
+      background: transparent;
+      color: #6b7280;
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 8px;
+    }
+    .compose-reply-cancel:hover {
+      background: rgba(31, 42, 69, 0.08);
+      color: #1f2a45;
+    }
     .bubble-head { display: none; }
     .bubble-tail {
       margin-top: 6px;
@@ -2107,12 +2177,13 @@
       .compose-qr-media  { order: 1; }
       .compose-media-preview { order: 2; }
       .compose-upload-status { order: 3; }
-      #edit-mode-hint    { order: 4; }
-      #slash-menu        { order: 5; }
+      #reply-mode-hint   { order: 4; }
+      #edit-mode-hint    { order: 5; }
+      #slash-menu        { order: 6; }
       .compose-row {
         grid-template-columns: auto minmax(0, 1fr) auto;
         align-items: end;
-        order: 6;
+        order: 7;
       }
       .attach-wrap {
         grid-column: 1;
@@ -2900,7 +2971,15 @@
                 data-message-id="{{ msg.id }}"
                 data-message-text="{{ (msg.text or '')|e }}"
                 data-message-direction="{{ msg.direction }}"
+                data-message-mid="{{ (msg.max_message_mid or '')|e }}"
+                {% if msg.link_mid %}data-link-mid="{{ (msg.link_mid or '')|e }}"{% endif %}
               >
+                {% if msg.link_mid %}
+                  <div class="bubble-quote">
+                    <div class="bubble-quote-label">В ответ</div>
+                    <div class="bubble-quote-text">{{ (msg.link_preview_text or 'Сообщение')|e }}</div>
+                  </div>
+                {% endif %}
                 {% if msg.text %}
                   <div class="bubble-text">{{ msg.text }}</div>
                 {% endif %}
@@ -2991,11 +3070,19 @@
             {% if allow_message_edit_actions %}
               <input type="hidden" id="edit-message-id" name="edit_message_id" value="" />
             {% endif %}
+            <input type="hidden" id="reply-mid-input" name="reply_mid" value="" />
             <input type="hidden" name="q" value="{{ query }}" />
             <input type="hidden" name="view" value="{{ 'chat' if mobile_chat_view else '' }}" />
             {% if folder_filter is not none %}
               <input type="hidden" name="folder_id" value="{{ folder_filter }}" />
             {% endif %}
+            <div id="reply-mode-hint" class="compose-reply-bar" aria-live="polite">
+              <div class="compose-reply-bar-body">
+                <div class="compose-reply-bar-label">Ответ</div>
+                <div class="compose-reply-bar-text" id="reply-mode-text"></div>
+              </div>
+              <button type="button" id="cancel-reply-btn" class="compose-reply-cancel" title="Отменить ответ" aria-label="Отменить ответ">×</button>
+            </div>
             <div class="compose-row">
               <button class="attach-wrap" id="attach-btn" type="button" title="Прикрепить файл" aria-label="Прикрепить файл">
                 📎
@@ -3451,6 +3538,15 @@
         if (qrMediaSection) qrMediaSection.style.display = "none";
       };
 
+      const clearReplyCompose = () => {
+        const replyMidInput = document.getElementById("reply-mid-input");
+        const replyHint = document.getElementById("reply-mode-hint");
+        const replyText = document.getElementById("reply-mode-text");
+        if (replyMidInput instanceof HTMLInputElement) replyMidInput.value = "";
+        if (replyText) replyText.textContent = "";
+        if (replyHint) replyHint.classList.remove("is-active");
+      };
+
       const clearCompose = () => {
         if (_mediaLoadAbortController) {
           _mediaLoadAbortController.abort();
@@ -3463,6 +3559,7 @@
         else photoInput.value = "";
         clearPreviews();
         clearQrMedia();
+        clearReplyCompose();
         setUploadStatus("");
         syncSendVisibility();
         messageInput.focus();
@@ -3470,6 +3567,34 @@
           window.__chatResizeMessageInput();
         }
       };
+
+      window.__chatClearReplyCompose = clearReplyCompose;
+      window.__chatSetReplyCompose = (mid, previewText) => {
+        const replyMidInput = document.getElementById("reply-mid-input");
+        const replyHint = document.getElementById("reply-mode-hint");
+        const replyText = document.getElementById("reply-mode-text");
+        const replyMid = String(mid || "").trim();
+        if (!(replyMidInput instanceof HTMLInputElement) || !replyHint || !replyText || !replyMid) return;
+        const editIdInput = document.getElementById("edit-message-id");
+        const editHint = document.getElementById("edit-mode-hint");
+        if (editIdInput instanceof HTMLInputElement) editIdInput.value = "";
+        if (editHint) editHint.style.display = "none";
+        replyMidInput.value = replyMid;
+        replyText.textContent = String(previewText || "Сообщение").trim() || "Сообщение";
+        replyHint.classList.add("is-active");
+        messageInput.focus();
+        if (typeof window.__chatResizeMessageInput === "function") {
+          window.__chatResizeMessageInput();
+        }
+      };
+
+      const cancelReplyBtn = document.getElementById("cancel-reply-btn");
+      if (cancelReplyBtn) {
+        cancelReplyBtn.addEventListener("click", () => {
+          clearReplyCompose();
+          messageInput.focus();
+        });
+      }
 
       if (clearBtn) {
         clearBtn.addEventListener("click", clearCompose);
@@ -5836,6 +5961,9 @@
         editBtn.textContent = "Изменить";
         editBtn.addEventListener("click", () => {
           hideMsgMenu();
+          if (typeof window.__chatClearReplyCompose === "function") {
+            window.__chatClearReplyCompose();
+          }
           editIdInput.value = selectedMessageId || "";
           messageInput.value = selectedMessageText;
           editHint.style.display = "block";
@@ -5901,6 +6029,138 @@
         longPressTimer = setTimeout(() => {
           clearNativeSelection();
           openMsgMenu(touch.clientX, touch.clientY, bubble);
+        }, 550);
+      }, { passive: true });
+      document.addEventListener("touchend", () => {
+        if (longPressTimer) clearTimeout(longPressTimer);
+      });
+      document.addEventListener("touchmove", () => {
+        if (longPressTimer) clearTimeout(longPressTimer);
+      });
+    })();
+
+    (() => {
+      const activeConversationId = {{ active_thread.conversation_id if active_thread else "null" }};
+      const messageInput = document.getElementById("message-input");
+      if (!activeConversationId || !messageInput) return;
+
+      const replyMenu = document.createElement("div");
+      replyMenu.id = "customer-reply-context-menu";
+      replyMenu.className = "msg-context-menu";
+      document.body.appendChild(replyMenu);
+
+      let selectedMessageMid = "";
+      let selectedMessageText = "";
+      let longPressTimer = null;
+
+      const clearNativeSelection = () => {
+        try {
+          const selection = window.getSelection?.();
+          selection?.removeAllRanges?.();
+        } catch (_) {
+          // Keep long-press resilient when selection APIs are unavailable.
+        }
+      };
+
+      const copyMessageText = async (value) => {
+        const textToCopy = String(value || "");
+        if (!textToCopy) return;
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+          await navigator.clipboard.writeText(textToCopy);
+          return;
+        }
+        const fallback = document.createElement("textarea");
+        fallback.value = textToCopy;
+        fallback.setAttribute("readonly", "");
+        fallback.style.position = "fixed";
+        fallback.style.opacity = "0";
+        fallback.style.pointerEvents = "none";
+        document.body.appendChild(fallback);
+        fallback.focus();
+        fallback.select();
+        document.execCommand("copy");
+        fallback.remove();
+      };
+
+      const placeFixedMenu = (menuEl, x, y) => {
+        const pad = 8;
+        menuEl.style.visibility = "hidden";
+        menuEl.style.display = "block";
+        const width = menuEl.offsetWidth || 0;
+        const height = menuEl.offsetHeight || 0;
+        const maxLeft = Math.max(pad, window.innerWidth - width - pad);
+        const maxTop = Math.max(pad, window.innerHeight - height - pad);
+        const left = Math.min(Math.max(pad, x), maxLeft);
+        const top = Math.min(Math.max(pad, y), maxTop);
+        menuEl.style.left = `${left}px`;
+        menuEl.style.top = `${top}px`;
+        menuEl.style.visibility = "visible";
+      };
+
+      const hideReplyMenu = () => {
+        replyMenu.style.display = "none";
+        replyMenu.innerHTML = "";
+      };
+
+      const openReplyMenu = (x, y, bubble) => {
+        selectedMessageMid = String(bubble.dataset.messageMid || "").trim();
+        selectedMessageText = String(bubble.dataset.messageText || "");
+        replyMenu.innerHTML = "";
+
+        const replyBtn = document.createElement("button");
+        replyBtn.type = "button";
+        replyBtn.textContent = "Ответить";
+        replyBtn.disabled = !selectedMessageMid;
+        replyBtn.addEventListener("click", () => {
+          hideReplyMenu();
+          if (!selectedMessageMid) return;
+          let preview = selectedMessageText.trim();
+          if (!preview) {
+            preview = bubble.querySelector(".bubble-media-item") ? "Фото" : "Сообщение";
+          }
+          if (typeof window.__chatSetReplyCompose === "function") {
+            window.__chatSetReplyCompose(selectedMessageMid, preview);
+          }
+        });
+        replyMenu.appendChild(replyBtn);
+
+        const copyBtn = document.createElement("button");
+        copyBtn.type = "button";
+        copyBtn.textContent = "Скопировать";
+        copyBtn.addEventListener("click", async () => {
+          hideReplyMenu();
+          await copyMessageText(selectedMessageText);
+        });
+        replyMenu.appendChild(copyBtn);
+
+        placeFixedMenu(replyMenu, x, y);
+      };
+
+      document.addEventListener("click", (e) => {
+        if (!replyMenu.contains(e.target)) hideReplyMenu();
+      });
+      window.addEventListener("resize", hideReplyMenu);
+
+      document.addEventListener("contextmenu", (e) => {
+        const bubble = e.target instanceof Element
+          ? e.target.closest(".bubble[data-message-direction='customer']")
+          : null;
+        if (!(bubble instanceof HTMLElement)) return;
+        e.preventDefault();
+        openReplyMenu(e.clientX, e.clientY, bubble);
+      });
+
+      document.addEventListener("touchstart", (e) => {
+        const touch = e.touches?.[0];
+        if (!touch) return;
+        const bubble = e.target instanceof Element
+          ? e.target.closest(".bubble[data-message-direction='customer']")
+          : null;
+        if (!(bubble instanceof HTMLElement)) return;
+        if (longPressTimer) clearTimeout(longPressTimer);
+        longPressTimer = setTimeout(() => {
+          clearNativeSelection();
+          openReplyMenu(touch.clientX, touch.clientY, bubble);
         }, 550);
       }, { passive: true });
       document.addEventListener("touchend", () => {
@@ -6469,6 +6729,9 @@
         const deliveryError = String(row.delivery_error || "");
         const scheduledAt = String(row.delivery_next_retry_at || "");
         const isScheduledPending = Boolean(row.is_scheduled_pending);
+        const maxMessageMid = String(row.max_message_mid || "").trim();
+        const linkMid = String(row.link_mid || "").trim();
+        const linkPreviewText = String(row.link_preview_text || "").trim();
         const imageUrlsRaw = Array.isArray(row.image_urls) ? row.image_urls : [];
         const imageUrls = imageUrlsRaw
           .map((url) => String(url || "").trim())
@@ -6492,6 +6755,9 @@
           isRenderable,
           isReadByCustomer: Boolean(row.is_read_by_customer),
           createdAtLabel: String(row.created_at_label || ""),
+          maxMessageMid,
+          linkMid,
+          linkPreviewText,
         };
       };
       const bubbleRenderFingerprint = (row) => {
@@ -6508,6 +6774,9 @@
           imageUrls,
           isReadByCustomer,
           createdAtLabel,
+          maxMessageMid,
+          linkMid,
+          linkPreviewText,
         } = meta;
         return [
           String(messageId || 0),
@@ -6520,6 +6789,9 @@
           isReadByCustomer ? "1" : "0",
           String(createdAtLabel || ""),
           imageUrls.join("|"),
+          String(maxMessageMid || ""),
+          String(linkMid || ""),
+          String(linkPreviewText || ""),
         ].join("::");
       };
       const createMessageBubbleNode = (row) => {
@@ -6536,6 +6808,9 @@
           imageUrls,
           isReadByCustomer,
           createdAtLabel,
+          maxMessageMid,
+          linkMid,
+          linkPreviewText,
         } = meta;
 
         const bubble = document.createElement("article");
@@ -6547,6 +6822,22 @@
         bubble.dataset.messageId = String(messageId > 0 ? messageId : "");
         bubble.dataset.messageText = text;
         bubble.dataset.messageDirection = direction || "bot";
+        bubble.dataset.messageMid = maxMessageMid || "";
+        if (linkMid) bubble.dataset.linkMid = linkMid;
+
+        if (linkMid) {
+          const quoteNode = document.createElement("div");
+          quoteNode.className = "bubble-quote";
+          const quoteLabel = document.createElement("div");
+          quoteLabel.className = "bubble-quote-label";
+          quoteLabel.textContent = "В ответ";
+          const quoteText = document.createElement("div");
+          quoteText.className = "bubble-quote-text";
+          quoteText.textContent = linkPreviewText || "Сообщение";
+          quoteNode.appendChild(quoteLabel);
+          quoteNode.appendChild(quoteText);
+          bubble.appendChild(quoteNode);
+        }
 
         if (text) {
           const textNode = document.createElement("div");

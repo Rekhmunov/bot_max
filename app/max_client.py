@@ -307,6 +307,7 @@ class MaxClient:
         user_id: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
         text_format: str | None = None,
+        link: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not chat_id and not user_id:
             return {"success": False, "error": "chat_id_or_user_id_required"}
@@ -319,13 +320,40 @@ class MaxClient:
             body["attachments"] = attachments
         if text_format in {"markdown", "html"}:
             body["format"] = text_format
+        if isinstance(link, dict) and str(link.get("mid") or "").strip():
+            body["link"] = {
+                "type": str(link.get("type") or "reply").strip() or "reply",
+                "mid": str(link.get("mid") or "").strip(),
+            }
         return await self._post(f"/messages?{query_part}", body)
 
-    async def send_text(self, chat_id: str, text: str, text_format: str | None = None) -> dict[str, Any]:
-        return await self.send_message(text=text, chat_id=chat_id, text_format=text_format)
+    async def send_text(
+        self,
+        chat_id: str,
+        text: str,
+        text_format: str | None = None,
+        link: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return await self.send_message(
+            text=text,
+            chat_id=chat_id,
+            text_format=text_format,
+            link=link,
+        )
 
-    async def send_text_to_user(self, user_id: str, text: str, text_format: str | None = None) -> dict[str, Any]:
-        return await self.send_message(text=text, user_id=user_id, text_format=text_format)
+    async def send_text_to_user(
+        self,
+        user_id: str,
+        text: str,
+        text_format: str | None = None,
+        link: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return await self.send_message(
+            text=text,
+            user_id=user_id,
+            text_format=text_format,
+            link=link,
+        )
 
     async def send_chat_action(self, *, chat_id: str, action: str = "mark_seen") -> dict[str, Any]:
         normalized_chat_id = str(chat_id or "").strip()
@@ -611,6 +639,7 @@ class MaxClient:
         images: list[tuple[str, bytes]],
         text: str | None = None,
         text_format: str | None = None,
+        link: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         if not chat_id and not user_id:
             return {"success": False, "error": "chat_id_or_user_id_required"}
@@ -675,6 +704,7 @@ class MaxClient:
                     text=(text if text else None),
                     attachments=candidate_attachments,
                     text_format=text_format,
+                    link=link,
                 )
                 response = result.get("response") if isinstance(result, dict) else {}
                 code = str(response.get("code") or "").strip().lower() if isinstance(response, dict) else ""

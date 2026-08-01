@@ -1099,6 +1099,13 @@ def _schedule_outbox_retry(item: OutboxMessage, result: dict) -> None:
     item.next_retry_at = _as_naive_utc(_utc_now() + timedelta(seconds=_next_backoff_delay(item.retry_count)))
 
 
+def _reply_link_from_mid(link_mid: str | None) -> dict[str, str] | None:
+    mid = str(link_mid or "").strip()
+    if not mid:
+        return None
+    return {"type": "reply", "mid": mid}
+
+
 def _normalize_image_urls_json(image_urls_json: str | None, fallback_image_url: str | None = None) -> str:
     raw = str(image_urls_json or "").strip()
     parsed: list[str] = []
@@ -1325,12 +1332,12 @@ async def _resolve_incoming_video_tokens(
             if not isinstance(info, dict):
                 info = {}
             if not bool(info.get("success", True)) and info.get("error"):
-            logger.warning(
-                "[INCOMING_VIDEO] get_video_info error token=%s err=%s status=%s",
-                token_value[:24],
-                info.get("error"),
-                info.get("status_code"),
-            )
+                logger.warning(
+                    "[INCOMING_VIDEO] get_video_info error token=%s err=%s status=%s",
+                    token_value[:24],
+                    info.get("error"),
+                    info.get("status_code"),
+                )
             download_url = MaxClient.pick_video_download_url(info)
             if download_url:
                 break
@@ -3005,6 +3012,10 @@ async def _dispatch_outbox(
             return False
         return _is_multi_image_payload_validation_error(result_value, min_images=image_count)
 
+    reply_link = payload.get("link") if isinstance(payload.get("link"), dict) else None
+    if not isinstance(reply_link, dict) or not str(reply_link.get("mid") or "").strip():
+        reply_link = _reply_link_from_mid(str(payload.get("link_mid") or "").strip() or None)
+
     async def _send_message_with_attachment_ready_retry(
         *,
         chat_id: str | None = None,
@@ -3025,6 +3036,7 @@ async def _dispatch_outbox(
                 text=text,
                 attachments=attachments,
                 text_format=text_format,
+                link=reply_link,
             )
             code = ""
             response = result_value.get("response") if isinstance(result_value, dict) else {}
@@ -3047,6 +3059,7 @@ async def _dispatch_outbox(
                 chat_id=target_chat_id,
                 text=str(payload.get("text") or ""),
                 text_format=str(payload.get("format") or "").strip().lower() or None,
+                link=reply_link,
             )
         if item.operation == "send_photo":
             _release_db_connection(db)
@@ -3072,6 +3085,7 @@ async def _dispatch_outbox(
                     images=images,
                     text=str(payload.get("text")) if payload.get("text") is not None else None,
                     text_format=str(payload.get("format") or "").strip().lower() or None,
+                    link=reply_link,
                 )
                 if isinstance(images_result, dict) and (
                     str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
@@ -3116,6 +3130,7 @@ async def _dispatch_outbox(
                 user_id=target_user_id,
                 text=str(payload.get("text") or ""),
                 text_format=str(payload.get("format") or "").strip().lower() or None,
+                link=reply_link,
             )
         if item.operation == "send_photo":
             _release_db_connection(db)
@@ -3141,6 +3156,7 @@ async def _dispatch_outbox(
                     images=images,
                     text=str(payload.get("text")) if payload.get("text") is not None else None,
                     text_format=str(payload.get("format") or "").strip().lower() or None,
+                    link=reply_link,
                 )
                 if isinstance(images_result, dict) and (
                     str(images_result.get("error") or "").strip().lower() == "upload_token_missing"
@@ -3437,6 +3453,10 @@ async def enqueue_and_process_send_text(
         delivery_retry_count=0,
         delivery_next_retry_at=now_utc_naive,
     )
+    text_payload: dict[str, object] = {"text": text, "format": text_format}
+    reply_link = _reply_link_from_mid(link_mid)
+    if reply_link is not None:
+        text_payload["link"] = reply_link
     item = _enqueue_outbox_message(
         db,
         conversation_id=conversation_id,
@@ -3444,7 +3464,7 @@ async def enqueue_and_process_send_text(
         target_chat_id=target_chat_id,
         target_user_id=target_user_id,
         operation="send_text",
-        payload={"text": text, "format": text_format},
+        payload=text_payload,
     )
     claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
     if claimed_item is None:
@@ -3504,6 +3524,7 @@ async def enqueue_and_process_send_media_group(
     text: str = "",
     text_format: str | None = None,
     source: str,
+    link_mid: str | None = None,
 ) -> bool:
     urls = [str(item).strip() for item in (photo_urls or []) if str(item).strip()]
     if not urls:
@@ -3520,6 +3541,7 @@ async def enqueue_and_process_send_media_group(
         text=(text or "").strip(),
         image_url=first_image,
         image_urls_json=json.dumps(urls, ensure_ascii=False),
+        link_mid=link_mid,
         delivery_state="queued",
         delivery_error="",
         delivery_retry_count=0,
@@ -3533,6 +3555,15 @@ async def enqueue_and_process_send_media_group(
             local_paths = []
             break
         local_paths.append(str(local_file))
+    media_payload: dict[str, object] = {
+        "text": (text or "").strip() or None,
+        "format": text_format,
+        "attachments": attachments,
+        "local_image_paths": local_paths,
+    }
+    reply_link = _reply_link_from_mid(link_mid)
+    if reply_link is not None:
+        media_payload["link"] = reply_link
     item = _enqueue_outbox_message(
         db,
         conversation_id=conversation_id,
@@ -3540,12 +3571,7 @@ async def enqueue_and_process_send_media_group(
         target_chat_id=target_chat_id,
         target_user_id=target_user_id,
         operation="send_message",
-        payload={
-            "text": (text or "").strip() or None,
-            "format": text_format,
-            "attachments": attachments,
-            "local_image_paths": local_paths,
-        },
+        payload=media_payload,
     )
     claimed_item = _claim_outbox_item_for_send(db, outbox_id=int(item.id))
     if claimed_item is None:
@@ -3617,6 +3643,10 @@ def queue_only_send_text_sync(
     )
     logger.warning("[SEND_T] queue_text store=%.3f", _time.monotonic() - _t0)
     _t1 = _time.monotonic()
+    text_payload: dict[str, object] = {"text": text, "format": text_format}
+    reply_link = _reply_link_from_mid(link_mid)
+    if reply_link is not None:
+        text_payload["link"] = reply_link
     _enqueue_outbox_message(
         db,
         conversation_id=conversation_id,
@@ -3624,7 +3654,7 @@ def queue_only_send_text_sync(
         target_chat_id=target_chat_id,
         target_user_id=target_user_id,
         operation="send_text",
-        payload={"text": text, "format": text_format},
+        payload=text_payload,
         next_retry_at=next_retry_at,
     )
     logger.warning(
@@ -3644,6 +3674,7 @@ async def queue_only_send_media_group(
     text: str = "",
     text_format: str | None = None,
     source: str,
+    link_mid: str | None = None,
     scheduled_for: datetime | None = None,
 ) -> None:
     queue_only_send_media_group_sync(
@@ -3655,6 +3686,7 @@ async def queue_only_send_media_group(
         text=text,
         text_format=text_format,
         source=source,
+        link_mid=link_mid,
         scheduled_for=scheduled_for,
     )
 
@@ -3669,6 +3701,7 @@ def queue_only_send_media_group_sync(
     text: str = "",
     text_format: str | None = None,
     source: str,
+    link_mid: str | None = None,
     scheduled_for: datetime | None = None,
 ) -> None:
     import time as _time
@@ -3693,6 +3726,7 @@ def queue_only_send_media_group_sync(
         text=(text or "").strip(),
         image_url=first_image,
         image_urls_json=json.dumps(urls, ensure_ascii=False),
+        link_mid=link_mid,
         delivery_state="queued",
         delivery_error="",
         delivery_retry_count=0,
@@ -3716,6 +3750,16 @@ def queue_only_send_media_group_sync(
         len(local_paths),
         len(urls),
     )
+    media_payload: dict[str, object] = {
+        "text": (text or "").strip() or None,
+        "format": text_format,
+        "attachments": attachments,
+        # Optional local file paths for byte-upload at dispatch time.
+        "local_image_paths": local_paths,
+    }
+    reply_link = _reply_link_from_mid(link_mid)
+    if reply_link is not None:
+        media_payload["link"] = reply_link
     _te = _time.monotonic()
     _enqueue_outbox_message(
         db,
@@ -3724,13 +3768,7 @@ def queue_only_send_media_group_sync(
         target_chat_id=target_chat_id,
         target_user_id=target_user_id,
         operation="send_message",
-        payload={
-            "text": (text or "").strip() or None,
-            "format": text_format,
-            "attachments": attachments,
-            # Optional local file paths for byte-upload at dispatch time.
-            "local_image_paths": local_paths,
-        },
+        payload=media_payload,
         next_retry_at=next_retry_at,
     )
     logger.warning(
@@ -7227,12 +7265,14 @@ async def send_admin_chat_message(
     image_paths: list[str] | None = None,
     workspace_id: int | None = None,
     schedule_at_iso: str = "",
+    link_mid: str | None = None,
 ) -> tuple[bool, str]:
     conversation = get_conversation_by_id(db, conversation_id, workspace_id=workspace_id)
     if conversation is None:
         return False, "Диалог не найден"
     scheduled_for = _parse_schedule_at_iso(schedule_at_iso)
     sent_any = False
+    reply_mid = str(link_mid or "").strip() or None
 
     normalized_image_paths = [str(item).strip() for item in (image_paths or []) if str(item).strip()]
 
@@ -7250,6 +7290,7 @@ async def send_admin_chat_message(
                 text=(text or "").strip(),
                 text_format="markdown",
                 source="bot_system",
+                link_mid=reply_mid,
                 scheduled_for=scheduled_for,
             )
             sent_any = True
@@ -7263,6 +7304,7 @@ async def send_admin_chat_message(
                 text=(text or "").strip(),
                 text_format="markdown",
                 source="bot_system",
+                link_mid=reply_mid,
             )
             if ok:
                 sent_any = True
@@ -7289,6 +7331,7 @@ async def send_admin_chat_message(
                 target_user_id=conversation.customer_account_id,
                 text=text,
                 source="bot_system",
+                link_mid=reply_mid,
                 scheduled_for=scheduled_for,
             )
             ok = True
@@ -7300,6 +7343,7 @@ async def send_admin_chat_message(
                 target_user_id=conversation.customer_account_id,
                 text=text,
                 source="bot_system",
+                link_mid=reply_mid,
             )
         if ok:
             sent_any = True

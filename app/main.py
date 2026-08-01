@@ -4642,6 +4642,7 @@ async def admin_chats_send_message(
     q: str = Form(""),
     view: str = Form(""),
     schedule_at: str = Form(""),
+    reply_mid: str = Form(""),
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -4709,6 +4710,7 @@ async def admin_chats_send_message(
             image_paths=image_paths,
             workspace_id=workspace_id,
             schedule_at_iso=schedule_at_value,
+            link_mid=str(reply_mid or "").strip() or None,
         )
     except Exception:
         _cleanup_uploaded_images(image_paths)
@@ -4737,6 +4739,7 @@ async def _handle_send_async(
     text_value: str,
     image_paths: list[str],
     quick_reply_id: int = 0,
+    reply_mid: str = "",
 ) -> JSONResponse:
     """Enqueue a message without calling Max API. Returns JSON for optimistic UI insert.
 
@@ -4797,6 +4800,20 @@ async def _handle_send_async(
 
     photo_urls_snapshot = list(photo_urls)
     text_snapshot = text_value
+    reply_mid_snapshot = str(reply_mid or "").strip()
+    reply_preview_text = ""
+    if reply_mid_snapshot:
+        quoted = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.conversation_id == conversation_id,
+                ChatMessage.max_message_mid == reply_mid_snapshot,
+            )
+            .order_by(ChatMessage.id.desc())
+            .first()
+        )
+        if quoted is not None:
+            reply_preview_text = _link_preview_text_from_message(quoted) or "Сообщение"
 
     def _enqueue_in_thread() -> None:
         from app.database import SessionLocal
@@ -4817,6 +4834,7 @@ async def _handle_send_async(
                     text=text_snapshot,
                     text_format="markdown",
                     source="bot_system",
+                    link_mid=reply_mid_snapshot or None,
                 )
             else:
                 queue_only_send_text_sync(
@@ -4827,6 +4845,7 @@ async def _handle_send_async(
                     text=text_snapshot,
                     text_format="markdown",
                     source="bot_system",
+                    link_mid=reply_mid_snapshot or None,
                 )
         _dlog.warning("[SEND_DIAG] thread_enqueue_done=%.3f", _t.monotonic() - _ts)
 
@@ -4860,6 +4879,9 @@ async def _handle_send_async(
             "is_scheduled_pending": False,
             "delivery_next_retry_at": "",
             "delivery_error": "",
+            "max_message_mid": "",
+            "link_mid": reply_mid_snapshot,
+            "link_preview_text": reply_preview_text,
         },
     })
 
@@ -4871,6 +4893,7 @@ async def admin_chats_send_message_async(
     text: str = Form(""),
     photos: list[UploadFile] = File(default=[]),
     quick_reply_id: int = Form(0),
+    reply_mid: str = Form(""),
     _admin: str = Depends(require_admin),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
@@ -4898,6 +4921,7 @@ async def admin_chats_send_message_async(
         text_value=text_value,
         image_paths=image_paths,
         quick_reply_id=int(quick_reply_id or 0),
+        reply_mid=str(reply_mid or "").strip(),
     )
 
 
@@ -4908,6 +4932,7 @@ async def app_chats_send_message_async(
     text: str = Form(""),
     photos: list[UploadFile] = File(default=[]),
     quick_reply_id: int = Form(0),
+    reply_mid: str = Form(""),
     workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
@@ -4940,6 +4965,7 @@ async def app_chats_send_message_async(
         text_value=text_value,
         image_paths=image_paths,
         quick_reply_id=int(quick_reply_id or 0),
+        reply_mid=str(reply_mid or "").strip(),
     )
 
 
@@ -4951,6 +4977,7 @@ async def mini_manager_chats_send_message_async(
     text: str = Form(""),
     photos: list[UploadFile] = File(default=[]),
     quick_reply_id: int = Form(0),
+    reply_mid: str = Form(""),
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     claims = _require_manager_mini_access(token=token, db=db)
@@ -4978,6 +5005,7 @@ async def mini_manager_chats_send_message_async(
         text_value=text_value,
         image_paths=image_paths,
         quick_reply_id=int(quick_reply_id or 0),
+        reply_mid=str(reply_mid or "").strip(),
     )
 
 
@@ -8720,6 +8748,7 @@ async def app_chats_send_message(
     q: str = Form(""),
     view: str = Form(""),
     schedule_at: str = Form(""),
+    reply_mid: str = Form(""),
     workspace_id: int | None = None,
     current_user: ServiceUser = Depends(require_service_user),
     db: Session = Depends(get_db),
@@ -8795,6 +8824,7 @@ async def app_chats_send_message(
             image_paths=image_paths,
             workspace_id=workspace_id,
             schedule_at_iso=schedule_at_value,
+            link_mid=str(reply_mid or "").strip() or None,
         )
     finally:
         if not sent_ok and image_paths:
@@ -9357,6 +9387,8 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
             )
         )
     )
+    link_mid_value = str(getattr(item, "link_mid", "") or "").strip()
+    link_preview_text = str(getattr(item, "link_preview_text", "") or "").strip()
     return {
         "id": int(item.id),
         "direction": str(item.direction or ""),
@@ -9367,6 +9399,8 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
         "delivery_state": delivery_state_value,
         "delivery_error": str(item.delivery_error or ""),
         "max_message_mid": str(item.max_message_mid or ""),
+        "link_mid": link_mid_value,
+        "link_preview_text": link_preview_text,
         "is_read_by_customer": bool(getattr(item, "is_read_by_customer", False)),
         "read_at": (
             item.read_at.isoformat()
@@ -9387,6 +9421,70 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
         ),
         "created_at_label": _to_moscow_chat_label(getattr(item, "created_at", None)),
     }
+
+
+def _link_preview_text_from_message(msg: ChatMessage) -> str:
+    preview = str(getattr(msg, "text", "") or "").strip()
+    if preview:
+        return preview
+    if str(getattr(msg, "image_url", "") or "").strip():
+        return "Фото"
+    image_urls = getattr(msg, "image_urls", None)
+    if isinstance(image_urls, list) and any(str(url or "").strip() for url in image_urls):
+        return "Фото"
+    return ""
+
+
+def _hydrate_message_link_previews(db: Session, messages: list[ChatMessage]) -> None:
+    if not messages:
+        return
+    mid_to_text: dict[str, str] = {}
+    for msg in messages:
+        mid = str(getattr(msg, "max_message_mid", "") or "").strip()
+        if not mid or mid in mid_to_text:
+            continue
+        preview = _link_preview_text_from_message(msg)
+        if preview:
+            mid_to_text[mid] = preview
+    missing_mids = sorted(
+        {
+            str(getattr(msg, "link_mid", "") or "").strip()
+            for msg in messages
+            if str(getattr(msg, "link_mid", "") or "").strip()
+            and str(getattr(msg, "link_mid", "") or "").strip() not in mid_to_text
+        }
+    )
+    if missing_mids:
+        conversation_ids = sorted(
+            {
+                int(getattr(msg, "conversation_id", 0) or 0)
+                for msg in messages
+                if int(getattr(msg, "conversation_id", 0) or 0) > 0
+            }
+        )
+        quoted_query = db.query(ChatMessage).filter(ChatMessage.max_message_mid.in_(missing_mids))
+        if conversation_ids:
+            quoted_query = quoted_query.filter(ChatMessage.conversation_id.in_(conversation_ids))
+        quoted_rows = quoted_query.order_by(ChatMessage.id.desc()).all()
+        for quoted in quoted_rows:
+            mid = str(getattr(quoted, "max_message_mid", "") or "").strip()
+            if not mid or mid in mid_to_text:
+                continue
+            preview = _link_preview_text_from_message(quoted)
+            mid_to_text[mid] = preview or "Сообщение"
+    for msg in messages:
+        link_mid = str(getattr(msg, "link_mid", "") or "").strip()
+        if not link_mid:
+            try:
+                setattr(msg, "link_preview_text", "")
+            except Exception:
+                pass
+            continue
+        preview = mid_to_text.get(link_mid, "") or "Сообщение"
+        try:
+            setattr(msg, "link_preview_text", preview)
+        except Exception:
+            pass
 
 
 def _hydrate_message_media_urls(db: Session, messages: list[ChatMessage]) -> None:
@@ -9488,7 +9586,9 @@ def _messages_signature(messages: list[object]) -> str:
             f"{(getattr(item, 'delivery_next_retry_at').isoformat() if isinstance(getattr(item, 'delivery_next_retry_at', None), datetime) else str(getattr(item, 'delivery_next_retry_at', '') or ''))}:"
             f"{','.join(str(url).strip() for url in (getattr(item, 'image_urls', []) or []) if str(url).strip())}:"
             f"{str(getattr(item, 'image_url', '') or '')}:"
-            f"{str(getattr(item, 'text', '') or '')}"
+            f"{str(getattr(item, 'text', '') or '')}:"
+            f"{str(getattr(item, 'link_mid', '') or '')}:"
+            f"{str(getattr(item, 'link_preview_text', '') or '')}"
         )
         for item in messages
     )
@@ -9555,6 +9655,7 @@ def _build_chat_updates_payload(
             limit=_CHAT_UPDATES_MESSAGES_LIMIT,
         )
         _hydrate_message_media_urls(db, messages)
+        _hydrate_message_link_previews(db, messages)
 
     current_threads_signature = _threads_signature(threads)
     current_messages_signature = _messages_signature(
@@ -10053,6 +10154,7 @@ async def _render_chat_workspace(
                     break
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
         _hydrate_message_media_urls(db, messages)
+        _hydrate_message_link_previews(db, messages)
     folder_unread_counts = _folder_unread_counts(all_threads)
     unread_total_count, unread_without_folder_count = _unread_chat_totals(all_threads)
     message_summaries = [_message_summary_dict(item) for item in messages]
@@ -10661,6 +10763,7 @@ async def manager_mini_send_message(
     q: str = Form(""),
     view: str = Form(""),
     schedule_at: str = Form(""),
+    reply_mid: str = Form(""),
     folder_id: int | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -10718,6 +10821,7 @@ async def manager_mini_send_message(
             image_paths=image_paths,
             workspace_id=workspace_id,
             schedule_at_iso=schedule_at_value,
+            link_mid=str(reply_mid or "").strip() or None,
         )
     finally:
         if not sent_ok and image_paths:
