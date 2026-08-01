@@ -4812,7 +4812,10 @@ async def _handle_send_async(
             .order_by(ChatMessage.id.desc())
             .first()
         )
-        if quoted is not None:
+        if quoted is None:
+            # Do not send an unknown mid to Max — keep regular send without reply.
+            reply_mid_snapshot = ""
+        else:
             reply_preview_text = _link_preview_text_from_message(quoted) or "Сообщение"
 
     def _enqueue_in_thread() -> None:
@@ -9427,12 +9430,24 @@ def _link_preview_text_from_message(msg: ChatMessage) -> str:
     preview = str(getattr(msg, "text", "") or "").strip()
     if preview:
         return preview
-    if str(getattr(msg, "image_url", "") or "").strip():
-        return "Фото"
+    media_urls: list[str] = []
+    primary = str(getattr(msg, "image_url", "") or "").strip()
+    if primary:
+        media_urls.append(primary)
     image_urls = getattr(msg, "image_urls", None)
-    if isinstance(image_urls, list) and any(str(url or "").strip() for url in image_urls):
-        return "Фото"
-    return ""
+    if isinstance(image_urls, list):
+        media_urls.extend(str(url or "").strip() for url in image_urls if str(url or "").strip())
+    if not media_urls:
+        return ""
+    for url in media_urls:
+        lowered = url.lower()
+        path_part = lowered.split("?", 1)[0]
+        if (
+            "bot_max_video=1" in lowered
+            or path_part.endswith((".mp4", ".mov", ".webm", ".mkv", ".m4v"))
+        ):
+            return "Видео"
+    return "Фото"
 
 
 def _hydrate_message_link_previews(db: Session, messages: list[ChatMessage]) -> None:

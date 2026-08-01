@@ -7273,6 +7273,17 @@ async def send_admin_chat_message(
     scheduled_for = _parse_schedule_at_iso(schedule_at_iso)
     sent_any = False
     reply_mid = str(link_mid or "").strip() or None
+    if reply_mid is not None:
+        quoted_exists = (
+            db.query(ChatMessage.id)
+            .filter(
+                ChatMessage.conversation_id == int(conversation_id),
+                ChatMessage.max_message_mid == reply_mid,
+            )
+            .first()
+        )
+        if quoted_exists is None:
+            reply_mid = None
 
     normalized_image_paths = [str(item).strip() for item in (image_paths or []) if str(item).strip()]
 

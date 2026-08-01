@@ -6107,22 +6107,24 @@
         selectedMessageText = String(bubble.dataset.messageText || "");
         replyMenu.innerHTML = "";
 
-        const replyBtn = document.createElement("button");
-        replyBtn.type = "button";
-        replyBtn.textContent = "Ответить";
-        replyBtn.disabled = !selectedMessageMid;
-        replyBtn.addEventListener("click", () => {
-          hideReplyMenu();
-          if (!selectedMessageMid) return;
-          let preview = selectedMessageText.trim();
-          if (!preview) {
-            preview = bubble.querySelector(".bubble-media-item") ? "Фото" : "Сообщение";
-          }
-          if (typeof window.__chatSetReplyCompose === "function") {
-            window.__chatSetReplyCompose(selectedMessageMid, preview);
-          }
-        });
-        replyMenu.appendChild(replyBtn);
+        if (selectedMessageMid) {
+          const replyBtn = document.createElement("button");
+          replyBtn.type = "button";
+          replyBtn.textContent = "Ответить";
+          replyBtn.addEventListener("click", () => {
+            hideReplyMenu();
+            let preview = selectedMessageText.trim();
+            if (!preview) {
+              const hasVideo = !!bubble.querySelector(".bubble-media-item.is-video, .bubble-media-item video");
+              const hasMedia = !!bubble.querySelector(".bubble-media-item");
+              preview = hasVideo ? "Видео" : (hasMedia ? "Фото" : "Сообщение");
+            }
+            if (typeof window.__chatSetReplyCompose === "function") {
+              window.__chatSetReplyCompose(selectedMessageMid, preview);
+            }
+          });
+          replyMenu.appendChild(replyBtn);
+        }
 
         const copyBtn = document.createElement("button");
         copyBtn.type = "button";
