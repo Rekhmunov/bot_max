@@ -10924,8 +10924,9 @@ async def max_webhook(
             if isinstance(item, dict):
                 attach_types.append(str(item.get("type") or "").strip().lower() or "?")
         _wh_log.warning(
-            "[WEBHOOK] type=%s chat=%s sender=%s images=%s videos=%s tokens=%s attach=%s",
+            "[WEBHOOK] type=%s key=%s chat=%s sender=%s images=%s videos=%s tokens=%s attach=%s",
             str(event.update_type or ""),
+            str(webhook_key or "")[:24],
             str(event.chat_id or "")[:32],
             str(event.sender_id or "")[:32],
             len(getattr(event, "image_urls", []) or []),
