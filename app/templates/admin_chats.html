@@ -5945,7 +5945,27 @@
       const openMsgMenu = (x, y, bubble) => {
         selectedMessageId = bubble.dataset.messageId;
         selectedMessageText = bubble.dataset.messageText || "";
+        const selectedMessageMid = String(bubble.dataset.messageMid || "").trim();
         msgMenu.innerHTML = "";
+
+        if (selectedMessageMid) {
+          const replyBtn = document.createElement("button");
+          replyBtn.type = "button";
+          replyBtn.textContent = "Ответить";
+          replyBtn.addEventListener("click", () => {
+            hideMsgMenu();
+            let preview = String(selectedMessageText || "").trim();
+            if (!preview) {
+              const hasVideo = !!bubble.querySelector(".bubble-media-item.is-video, .bubble-media-item video");
+              const hasMedia = !!bubble.querySelector(".bubble-media-item");
+              preview = hasVideo ? "Видео" : (hasMedia ? "Фото" : "Сообщение");
+            }
+            if (typeof window.__chatSetReplyCompose === "function") {
+              window.__chatSetReplyCompose(selectedMessageMid, preview);
+            }
+          });
+          msgMenu.appendChild(replyBtn);
+        }
 
         if (isTouchLikeViewport()) {
           const copyBtn = document.createElement("button");
@@ -6043,6 +6063,7 @@
 
     (() => {
       const activeConversationId = {{ active_thread.conversation_id if active_thread else "null" }};
+      const allowMessageEditActions = {{ "true" if allow_message_edit_actions else "false" }};
       const messageInput = document.getElementById("message-input");
       if (!activeConversationId || !messageInput) return;
 
@@ -6104,6 +6125,18 @@
         replyMenu.innerHTML = "";
       };
 
+      // Bot bubbles already have the edit/delete menu when edits are allowed.
+      // In that case Reply is added there; this menu covers customer bubbles
+      // and bot bubbles when the edit menu is unavailable.
+      const findReplyTargetBubble = (target) => {
+        if (!(target instanceof Element)) return null;
+        const customerBubble = target.closest(".bubble[data-message-direction='customer']");
+        if (customerBubble instanceof HTMLElement) return customerBubble;
+        if (allowMessageEditActions) return null;
+        const botBubble = target.closest(".bubble[data-message-direction='bot']");
+        return botBubble instanceof HTMLElement ? botBubble : null;
+      };
+
       const openReplyMenu = (x, y, bubble) => {
         selectedMessageMid = String(bubble.dataset.messageMid || "").trim();
         selectedMessageText = String(bubble.dataset.messageText || "");
@@ -6146,9 +6179,7 @@
       window.addEventListener("resize", hideReplyMenu);
 
       document.addEventListener("contextmenu", (e) => {
-        const bubble = e.target instanceof Element
-          ? e.target.closest(".bubble[data-message-direction='customer']")
-          : null;
+        const bubble = findReplyTargetBubble(e.target);
         if (!(bubble instanceof HTMLElement)) return;
         e.preventDefault();
         openReplyMenu(e.clientX, e.clientY, bubble);
@@ -6157,9 +6188,7 @@
       document.addEventListener("touchstart", (e) => {
         const touch = e.touches?.[0];
         if (!touch) return;
-        const bubble = e.target instanceof Element
-          ? e.target.closest(".bubble[data-message-direction='customer']")
-          : null;
+        const bubble = findReplyTargetBubble(e.target);
         if (!(bubble instanceof HTMLElement)) return;
         if (longPressTimer) clearTimeout(longPressTimer);
         longPressTimer = setTimeout(() => {
