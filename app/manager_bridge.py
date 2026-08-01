@@ -4817,12 +4817,6 @@ async def handle_customer_event(
             workspace_id=workspace_id,
         )
     except ValueError:
-        logger.warning(
-            "[INCOMING] flow=dialogs_limit_exceeded workspace=%s chat=%s sender=%s",
-            int(workspace_id),
-            str(event.chat_id or "")[:32],
-            str(event.sender_id or "")[:32],
-        )
         await client.send_text(
             chat_id=event.chat_id,
             text="Достигнут лимит активных диалогов по вашему workspace. Попробуйте позже.",
@@ -4843,11 +4837,6 @@ async def handle_customer_event(
         workspace_id=int(workspace_id),
         event=event,
     ):
-        logger.warning(
-            "[INCOMING] flow=onboarding_template_echo_ignored workspace=%s chat=%s",
-            int(workspace_id),
-            str(event.chat_id or "")[:32],
-        )
         return {
             "ok": True,
             "flow": "onboarding_template_echo_ignored",
@@ -4859,11 +4848,6 @@ async def handle_customer_event(
         conversation_id=int(conversation.id),
         event=event,
     ):
-        logger.warning(
-            "[INCOMING] flow=duplicate_customer_event workspace=%s chat=%s",
-            int(workspace_id),
-            str(event.chat_id or "")[:32],
-        )
         return {
             "ok": True,
             "flow": "duplicate_customer_event",

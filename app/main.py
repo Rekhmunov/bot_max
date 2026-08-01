@@ -10953,33 +10953,12 @@ async def max_webhook(
         _wh_log.warning("[WEBHOOK] ignored=update_type type=%s", str(event.update_type))
         return {"ok": True, "ignored": event.update_type}
 
-    # Resolve workspace by webhook key only. Max may fan-out one update to many
-    # subscribed URLs; falling back to chat/sender mapping made stale keys steal
-    # the event for the same workspace and race the real bot subscription.
-    key_workspace_id = _resolve_workspace_by_webhook_key(db, webhook_key)
-    if key_workspace_id is None:
-        _wh_log.warning(
-            "[WEBHOOK] ignored=unknown_webhook_key key=%s type=%s chat=%s sender=%s",
-            str(webhook_key or "")[:24],
-            str(event.update_type or ""),
-            str(event.chat_id or "")[:32],
-            str(event.sender_id or "")[:32],
-        )
-        return {"ok": True, "ignored": "unknown_webhook_key"}
-    workspace_id = int(key_workspace_id)
-
+    # Resolve workspace before dedupe: Max may fan-out the same update to every
+    # subscribed webhook URL. Global event_uid dedupe made only the first
+    # workspace process the event; others returned duplicate_event and dropped
+    # welcome/incoming handling for the correct bot.
+    workspace_id = _resolve_workspace_by_webhook_key(db, webhook_key) or _resolve_workspace_id_from_event(db, event)
     event_uid = event.event_uid_value()
-    if not event_uid:
-        # bot_started often has no mid; dedupe by update_id when present so
-        # concurrent fan-out to the same workspace key does not race twice.
-        update_type = str(event.update_type or "").strip().lower()
-        update_id = str(getattr(event, "update_id", "") or "").strip()
-        if update_type in {"bot_started", "bot_start"} and update_id:
-            event_uid = (
-                f"start:{str(event.chat_id or '').strip()}:"
-                f"{str(event.sender_id or '').strip()}:"
-                f"{update_id}"
-            )
     if event_uid:
         dedupe_uid = f"ws:{int(workspace_id)}:{event_uid}"
         seen = db.query(WebhookEvent).filter(WebhookEvent.event_uid == dedupe_uid).first()
@@ -10997,11 +10976,7 @@ async def max_webhook(
     settings_db = get_or_create_settings(db, workspace_id=workspace_id)
     max_client, client_error = _workspace_client_or_error(settings_db)
     if client_error or max_client is None:
-        _wh_log.warning(
-            "[WEBHOOK] ignored=bot_token_not_configured key=%s workspace=%s",
-            str(webhook_key)[:24],
-            int(workspace_id),
-        )
+        _wh_log.warning("[WEBHOOK] ignored=bot_token_not_configured key=%s", str(webhook_key)[:16])
         return {"ok": True, "ignored": "bot_token_not_configured"}
 
     sender_id = (event.sender_id or "").strip()
@@ -11048,23 +11023,12 @@ async def max_webhook(
             "read_message_mid": str(event.read_message_mid or ""),
         }
 
-    try:
-        result = await handle_customer_event(
-            db=db,
-            client=max_client,
-            settings=settings_db,
-            event=event,
-        )
-    except Exception:
-        _wh_log.exception(
-            "[WEBHOOK] handle_customer_event_failed key=%s workspace=%s type=%s chat=%s sender=%s",
-            str(webhook_key or "")[:24],
-            int(workspace_id),
-            str(event.update_type or ""),
-            str(event.chat_id or "")[:32],
-            str(event.sender_id or "")[:32],
-        )
-        return {"ok": True, "ignored": "handler_exception"}
+    result = await handle_customer_event(
+        db=db,
+        client=max_client,
+        settings=settings_db,
+        event=event,
+    )
     flow_name = ""
     if isinstance(result, dict):
         flow_name = str(result.get("flow") or result.get("ignored") or "")
