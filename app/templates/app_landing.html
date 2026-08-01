@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <title>FeedPilot SaaS</title>
+  <style>
+    :root {
+      --bg: #070b16;
+      --bg-2: #0f1730;
+      --card: rgba(15, 24, 44, 0.68);
+      --card-strong: rgba(18, 28, 54, 0.9);
+      --line: rgba(128, 162, 255, 0.32);
+      --text: #e8eeff;
+      --muted: #9baacc;
+      --primary: #59b4ff;
+      --primary-2: #6f7bff;
+      --ok: #46d596;
+      --err: #ff6a83;
+      --shadow: 0 24px 60px rgba(6, 11, 24, 0.58);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Inter, Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(1100px 600px at -15% -20%, rgba(89, 180, 255, 0.28), transparent 55%),
+        radial-gradient(1000px 620px at 115% -10%, rgba(111, 123, 255, 0.24), transparent 58%),
+        linear-gradient(155deg, var(--bg) 0%, var(--bg-2) 60%, #060914 100%);
+      overflow-x: hidden;
+    }
+
+    .bg-grid,
+    .bg-glow {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+    }
+    .bg-grid {
+      background-image:
+        linear-gradient(rgba(143, 170, 255, 0.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(143, 170, 255, 0.06) 1px, transparent 1px);
+      background-size: 34px 34px;
+      mask-image: radial-gradient(circle at center, black 35%, transparent 90%);
+    }
+    .bg-glow::before,
+    .bg-glow::after {
+      content: "";
+      position: absolute;
+      width: 340px;
+      height: 340px;
+      border-radius: 50%;
+      filter: blur(55px);
+      opacity: 0.35;
+      animation: floaty 9s ease-in-out infinite;
+    }
+    .bg-glow::before {
+      left: 8%;
+      top: 18%;
+      background: #4fb8ff;
+    }
+    .bg-glow::after {
+      right: 12%;
+      bottom: 14%;
+      background: #7a6dff;
+      animation-delay: -3s;
+    }
+    @keyframes floaty {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-22px); }
+    }
+
+    .page {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 22px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .shell {
+      width: min(980px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: linear-gradient(165deg, rgba(18, 28, 54, 0.88), rgba(10, 16, 34, 0.9));
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      padding: 22px;
+      position: relative;
+      overflow: visible;
+    }
+    .shell::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border-radius: 24px;
+      pointer-events: none;
+      background: linear-gradient(120deg, rgba(89, 180, 255, 0.5), rgba(111, 123, 255, 0.35), transparent 45%);
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+      -webkit-mask-composite: xor;
+      padding: 1px;
+    }
+
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-bottom: 8px;
+      position: relative;
+      z-index: 2;
+      min-height: 34px;
+    }
+
+    .logout-btn {
+      border: 1px solid rgba(156, 184, 255, 0.42);
+      background: rgba(255, 255, 255, 0.06);
+      color: #dbe7ff;
+      border-radius: 12px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: 700;
+    }
+
+    .hero {
+      text-align: center;
+      padding: 20px 8px 12px;
+      position: relative;
+      z-index: 2;
+    }
+    .hero h2 {
+      margin: 0 0 10px;
+      font-size: clamp(28px, 5vw, 44px);
+      font-weight: 900;
+      line-height: 1.06;
+      text-wrap: balance;
+      background: linear-gradient(90deg, #f2f7ff 0%, #9ed7ff 35%, #c6b9ff 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+    .hero p {
+      margin: 0 auto 16px;
+      max-width: 680px;
+      font-size: 15px;
+      color: var(--muted);
+      line-height: 1.48;
+    }
+
+    .hero-actions {
+      display: flex;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
+    .action-btn {
+      border: 1px solid rgba(156, 184, 255, 0.48);
+      background: rgba(255, 255, 255, 0.05);
+      color: #e7efff;
+      font-weight: 800;
+      border-radius: 14px;
+      padding: 11px 16px;
+      min-width: 170px;
+      cursor: pointer;
+      transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+    }
+    .action-btn:hover {
+      transform: translateY(-1px);
+      border-color: rgba(90, 180, 255, 0.72);
+      background: linear-gradient(120deg, rgba(62, 171, 255, 0.95), rgba(111, 123, 255, 0.95));
+      color: #fff;
+      box-shadow: 0 12px 26px rgba(66, 151, 255, 0.3);
+    }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      background: rgba(4, 8, 18, 0.68);
+      z-index: 30;
+    }
+    .modal.active {
+      display: flex;
+      animation: modalFade .2s ease;
+    }
+    @keyframes modalFade {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .modal-card {
+      width: min(520px, 100%);
+      border: 1px solid rgba(149, 179, 255, 0.42);
+      border-radius: 18px;
+      background: var(--card-strong);
+      box-shadow:
+        0 38px 80px rgba(5, 10, 24, 0.82),
+        0 16px 42px rgba(27, 73, 194, 0.34),
+        inset 0 1px 0 rgba(210, 225, 255, 0.22);
+      padding: 16px;
+      position: relative;
+      animation: panelIn .2s ease forwards;
+    }
+    .modal-card::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border-radius: 18px;
+      pointer-events: none;
+      background: linear-gradient(130deg, rgba(103, 194, 255, 0.44), rgba(138, 125, 255, 0.34), transparent 46%);
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+      -webkit-mask-composite: xor;
+      padding: 1px;
+    }
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+      position: relative;
+      z-index: 1;
+    }
+    .modal-head h3 {
+      margin: 0;
+      font-size: 21px;
+      color: #eef4ff;
+    }
+    .close-btn {
+      border: 1px solid rgba(154, 183, 255, 0.42);
+      background: rgba(255, 255, 255, 0.06);
+      color: #d9e5ff;
+      border-radius: 10px;
+      height: 34px;
+      width: 34px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 700;
+      line-height: 1;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .notice-stack {
+      display: grid;
+      gap: 8px;
+      margin: 10px 0 6px;
+      position: relative;
+      z-index: 2;
+    }
+    .notice {
+      border-radius: 12px;
+      font-size: 14px;
+      padding: 10px 12px;
+      border: 1px solid transparent;
+      animation: slideIn .22s ease;
+    }
+    .notice.ok {
+      color: #d7ffec;
+      background: rgba(19, 83, 60, 0.45);
+      border-color: rgba(70, 213, 150, 0.38);
+    }
+    .notice.err {
+      color: #ffd8e0;
+      background: rgba(102, 27, 45, 0.45);
+      border-color: rgba(255, 106, 131, 0.38);
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .workspace-box {
+      border: 1px solid rgba(140, 170, 255, 0.35);
+      border-radius: 14px;
+      padding: 12px;
+      margin-top: 10px;
+      background: rgba(255, 255, 255, 0.04);
+      position: relative;
+      z-index: 2;
+    }
+    .compact-note {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+    .link-btn {
+      text-decoration: none;
+      border: 1px solid rgba(148, 177, 255, 0.44);
+      border-radius: 10px;
+      padding: 8px 10px;
+      color: #dfe9ff;
+      font-weight: 700;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .stage {
+      position: relative;
+      min-height: 360px;
+      margin-top: 2px;
+    }
+    .stage-panel {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      transform: translateY(10px) scale(.99);
+      pointer-events: none;
+      transition: opacity .24s ease, transform .24s ease;
+      display: grid;
+      align-content: start;
+    }
+    .stage-panel.active {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+    .panel-card {
+      width: min(520px, 100%);
+      margin: 0 auto;
+      border: 1px solid rgba(149, 179, 255, 0.42);
+      border-radius: 18px;
+      background: var(--card-strong);
+      box-shadow:
+        0 38px 80px rgba(5, 10, 24, 0.82),
+        0 16px 42px rgba(27, 73, 194, 0.34),
+        inset 0 1px 0 rgba(210, 225, 255, 0.22);
+      padding: 16px;
+      transform: translateY(4px) scale(.99);
+      animation: panelIn .2s ease forwards;
+      position: relative;
+    }
+    .panel-card::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border-radius: 18px;
+      pointer-events: none;
+      background: linear-gradient(130deg, rgba(103, 194, 255, 0.44), rgba(138, 125, 255, 0.34), transparent 46%);
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+      -webkit-mask-composite: xor;
+      padding: 1px;
+    }
+    @keyframes panelIn {
+      to { transform: translateY(0) scale(1); }
+    }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .panel-head h3 {
+      margin: 0;
+      font-size: 21px;
+      color: #eef4ff;
+    }
+    .ghost-btn {
+      border: 1px solid rgba(154, 183, 255, 0.42);
+      background: rgba(255, 255, 255, 0.06);
+      color: #d9e5ff;
+      border-radius: 10px;
+      height: 34px;
+      padding: 0 12px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1;
+    }
+
+    .muted { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+    label { display: block; font-size: 13px; font-weight: 700; margin: 10px 0 6px; color: #dbe6ff; }
+    input {
+      width: 100%;
+      border: 1px solid rgba(148, 178, 255, 0.4);
+      border-radius: 11px;
+      padding: 10px 11px;
+      font: inherit;
+      color: #eef3ff;
+      background: rgba(255, 255, 255, 0.06);
+      transition: border-color .18s ease, box-shadow .18s ease;
+    }
+    input::placeholder { color: #9caece; }
+    input:focus {
+      outline: none;
+      border-color: rgba(95, 180, 255, 0.92);
+      box-shadow: 0 0 0 3px rgba(80, 164, 255, 0.23);
+    }
+
+    .btn {
+      margin-top: 12px;
+      border: 0;
+      border-radius: 12px;
+      background: linear-gradient(120deg, rgba(62, 171, 255, 0.98), rgba(111, 123, 255, 0.98));
+      color: #fff;
+      font-weight: 800;
+      padding: 11px 14px;
+      cursor: pointer;
+      width: 100%;
+      transition: transform .2s ease, box-shadow .2s ease;
+      box-shadow: 0 12px 24px rgba(64, 146, 255, 0.28);
+    }
+    .btn:hover { transform: translateY(-1px); }
+
+    .password-meter {
+      margin-top: 8px;
+      display: grid;
+      gap: 5px;
+    }
+    .pw-rule {
+      font-size: 12px;
+      color: #a7b5d3;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: color .2s ease;
+    }
+    .pw-rule.ok { color: #75e1b1; }
+    .pw-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #6b7895;
+      transition: background .2s ease;
+    }
+    .pw-rule.ok .pw-dot { background: #75e1b1; }
+
+    @media (max-width: 760px) {
+      .page { padding: 14px; }
+      .shell { border-radius: 18px; padding: 14px; }
+      .hero p { font-size: 14px; }
+      .action-btn { width: 100%; }
+      .stage { min-height: 420px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="bg-glow"></div>
+  <div class="page">
+    <div class="shell">
+      <div class="top">
+        {% if current_user %}
+          <form method="post" action="/app/logout">
+            <button type="submit" class="logout-btn">Выйти</button>
+          </form>
+        {% endif %}
+      </div>
+
+      <div class="notice-stack">
+        {% if message %}<div class="notice ok">{{ message }}</div>{% endif %}
+        {% if register_message %}<div class="notice ok">{{ register_message }}</div>{% endif %}
+        {% if manager_message %}<div class="notice ok">{{ manager_message }}</div>{% endif %}
+        {% if error %}<div class="notice err">{{ error }}</div>{% endif %}
+        {% if login_error %}<div class="notice err">{{ login_error }}</div>{% endif %}
+        {% if register_error %}<div class="notice err">{{ register_error }}</div>{% endif %}
+        {% if manager_error %}<div class="notice err">{{ manager_error }}</div>{% endif %}
+      </div>
+
+      {% if current_user %}
+        <section class="workspace-box">
+          <b>Личный кабинет</b><br/>
+          Вы вошли как <b>{{ current_user.username }}</b> ({{ current_user.role }}).
+          {% if current_workspace %}
+            <div class="compact-note">
+              Workspace: {{ current_workspace.name }} · tenant: {{ current_workspace.tenant_code }} · id: {{ current_workspace.id }}
+            </div>
+          {% endif %}
+          <div class="links">
+            {% if current_user.role != "superadmin" %}
+              <a class="link-btn" href="/app/settings">Настройки</a>
+              <a class="link-btn" href="/app/chats">Чаты</a>
+            {% endif %}
+            {% if current_user.role in ["user", "owner", "admin"] %}
+              <a class="link-btn" href="/app/managers">Менеджеры</a>
+            {% endif %}
+            {% if current_user.role == "superadmin" %}
+              <a class="link-btn" href="/app/superadmin">SaaS управление</a>
+            {% endif %}
+          </div>
+        </section>
+        {% if manager_links %}
+          <section class="workspace-box">
+            <b>Менеджеры и ссылки</b>
+            <div class="compact-note">Менеджер задаёт пароль по one-time ссылке, логин = Max ID.</div>
+            <div style="overflow:auto;">
+              <table style="width:100%; border-collapse: collapse; margin-top:8px; font-size:13px;">
+                <thead>
+                  <tr>
+                    <th style="text-align:left; border-bottom:1px solid rgba(157,186,255,.35); padding:6px;">Менеджер</th>
+                    <th style="text-align:left; border-bottom:1px solid rgba(157,186,255,.35); padding:6px;">Max ID</th>
+                    <th style="text-align:left; border-bottom:1px solid rgba(157,186,255,.35); padding:6px;">Invite</th>
+                    <th style="text-align:left; border-bottom:1px solid rgba(157,186,255,.35); padding:6px;">Mini</th>
+                    <th style="text-align:left; border-bottom:1px solid rgba(157,186,255,.35); padding:6px;">Web</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for item in manager_links %}
+                    <tr>
+                      <td style="border-bottom:1px solid rgba(157,186,255,.2); padding:6px;">{{ item.display }}</td>
+                      <td style="border-bottom:1px solid rgba(157,186,255,.2); padding:6px;">{{ item.max_account_id }}</td>
+                      <td style="border-bottom:1px solid rgba(157,186,255,.2); padding:6px;"><a href="{{ item.invite_link }}" target="_blank">invite</a></td>
+                      <td style="border-bottom:1px solid rgba(157,186,255,.2); padding:6px;"><a href="{{ item.mini_link }}" target="_blank">mini</a></td>
+                      <td style="border-bottom:1px solid rgba(157,186,255,.2); padding:6px;"><a href="{{ item.web_link }}" target="_blank">web</a></td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        {% endif %}
+        {% if superadmin_stats and current_user.role == "superadmin" %}
+          <section class="workspace-box">
+            <b>SaaS управление</b>
+            <div class="compact-note">
+              Workspaces: {{ superadmin_stats.workspaces|length }} · Users: {{ superadmin_stats.users|length }} · Sessions: {{ superadmin_stats.sessions|length }}
+            </div>
+            <div class="links" style="margin-top:8px;">
+              <a class="link-btn" href="/app/superadmin/backups" target="_blank">Backups JSON</a>
+              <a class="link-btn" href="/app/superadmin/metrics" target="_blank">Metrics JSON</a>
+              <a class="link-btn" href="/app/superadmin/alerts" target="_blank">Alerts JSON</a>
+            </div>
+          </section>
+        {% endif %}
+      {% else %}
+        <section class="hero">
+          <h2>Bot.FeedPilot - будущее клиентских чатов</h2>
+          <p>Все мессенджеры в одном окне: Max / TG / VK</p>
+          <div class="hero-actions">
+            <button class="action-btn" type="button" data-open-modal="login">Авторизация</button>
+          </div>
+        </section>
+
+        <div class="modal {% if view == 'login' %}active{% endif %}" id="modal-login">
+          <div class="modal-card">
+            <div class="modal-head">
+              <h3>Авторизация</h3>
+              <button type="button" class="close-btn" data-close-modal aria-label="Закрыть">✕</button>
+            </div>
+            <p class="muted">Вход для клиента и менеджера.</p>
+            <form method="post" action="/app/login">
+              <label for="login_username">Логин (email / admin / Max ID)</label>
+              <input id="login_username" name="username" type="text" value="{{ default_username or '' }}" autocomplete="username" required />
+              <label for="login_password">Пароль</label>
+              <input id="login_password" type="password" name="password" required />
+              <button class="btn" type="submit">Войти</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="modal {% if view == 'register' %}active{% endif %}" id="modal-register">
+          <div class="modal-card">
+            <div class="modal-head">
+              <h3>Регистрация</h3>
+              <button type="button" class="close-btn" data-close-modal aria-label="Закрыть">✕</button>
+            </div>
+            <p class="muted">Регистрация владельца SaaS-кабинета (логин только email).</p>
+            <form method="post" action="/app/register">
+              <label for="register_email">Email (логин)</label>
+              <input id="register_email" name="email" type="email" value="{{ default_username or '' }}" placeholder="user@example.com" required />
+              <label for="register_password">Сложный пароль</label>
+              <input id="register_password" name="password" type="password" required />
+              <div class="password-meter" id="password-rules">
+                <div class="pw-rule" data-rule="length"><span class="pw-dot"></span> минимум 8 символов</div>
+                <div class="pw-rule" data-rule="lower"><span class="pw-dot"></span> строчная буква</div>
+                <div class="pw-rule" data-rule="upper"><span class="pw-dot"></span> заглавная буква</div>
+                <div class="pw-rule" data-rule="digit"><span class="pw-dot"></span> цифра</div>
+                <div class="pw-rule" data-rule="special"><span class="pw-dot"></span> спецсимвол</div>
+              </div>
+              <button class="btn" type="submit">Создать аккаунт</button>
+            </form>
+          </div>
+        </div>
+
+        <div class="modal {% if view == 'manager_invite' %}active{% endif %}" id="modal-manager">
+          <div class="modal-card">
+            <div class="modal-head">
+              <h3>Создание пароля менеджера</h3>
+              <button type="button" class="close-btn" data-close-modal aria-label="Закрыть">✕</button>
+            </div>
+            <p class="muted">Логин менеджера — Max ID. Задайте пароль по одноразовой ссылке.</p>
+            <form method="post" action="/app/invite/{{ invite_token }}">
+              <label for="manager_password">Пароль</label>
+              <input id="manager_password" name="manager_password" type="password" required />
+              <div class="password-meter" id="manager-password-rules">
+                <div class="pw-rule" data-rule="length"><span class="pw-dot"></span> минимум 8 символов</div>
+                <div class="pw-rule" data-rule="lower"><span class="pw-dot"></span> строчная буква</div>
+                <div class="pw-rule" data-rule="upper"><span class="pw-dot"></span> заглавная буква</div>
+                <div class="pw-rule" data-rule="digit"><span class="pw-dot"></span> цифра</div>
+                <div class="pw-rule" data-rule="special"><span class="pw-dot"></span> спецсимвол</div>
+              </div>
+              <label for="manager_password_confirm">Повторите пароль</label>
+              <input id="manager_password_confirm" name="manager_password_confirm" type="password" required />
+              <button class="btn" type="submit">Сохранить пароль и войти</button>
+            </form>
+          </div>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const modals = {
+        login: document.getElementById("modal-login"),
+        register: document.getElementById("modal-register"),
+        manager: document.getElementById("modal-manager"),
+      };
+
+      const closeAll = () => {
+        Object.values(modals).forEach((modal) => modal?.classList.remove("active"));
+      };
+
+      const openModal = (name) => {
+        closeAll();
+        const modal = modals[name];
+        if (!modal) return;
+        modal.classList.add("active");
+      };
+
+      document.querySelectorAll("[data-open-modal]").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const name = btn.getAttribute("data-open-modal");
+          if (name === "login" || name === "register") openModal(name);
+        });
+      });
+
+      document.querySelectorAll("[data-close-modal]").forEach((btn) => {
+        btn.addEventListener("click", closeAll);
+      });
+
+      Object.values(modals).forEach((modal) => {
+        modal?.addEventListener("click", (e) => {
+          if (e.target === modal) closeAll();
+        });
+      });
+
+      {% if view == "register" %}
+      openModal("register");
+      {% elif view == "manager_invite" %}
+      openModal("manager");
+      {% elif view == "login" %}
+      openModal("login");
+      {% endif %}
+
+      const bindPasswordHints = (inputId, rulesId) => {
+        const input = document.getElementById(inputId);
+        const wrap = document.getElementById(rulesId);
+        if (!(input instanceof HTMLInputElement) || !wrap) return;
+        const rows = Array.from(wrap.querySelectorAll("[data-rule]"));
+        const check = () => {
+          const v = input.value || "";
+          const map = {
+            length: v.length >= 8,
+            lower: /[a-z]/.test(v),
+            upper: /[A-Z]/.test(v),
+            digit: /\d/.test(v),
+            special: /[^A-Za-z0-9]/.test(v),
+          };
+          rows.forEach((row) => {
+            const rule = row.getAttribute("data-rule");
+            row.classList.toggle("ok", !!(rule && map[rule]));
+          });
+        };
+        input.addEventListener("input", check);
+        check();
+      };
+      bindPasswordHints("register_password", "password-rules");
+      bindPasswordHints("manager_password", "manager-password-rules");
+    })();
+  </script>
+</body>
+</html>

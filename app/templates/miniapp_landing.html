@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FeedPilot mini-app</title>
+  <style>
+    :root {
+      --bg-start: #0b1220;
+      --bg-end: #17243e;
+      --card-bg: rgba(20, 31, 55, 0.86);
+      --line: rgba(144, 175, 255, 0.34);
+      --text: #eef4ff;
+      --muted: #b8c7e6;
+      --btn-start: #2f8dff;
+      --btn-end: #5d6dff;
+      --btn-shadow: rgba(59, 125, 255, 0.35);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: Inter, Arial, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(900px 560px at -5% -20%, rgba(72, 165, 255, 0.28), transparent 58%),
+        radial-gradient(900px 560px at 105% -10%, rgba(95, 109, 255, 0.22), transparent 56%),
+        linear-gradient(160deg, var(--bg-start) 0%, var(--bg-end) 100%);
+    }
+
+    .viewport {
+      width: 100%;
+      height: 100%;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+    }
+
+    .card {
+      width: min(540px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: linear-gradient(165deg, var(--card-bg), rgba(11, 18, 32, 0.94));
+      box-shadow:
+        0 20px 54px rgba(5, 9, 20, 0.6),
+        0 10px 26px rgba(45, 102, 216, 0.22);
+      padding: 30px 24px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card::before {
+      content: "";
+      position: absolute;
+      inset: -1px;
+      border-radius: 22px;
+      pointer-events: none;
+      padding: 1px;
+      background: linear-gradient(120deg, rgba(91, 173, 255, 0.52), rgba(125, 135, 255, 0.36), transparent 50%);
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+      -webkit-mask-composite: xor;
+    }
+
+    .title {
+      margin: 0 0 14px;
+      font-size: clamp(24px, 5vw, 34px);
+      line-height: 1.12;
+      font-weight: 900;
+      letter-spacing: 0.2px;
+      text-wrap: balance;
+      background: linear-gradient(90deg, #f6f9ff 0%, #a8d7ff 42%, #c5b9ff 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      color: transparent;
+    }
+
+    .subtitle {
+      margin: 0 auto;
+      max-width: 420px;
+      color: var(--muted);
+      font-size: clamp(14px, 3.4vw, 18px);
+      line-height: 1.45;
+      text-wrap: balance;
+    }
+
+    .cta-wrap {
+      margin-top: 22px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .cta-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 46px;
+      padding: 12px 22px;
+      border-radius: 12px;
+      border: 0;
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 800;
+      color: #ffffff;
+      background: linear-gradient(120deg, var(--btn-start), var(--btn-end));
+      box-shadow: 0 10px 24px var(--btn-shadow);
+      transition:
+        transform 0.2s ease,
+        box-shadow 0.2s ease,
+        filter 0.2s ease;
+      white-space: nowrap;
+    }
+
+    .cta-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 14px 30px rgba(66, 130, 255, 0.42);
+      filter: saturate(1.04);
+    }
+
+    .cta-btn:active {
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body>
+  <main class="viewport">
+    <section class="card">
+      <h1 class="title">Хочешь больше выгодных предложений с кэшбэком, тогда подпишись на наш канал</h1>
+      <p class="subtitle">Будь в курсе новых предложений и получай максимум выгоды.</p>
+      <div class="cta-wrap">
+        <a class="cta-btn" href="{{ channel_url }}" target="_blank" rel="noopener noreferrer">Перейти в канал</a>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

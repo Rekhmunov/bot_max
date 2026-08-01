@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <title>Профиль</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --panel: #ffffff;
+      --line: #e3e7f0;
+      --text: #1f2430;
+      --muted: #6f788a;
+      --accent: #1c74ff;
+      --accent-soft: #edf4ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .page {
+      max-width: 920px;
+      margin: 0 auto;
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 10px 12px;
+    }
+    .back-link {
+      text-decoration: none;
+      color: var(--accent);
+      font-weight: 700;
+      font-size: 14px;
+      padding: 6px 8px;
+      border-radius: 10px;
+      background: var(--accent-soft);
+    }
+    .title {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 800;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 12px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 14px;
+    }
+    .item {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: #fff;
+      min-height: 56px;
+    }
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+    .value {
+      font-size: 14px;
+      font-weight: 600;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+    .section-title {
+      margin: 0 0 10px;
+      font-size: 15px;
+      font-weight: 800;
+    }
+    @media (max-width: 740px) {
+      .grid { grid-template-columns: 1fr; }
+      .title { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="topbar">
+      <a class="back-link" href="{{ back_to_chat_url }}">← Вернуться в чат</a>
+      <h1 class="title">Профиль</h1>
+    </div>
+
+    <section class="card">
+      <h2 class="section-title">Основные данные</h2>
+      <div class="grid">
+        {% if basic_rows %}
+        {% for row in basic_rows %}
+          <div class="item">
+            <div class="label">{{ row.label }}</div>
+            <div class="value">{{ row.value }}</div>
+          </div>
+        {% endfor %}
+        {% else %}
+          <div class="item"><div class="value">Данные отсутствуют</div></div>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="card">
+      <h2 class="section-title">Данные из переписки / Max</h2>
+      <div class="grid">
+        {% if technical_rows %}
+        {% for row in technical_rows %}
+          <div class="item">
+            <div class="label">{{ row.label }}</div>
+            <div class="value">{{ row.value }}</div>
+          </div>
+        {% endfor %}
+        {% else %}
+          <div class="item"><div class="value">Технические данные отсутствуют</div></div>
+        {% endif %}
+      </div>
+    </section>
+  </div>
+</body>
+</html>

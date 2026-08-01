@@ -1,0 +1,1072 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <title>Панель суперадмина FeedPilot</title>
+  <style>
+    :root {
+      --bg: #f3f5fb;
+      --card: #ffffff;
+      --line: #dce3ef;
+      --text: #1f2532;
+      --muted: #60708b;
+      --primary: #2f64ff;
+      --danger: #d53b3b;
+      --ok: #1d9b61;
+      --warn: #9b6a1d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .layout {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+    }
+    .sidebar {
+      background: #101a33;
+      color: #dce7ff;
+      padding: 16px 12px;
+      border-right: 1px solid rgba(255,255,255,.08);
+    }
+    .brand {
+      font-weight: 800;
+      font-size: 18px;
+      margin: 4px 8px 14px;
+    }
+    .nav {
+      display: grid;
+      gap: 6px;
+    }
+    .nav a {
+      text-decoration: none;
+      color: #dce7ff;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid transparent;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    .nav a:hover {
+      border-color: rgba(255,255,255,.18);
+      background: rgba(255,255,255,.08);
+    }
+    .nav a.active {
+      background: rgba(47, 100, 255, .32);
+      border-color: rgba(124, 158, 255, .65);
+    }
+    .content {
+      padding: 18px 18px 24px;
+      min-width: 0;
+    }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 24px;
+    }
+    .muted {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 4px;
+    }
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .btn, .btn-link {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #2a3955;
+      padding: 8px 11px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 13px;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .btn.primary {
+      border-color: #2f64ff;
+      background: #2f64ff;
+      color: #fff;
+    }
+    .btn.danger {
+      border-color: #f0c9c9;
+      background: #fff3f3;
+      color: var(--danger);
+    }
+    .btn.icon-btn {
+      width: 32px;
+      height: 32px;
+      padding: 0;
+      border-radius: 8px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      font-size: 15px;
+    }
+    .notice {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      background: #fff;
+      font-size: 14px;
+    }
+    .notice.error {
+      border-color: #f2caca;
+      background: #fde9e9;
+      color: #8d2222;
+    }
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+    .kpi {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--card);
+      padding: 11px 12px;
+    }
+    .kpi .label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 5px;
+    }
+    .kpi .value {
+      font-size: 22px;
+      font-weight: 800;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--card);
+      padding: 14px;
+      margin-bottom: 12px;
+      overflow: auto;
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      min-width: 700px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 6px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th { color: #445571; font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+    .row-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .row-actions form { display: inline-block; margin: 0; }
+    .confirm-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 20, 40, 0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 60;
+      padding: 16px;
+    }
+    .confirm-modal.active {
+      display: flex;
+    }
+    .confirm-modal-card {
+      width: min(420px, 100%);
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      padding: 14px;
+      box-shadow: 0 10px 40px rgba(10, 20, 40, 0.2);
+    }
+    .confirm-modal-title {
+      margin: 0 0 8px;
+      font-size: 17px;
+      font-weight: 700;
+    }
+    .confirm-modal-text {
+      margin: 0 0 12px;
+      color: var(--muted);
+      line-height: 1.35;
+      font-size: 13px;
+    }
+    .confirm-modal-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .badge.ok { color: var(--ok); border-color: #bfe7d3; background: #eefaf4; }
+    .badge.warn { color: var(--warn); border-color: #edd6b1; background: #fff7ea; }
+    .badge.danger { color: var(--danger); border-color: #f1c4c4; background: #fff0f0; }
+    .inline-form {
+      display: flex;
+      gap: 8px;
+      align-items: end;
+      flex-wrap: wrap;
+    }
+    .inline-form label {
+      display: block;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      font-weight: 700;
+    }
+    .inline-form input, .inline-form select {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      min-width: 120px;
+      font: inherit;
+      background: #fff;
+    }
+    .tariff-row-summary {
+      cursor: pointer;
+    }
+    .tariff-row-details {
+      display: none;
+      background: #f8faff;
+    }
+    .tariff-row-details.is-open {
+      display: table-row;
+    }
+    .plans-filters {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: end;
+      margin-bottom: 10px;
+    }
+    .plans-filters label {
+      display: grid;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+    .plans-filters input,
+    .plans-filters select {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      min-width: 160px;
+      font: inherit;
+      background: #fff;
+    }
+    .modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(10, 20, 40, 0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 40;
+      padding: 16px;
+    }
+    .modal.active {
+      display: flex;
+    }
+    .modal-card {
+      width: min(980px, 100%);
+      max-height: calc(100vh - 32px);
+      overflow: auto;
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      padding: 14px;
+    }
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .close-btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 8px;
+      cursor: pointer;
+      width: 32px;
+      height: 32px;
+      font-size: 18px;
+      line-height: 1;
+    }
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        border-right: 0;
+        border-bottom: 1px solid rgba(255,255,255,.12);
+      }
+      .nav {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      }
+      table { min-width: 620px; }
+    }
+  </style>
+</head>
+<body>
+  {% set role_labels = {
+    "superadmin": "Суперадмин",
+    "user": "Пользователь",
+    "owner": "Пользователь",
+    "admin": "Пользователь",
+    "manager": "Менеджер"
+  } %}
+  {% set subscription_status_labels = {
+    "active": "Активна",
+    "basic": "Начальный",
+    "trial": "Начальный",
+    "past_due": "Просрочена оплата",
+    "paused": "На паузе",
+    "cancelled": "Отменена"
+  } %}
+  {% set plan_code_labels = {
+    "basic": "Начальный",
+    "trial": "Начальный",
+    "unlimited": "Безлимит"
+  } %}
+  {% set action_labels = {
+    "workspace_registered": "Клиент зарегистрирован",
+    "email_verification_sent": "Отправлено письмо подтверждения email",
+    "email_verified": "Email подтвержден",
+    "email_verification_resent": "Письмо подтверждения отправлено повторно",
+    "manager_created": "Менеджер создан",
+    "intro_step_added": "Добавлен вступительный шаг",
+    "intro_step_deleted": "Удален вступительный шаг",
+    "manager_invite_consumed": "Инвайт менеджера использован",
+    "manager_password_set_by_invite": "Пароль менеджера установлен по инвайту",
+    "user_role_updated": "Роль пользователя изменена",
+    "user_block_toggled": "Статус блокировки пользователя изменен",
+    "user_sessions_revoked": "Сессии пользователя сброшены",
+    "workspace_suspended": "Клиент приостановлен",
+    "workspace_resumed": "Клиент возобновлен",
+    "workspace_sessions_revoked": "Сессии клиента сброшены",
+    "workspace_plan_updated": "План клиента обновлен",
+    "workspace_plan_reassigned": "Тариф клиента изменен",
+    "workspace_tariff_assigned": "Тариф клиента изменен",
+    "tariff_plan_created": "Тариф создан",
+    "tariff_plan_updated": "Тариф обновлен",
+    "tariff_default_changed": "Тариф по умолчанию изменен",
+    "tariff_plan_deleted": "Тариф удален",
+    "workspace_deleted": "Клиент удален",
+    "user_deleted": "Пользователь удален",
+    "backup_created": "Резервная копия создана",
+    "backup_restored": "Резервная копия восстановлена",
+    "backup_deleted": "Резервная копия удалена",
+    "superadmin_2fa_updated": "Настройки 2FA суперадмина обновлены"
+  } %}
+  {% set object_type_labels = {
+    "service_user": "Пользователь",
+    "workspace": "Клиент",
+    "subscription": "Подписка",
+    "backup": "Резервная копия",
+    "security": "Безопасность",
+    "manager_invite": "Инвайт менеджера",
+    "intro_step": "Вступительный шаг",
+    "email": "Email"
+  } %}
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">Суперадмин</div>
+      <nav class="nav">
+        <a class="{% if section == 'dashboard' %}active{% endif %}" href="/app/superadmin">Дашборд</a>
+        <a class="{% if section == 'workspaces' %}active{% endif %}" href="/app/superadmin/workspaces">Клиенты</a>
+        <a class="{% if section == 'users' %}active{% endif %}" href="/app/superadmin/users">Пользователи</a>
+        <a class="{% if section == 'plans' %}active{% endif %}" href="/app/superadmin/plans">Тарифы и лимиты</a>
+        <a class="{% if section == 'security' %}active{% endif %}" href="/app/superadmin/security">Безопасность</a>
+        <a class="{% if section == 'monitoring' %}active{% endif %}" href="/app/superadmin/monitoring">Мониторинг</a>
+        <a class="{% if section == 'backups' %}active{% endif %}" href="/app/superadmin/backups/view">Резервные копии</a>
+        <a class="{% if section == 'audit' %}active{% endif %}" href="/app/superadmin/audit">Аудит-лог</a>
+        <a class="{% if section == 'system' %}active{% endif %}" href="/app/superadmin/system">Системные настройки</a>
+      </nav>
+    </aside>
+    <main class="content">
+      <div class="topbar">
+        <div>
+          <h1>{{ page_title or "Панель суперадмина" }}</h1>
+          <div class="muted">Платформа FeedPilot · логин: {{ current_user.username }}</div>
+        </div>
+        <div class="top-actions">
+          <form method="post" action="/app/superadmin/backup">
+            <button class="btn primary" type="submit">Создать резервную копию</button>
+          </form>
+          <form method="post" action="/app/logout">
+            <button class="btn" type="submit">Выйти</button>
+          </form>
+        </div>
+      </div>
+
+      {% if message %}<div class="notice">{{ message }}</div>{% endif %}
+      {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
+
+      {% if section == "dashboard" %}
+        <section class="kpis">
+          <div class="kpi"><div class="label">Клиенты</div><div class="value">{{ stats.workspaces_total }}</div></div>
+          <div class="kpi"><div class="label">Пользователи</div><div class="value">{{ stats.users_total }}</div></div>
+          <div class="kpi"><div class="label">Активные сессии</div><div class="value">{{ stats.sessions_active }}</div></div>
+          <div class="kpi"><div class="label">Открытые алерты</div><div class="value">{{ stats.alerts_open }}</div></div>
+        </section>
+      {% endif %}
+
+      {% if section == "workspaces" %}
+        <section class="card">
+          <h2>Клиенты (рабочие пространства)</h2>
+          <table>
+            <thead><tr><th>ID</th><th>Название</th><th>Код клиента</th><th>Статус</th><th>План</th><th>Менеджеры/Диалоги/Сообщения</th><th>Действия</th></tr></thead>
+            <tbody>
+              {% for row in workspace_rows %}
+                <tr>
+                  <td>{{ row.workspace.id }}</td>
+                  <td>{{ row.workspace.name }}</td>
+                  <td>{{ row.workspace.tenant_code }}</td>
+                  <td>
+                    {% if row.workspace.is_suspended %}
+                      <span class="badge danger">Приостановлен</span>
+                    {% elif row.workspace.is_active %}
+                      <span class="badge ok">Активен</span>
+                    {% else %}
+                      <span class="badge warn">Неактивен</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ plan_code_labels.get((row.subscription.plan_code or "")|lower, row.subscription.plan_code) }} / {{ subscription_status_labels.get(row.subscription.status, row.subscription.status) }}</td>
+                  <td>{{ row.metrics.managers_active }} / {{ row.metrics.dialogs_total }} / {{ row.metrics.messages_month }}</td>
+                  <td>
+                    <div class="row-actions">
+                      {% if row.workspace.is_suspended %}
+                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/resume"><button class="btn" type="submit">Возобновить</button></form>
+                      {% else %}
+                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/suspend"><button class="btn danger" type="submit">Приостановить</button></form>
+                      {% endif %}
+                      <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/revoke-sessions"><button class="btn" type="submit">Сбросить сессии</button></form>
+                        <form method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/delete">
+                          <button
+                            class="btn danger"
+                            type="submit"
+                            data-confirm-delete
+                            data-confirm-title="Удаление клиента"
+                            data-confirm-text="Удалить клиента {{ row.workspace.name }} (ID: {{ row.workspace.id }})? Это действие необратимо."
+                          >Удалить клиента</button>
+                        </form>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "users" %}
+        <section class="card">
+          <h2>Пользователи</h2>
+          <table>
+            <thead><tr><th>ID</th><th>Клиент</th><th>Логин</th><th>Роль</th><th>Статус</th><th>Email</th><th>Последний вход</th><th>Действия</th></tr></thead>
+            <tbody>
+              {% for user in users %}
+                <tr>
+                  <td>{{ user.id }}</td>
+                  <td>{{ user.workspace_id or "-" }}</td>
+                  <td>{{ user.username }}</td>
+                  <td>{{ role_labels.get(user.role, user.role) }}</td>
+                  <td>
+                    {% if user.is_blocked %}
+                      <span class="badge danger">Заблокирован</span>
+                    {% elif user.is_active %}
+                      <span class="badge ok">Активен</span>
+                    {% else %}
+                      <span class="badge warn">Неактивен</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if user.email_verified %}
+                      <span class="badge ok">Подтвержден</span>
+                    {% else %}
+                      <span class="badge warn">Не подтвержден</span>
+                    {% endif %}
+                  </td>
+                  <td>{{ user.last_login_at or "-" }}</td>
+                  <td>
+                    <div class="row-actions">
+                      {% if user.role != "superadmin" %}
+                        <form method="post" action="/app/superadmin/users/{{ user.id }}/toggle-block">
+                          <button class="btn {% if user.is_blocked %}primary{% else %}danger{% endif %}" type="submit">
+                            {% if user.is_blocked %}Разблокировать{% else %}Заблокировать{% endif %}
+                          </button>
+                        </form>
+                        <form method="post" action="/app/superadmin/users/{{ user.id }}/revoke-sessions">
+                          <button class="btn" type="submit">Сбросить сессии</button>
+                        </form>
+                      {% endif %}
+                      {% if user.role != "superadmin" %}
+                        <form method="post" action="/app/superadmin/users/{{ user.id }}/delete">
+                          <button
+                            class="btn danger"
+                            type="submit"
+                            data-confirm-delete
+                            data-confirm-title="Удаление пользователя"
+                            data-confirm-text="Удалить пользователя {{ user.username }} (ID: {{ user.id }})? Это действие необратимо."
+                          >Удалить пользователя</button>
+                        </form>
+                      {% else %}
+                        <span class="muted">Удаление запрещено</span>
+                      {% endif %}
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "plans" %}
+        <section class="card">
+          <div class="row-actions" style="margin-bottom:10px;">
+            <button class="btn primary" type="button" data-open-modal="create-tariff">Создать тариф</button>
+          </div>
+          <table>
+            <thead><tr><th>Код</th><th>Название</th><th>Описание</th><th>По умолчанию</th><th>Статус</th><th>Лимиты</th><th>Платежные коды</th></tr></thead>
+            <tbody>
+              {% for plan in tariff_rows %}
+                <tr class="tariff-row-summary" data-tariff-toggle data-target-id="tariff-{{ plan.id }}" aria-expanded="false">
+                  <td><code>{{ plan.code }}</code></td>
+                  <td>{{ plan.name }}</td>
+                  <td>{{ plan.description or "—" }}</td>
+                  <td>
+                    {% if plan.is_default %}
+                      <span class="badge ok">Да</span>
+                    {% else %}
+                      <form method="post" action="/app/superadmin/tariffs/{{ plan.id }}/set-default">
+                        <button class="btn" type="submit">Сделать по умолчанию</button>
+                      </form>
+                    {% endif %}
+                  </td>
+                  <td>
+                    {% if plan.is_active %}
+                      <span class="badge ok">Активен</span>
+                    {% else %}
+                      <span class="badge warn">Отключен</span>
+                    {% endif %}
+                  </td>
+                  <td>
+                    Менеджеры: {{ plan.manager_limit }} · Диалоги: {{ plan.dialogs_limit }} · Сообщения: {{ plan.messages_per_month_limit }}<br />
+                    Быстрые ответы: {{ plan.quick_replies_limit }} · Папки: {{ plan.folders_limit }} · Закрепленные чаты: {{ plan.pinned_chats_limit }}
+                  </td>
+                  <td>
+                    Продукт: <code>{{ plan.billing_product_code or "—" }}</code><br />
+                    Цена: <code>{{ plan.billing_price_code or "—" }}</code>
+                  </td>
+                </tr>
+                <tr id="tariff-{{ plan.id }}" class="tariff-row-details">
+                  <td>
+                    <form class="inline-form" method="post" action="/app/superadmin/tariffs/{{ plan.id }}" style="margin-bottom:6px;">
+                      <div><label>Название</label><input name="name" value="{{ plan.name }}" /></div>
+                      <div><label>Описание</label><input name="description" value="{{ plan.description }}" /></div>
+                      <div><label>Менеджеры</label><input type="number" min="1" name="manager_limit" value="{{ plan.manager_limit }}" /></div>
+                      <div><label>Диалоги</label><input type="number" min="1" name="dialogs_limit" value="{{ plan.dialogs_limit }}" /></div>
+                      <div><label>Сообщения/мес</label><input type="number" min="1" name="messages_per_month_limit" value="{{ plan.messages_per_month_limit }}" /></div>
+                      <div><label>Быстрые ответы</label><input type="number" min="1" name="quick_replies_limit" value="{{ plan.quick_replies_limit }}" /></div>
+                      <div><label>Папки</label><input type="number" min="1" name="folders_limit" value="{{ plan.folders_limit }}" /></div>
+                      <div><label>Закрепленные чаты</label><input type="number" min="1" name="pinned_chats_limit" value="{{ plan.pinned_chats_limit }}" /></div>
+                      <div><label>Код продукта оплаты</label><input name="billing_product_code" value="{{ plan.billing_product_code }}" /></div>
+                      <div><label>Код цены оплаты</label><input name="billing_price_code" value="{{ plan.billing_price_code }}" /></div>
+                      <div>
+                        <label>Статус</label>
+                        <select name="is_active">
+                          <option value="1" {% if plan.is_active %}selected{% endif %}>Активен</option>
+                          <option value="0" {% if not plan.is_active %}selected{% endif %}>Отключен</option>
+                        </select>
+                      </div>
+                      <div><button class="btn primary" type="submit">Сохранить тариф</button></div>
+                    </form>
+                    <form method="post" action="/app/superadmin/tariffs/{{ plan.id }}/delete">
+                      <button class="btn danger" type="submit" {% if plan.is_default %}disabled{% endif %}>Удалить тариф</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+        <section class="card">
+          <h2>Назначение тарифа пользователям (клиентам)</h2>
+          <div class="muted" style="margin-bottom:8px;">
+            Основа для будущей автосмены тарифа после оплаты: у клиента хранится код тарифа, который можно менять вручную или автоматически биллинг-событием.
+          </div>
+          <div class="plans-filters" data-plan-filters>
+            <label>
+              Логин клиента
+              <input type="text" data-plan-filter="login" placeholder="Поиск по логину" />
+            </label>
+            <label>
+              Текущий тариф
+              <select data-plan-filter="current_tariff">
+                <option value="">Все тарифы</option>
+                {% for plan in tariff_rows %}
+                  <option value="{{ plan.code|lower }}">{{ plan.name }} ({{ plan.code }})</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>
+              Статус подписки
+              <select data-plan-filter="subscription_status">
+                <option value="">Все статусы</option>
+                <option value="active">Активна</option>
+                <option value="trial">Триал</option>
+                <option value="past_due">Просрочена оплата</option>
+                <option value="paused">На паузе</option>
+                <option value="cancelled">Отменена</option>
+              </select>
+            </label>
+          </div>
+          <table>
+            <thead><tr><th>Клиент</th><th>Логин клиента</th><th>Текущий тариф</th><th>Статус подписки</th><th>Назначить тариф</th></tr></thead>
+            <tbody>
+              {% for row in workspace_rows %}
+                <tr
+                  data-plan-workspace-row
+                  data-login="{{ (row.owner_username or '')|lower }}"
+                  data-tariff-code="{{ (row.plan_code or '')|lower }}"
+                  data-subscription-status="{{ (row.subscription.status or '')|lower }}"
+                >
+                  <td>{{ row.workspace.id }} · {{ row.workspace.name }}</td>
+                  <td>{{ row.owner_username or "—" }}</td>
+                  <td>{{ row.plan_name or row.plan_code }}</td>
+                  <td>{{ subscription_status_labels.get(row.subscription.status, row.subscription.status) }}</td>
+                  <td>
+                    <form class="inline-form" method="post" action="/app/superadmin/workspaces/{{ row.workspace.id }}/assign-tariff">
+                      <div>
+                        <label>Тариф</label>
+                        <select name="plan_code" required>
+                          {% for opt in row.available_plan_options %}
+                            <option value="{{ opt.code }}" {% if opt.code == row.plan_code %}selected{% endif %}>{{ opt.name }} ({{ opt.code }})</option>
+                          {% endfor %}
+                        </select>
+                      </div>
+                      <div>
+                        <label>Статус</label>
+                        <select name="status">
+                          {% for option, option_label in [("active","Активна"), ("basic","Начальный"), ("trial","Триал"), ("past_due","Просрочена оплата"), ("paused","На паузе"), ("cancelled","Отменена")] %}
+                            <option value="{{ option }}" {% if row.subscription.status == option %}selected{% endif %}>{{ option_label }}</option>
+                          {% endfor %}
+                        </select>
+                      </div>
+                      <div><button class="btn primary" type="submit">Назначить</button></div>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "security" %}
+        <section class="card">
+          <h2>Безопасность</h2>
+          <div class="muted">2FA и управление сессиями на уровне платформы.</div>
+          <div class="row-actions" style="margin-top:10px;">
+            <form method="post" action="/app/logout-all">
+              <button class="btn danger" type="submit">Выйти из всех сессий платформы</button>
+            </form>
+          </div>
+          <form class="inline-form" method="post" action="/app/superadmin/2fa" style="margin-top:12px;">
+            <div>
+              <label>Новый секрет TOTP (Base32)</label>
+              <input name="secret_b32" placeholder="JBSWY3DPEHPK3PXP" />
+            </div>
+            <div><button class="btn primary" type="submit">Обновить 2FA</button></div>
+          </form>
+          <div class="muted" style="margin-top:10px;">
+            Резервный 2FA-код: {% if superadmin_static_2fa_code_enabled %}<span class="badge warn">включен</span>{% else %}<span class="badge">выключен</span>{% endif %}
+          </div>
+        </section>
+      {% endif %}
+
+      {% if section == "monitoring" %}
+        <section class="card">
+          <h2>Мониторинг по клиентам</h2>
+          <table>
+            <thead><tr><th>Клиент</th><th>Код клиента</th><th>Приостановлен</th><th>Менеджеры</th><th>Диалоги</th><th>Сообщения/мес</th><th>Открытые алерты</th><th>Webhook URL</th><th>Webhook key</th></tr></thead>
+            <tbody>
+              {% for row in workspace_rows %}
+                <tr>
+                  <td>{{ row.workspace.id }}</td>
+                  <td>{{ row.workspace.tenant_code }}</td>
+                  <td>{{ "да" if row.workspace.is_suspended else "нет" }}</td>
+                  <td>{{ row.metrics.managers_active }}</td>
+                  <td>{{ row.metrics.dialogs_total }}</td>
+                  <td>{{ row.metrics.messages_month }}</td>
+                  <td>{{ row.open_alerts_count }}</td>
+                  <td><code>{{ row.webhook_url or "—" }}</code></td>
+                  <td><code>{{ row.webhook_key or "—" }}</code></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+        <section class="card" style="margin-top:12px;">
+          <h2>Webhook / Ops по клиентам</h2>
+          <div class="muted" style="margin-bottom:8px;">
+            Технические данные интеграции. Пользовательский UI их не показывает.
+          </div>
+          <table>
+            <thead><tr><th>Клиент</th><th>Токен бота</th><th>Webhook URL</th><th>Webhook key</th><th>Ссылка бота</th></tr></thead>
+            <tbody>
+              {% for row in workspace_rows %}
+                <tr>
+                  <td>{{ row.workspace.id }}</td>
+                  <td>{% if row.bot_token_set %}задан{% else %}не задан{% endif %}</td>
+                  <td><code>{{ row.webhook_url or "—" }}</code></td>
+                  <td><code>{{ row.webhook_key or "—" }}</code></td>
+                  <td><code>{{ row.bot_link or "—" }}</code></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "backups" %}
+        <section class="card">
+          <h2>Резервные копии</h2>
+          <form class="inline-form" method="post" action="/app/superadmin/restore">
+            <div>
+              <label>Имя резервной копии</label>
+              <input name="backup_name" placeholder="backup-20260101-010203.sqlite3" required />
+            </div>
+            <div><button class="btn danger" type="submit">Восстановить</button></div>
+          </form>
+          <table style="margin-top:12px;">
+            <thead><tr><th>Имя</th><th>Действия</th></tr></thead>
+            <tbody>
+              {% for item in backups %}
+                <tr>
+                  <td>{{ item }}</td>
+                  <td>
+                    <div class="row-actions">
+                      <form method="post" action="/app/superadmin/restore">
+                        <input type="hidden" name="backup_name" value="{{ item }}" />
+                        <button
+                          class="btn"
+                          type="submit"
+                          title="Восстановить из резервной копии"
+                          aria-label="Восстановить резервную копию {{ item }}"
+                          onclick="return confirm('Восстановить базу из копии {{ item }}? Текущая база будет перезаписана.')"
+                        >Восстановить</button>
+                      </form>
+                      <form method="post" action="/app/superadmin/backups/delete">
+                        <input type="hidden" name="backup_name" value="{{ item }}" />
+                        <button
+                          class="btn danger icon-btn"
+                          type="submit"
+                          title="Удалить резервную копию"
+                          aria-label="Удалить резервную копию {{ item }}"
+                          onclick="return confirm('Удалить резервную копию {{ item }}?')"
+                        >🗑</button>
+                      </form>
+                    </div>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "audit" %}
+        <section class="card">
+          <h2>Аудит-лог</h2>
+          <table>
+            <thead><tr><th>Время</th><th>Клиент</th><th>Исполнитель</th><th>Действие</th><th>Объект</th><th>Подробности</th></tr></thead>
+            <tbody>
+              {% for item in audit_items %}
+                <tr>
+                  <td>{{ item.created_at }}</td>
+                  <td>{{ item.workspace_id or "-" }}</td>
+                  <td>{{ item.actor_user_id or "-" }}</td>
+                  <td>{{ action_labels.get(item.action, item.action) }}</td>
+                  <td>{{ object_type_labels.get(item.object_type, item.object_type) }}#{{ item.object_id }}</td>
+                  <td>{{ item.details_json }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          <div class="row-actions" style="margin-top:10px;">
+            <span class="muted">
+              Страница {{ audit_pagination.page }} из {{ audit_pagination.pages_total }} · записей: {{ audit_pagination.total_count }}
+            </span>
+            {% if audit_pagination.has_prev %}
+              <a class="btn" href="/app/superadmin/audit?page={{ audit_pagination.prev_page }}">← Назад</a>
+            {% else %}
+              <button class="btn" type="button" disabled>← Назад</button>
+            {% endif %}
+            {% if audit_pagination.has_next %}
+              <a class="btn" href="/app/superadmin/audit?page={{ audit_pagination.next_page }}">Вперед →</a>
+            {% else %}
+              <button class="btn" type="button" disabled>Вперед →</button>
+            {% endif %}
+          </div>
+        </section>
+      {% endif %}
+
+      {% if section == "system" %}
+        <section class="card">
+          <h2>Системные настройки</h2>
+          <div class="muted">Базовые параметры работы платформы.</div>
+          <form class="inline-form" method="post" action="/app/superadmin/support-contacts" style="margin-top:12px;">
+            <label style="display:grid; gap:6px;">
+              <span class="muted">Email технического отдела</span>
+              <input
+                name="support_tech_email"
+                value="{{ support_contacts.tech_email }}"
+                placeholder="tech@company.ru"
+              />
+            </label>
+            <label style="display:grid; gap:6px;">
+              <span class="muted">Email финансового отдела</span>
+              <input
+                name="support_billing_email"
+                value="{{ support_contacts.billing_email }}"
+                placeholder="finance@company.ru"
+              />
+            </label>
+            <button class="btn primary" type="submit">Сохранить контакты</button>
+          </form>
+          <table style="min-width: 0; width:auto; margin-top:10px;">
+            <tbody>
+              <tr><th>Email техподдержки</th><td>{{ support_contacts.tech_email }}</td></tr>
+              <tr><th>Email финподдержки</th><td>{{ support_contacts.billing_email }}</td></tr>
+              <tr><th>SMTP-сервер</th><td>{{ smtp.host }}</td></tr>
+              <tr><th>SMTP-порт</th><td>{{ smtp.port }}</td></tr>
+              <tr><th>Отправитель SMTP</th><td>{{ smtp.sender }}</td></tr>
+              <tr><th>TLS</th><td>{{ smtp.tls }}</td></tr>
+              <tr><th>SSL</th><td>{{ smtp.ssl }}</td></tr>
+              <tr><th>TTL подтверждения email</th><td>{{ smtp.email_verify_ttl }}</td></tr>
+              <tr><th>Пауза повторной отправки (сек.)</th><td>{{ smtp.email_verify_resend_cooldown }}</td></tr>
+              <tr><th>Лимит авторизации/мин</th><td>{{ security.rate_login }}</td></tr>
+              <tr><th>Лимит вебхуков/мин</th><td>{{ security.rate_webhook }}</td></tr>
+              <tr><th>Лимит биллинга/мин</th><td>{{ security.rate_billing }}</td></tr>
+              <tr><th>Принудительный HTTPS</th><td>{{ security.force_https }}</td></tr>
+            </tbody>
+          </table>
+        </section>
+      {% endif %}
+
+      {% if section == "raw_backups" %}
+        <section class="card">
+          <h2>Резервные копии (формат JSON)</h2>
+          <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
+        </section>
+      {% endif %}
+
+      {% if section == "raw_backup_check" %}
+        <section class="card">
+          <h2>Проверка резервной копии (формат JSON)</h2>
+          <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
+        </section>
+      {% endif %}
+
+      {% if section == "raw_metrics" %}
+        <section class="card">
+          <h2>Метрики (формат JSON)</h2>
+          <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
+        </section>
+      {% endif %}
+
+      {% if section == "raw_alerts" %}
+        <section class="card">
+          <h2>Алерты (формат JSON)</h2>
+          <pre style="white-space:pre-wrap; margin:0;">{{ json_payload }}</pre>
+        </section>
+      {% endif %}
+
+      {% if section == "plans" %}
+        <div class="modal" id="modal-create-tariff">
+          <div class="modal-card">
+            <div class="modal-head">
+              <h3 style="margin:0;">Создать тариф</h3>
+              <button type="button" class="close-btn" data-close-modal aria-label="Закрыть">✕</button>
+            </div>
+            <form class="inline-form" method="post" action="/app/superadmin/tariffs">
+              <div><label>Код тарифа</label><input name="code" value="" placeholder="basic-pro" required /></div>
+              <div><label>Название</label><input name="name" value="" placeholder="Базовый+" required /></div>
+              <div><label>Описание</label><input name="description" value="" placeholder="Краткое описание" /></div>
+              <div><label>Лимит менеджеров</label><input type="number" min="1" name="manager_limit" value="3" required /></div>
+              <div><label>Лимит диалогов</label><input type="number" min="1" name="dialogs_limit" value="500" required /></div>
+              <div><label>Лимит сообщений в месяц</label><input type="number" min="1" name="messages_per_month_limit" value="5000" required /></div>
+              <div><label>Лимит быстрых ответов</label><input type="number" min="1" name="quick_replies_limit" value="10" required /></div>
+              <div><label>Лимит папок</label><input type="number" min="1" name="folders_limit" value="10" required /></div>
+              <div><label>Лимит закрепленных чатов</label><input type="number" min="1" name="pinned_chats_limit" value="5" required /></div>
+              <div><label>Код продукта оплаты</label><input name="billing_product_code" value="" placeholder="prod_xxx" /></div>
+              <div><label>Код цены оплаты</label><input name="billing_price_code" value="" placeholder="price_xxx" /></div>
+              <div class="row-actions">
+                <button class="btn primary" type="submit">Сохранить тариф</button>
+                <button class="btn" type="button" data-close-modal>Отмена</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      {% endif %}
+    </main>
+  </div>
+  <div class="confirm-modal" id="confirm-delete-modal" aria-hidden="true">
+    <div class="confirm-modal-card" role="dialog" aria-modal="true" aria-labelledby="confirm-delete-title">
+      <h3 class="confirm-modal-title" id="confirm-delete-title">Подтвердите действие</h3>
+      <p class="confirm-modal-text" id="confirm-delete-text">Это действие необратимо.</p>
+      <div class="confirm-modal-actions">
+        <button type="button" class="btn" id="confirm-delete-cancel">Нет</button>
+        <button type="button" class="btn danger" id="confirm-delete-accept">Да</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const modal = document.getElementById("modal-create-tariff");
+      if (modal instanceof HTMLElement) {
+        const openBtns = Array.from(document.querySelectorAll("[data-open-modal='create-tariff']"));
+        const closeBtns = Array.from(modal.querySelectorAll("[data-close-modal]"));
+        const openModal = () => modal.classList.add("active");
+        const closeModal = () => modal.classList.remove("active");
+        openBtns.forEach((btn) => btn.addEventListener("click", openModal));
+        closeBtns.forEach((btn) => btn.addEventListener("click", closeModal));
+        modal.addEventListener("click", (event) => {
+          if (event.target === modal) closeModal();
+        });
+      }
+
+      const summaryRows = Array.from(document.querySelectorAll("[data-tariff-toggle]"));
+      summaryRows.forEach((row) => {
+        row.addEventListener("click", () => {
+          const targetId = row.getAttribute("data-target-id");
+          if (!targetId) return;
+          const details = document.getElementById(targetId);
+          if (!(details instanceof HTMLElement)) return;
+          const opened = details.classList.toggle("is-open");
+          row.setAttribute("aria-expanded", opened ? "true" : "false");
+        });
+      });
+
+      const loginFilter = document.querySelector("[data-plan-filter='login']");
+      const tariffFilter = document.querySelector("[data-plan-filter='current_tariff']");
+      const statusFilter = document.querySelector("[data-plan-filter='subscription_status']");
+      const rows = Array.from(document.querySelectorAll("[data-plan-workspace-row]"));
+
+      const applyFilters = () => {
+        const loginValue = String(loginFilter instanceof HTMLInputElement ? loginFilter.value : "").trim().toLowerCase();
+        const tariffValue = String(tariffFilter instanceof HTMLSelectElement ? tariffFilter.value : "").trim().toLowerCase();
+        const statusValue = String(statusFilter instanceof HTMLSelectElement ? statusFilter.value : "").trim().toLowerCase();
+        rows.forEach((row) => {
+          if (!(row instanceof HTMLElement)) return;
+          const rowLogin = String(row.getAttribute("data-login") || "").toLowerCase();
+          const rowTariff = String(row.getAttribute("data-tariff-code") || "").toLowerCase();
+          const rowStatus = String(row.getAttribute("data-subscription-status") || "").toLowerCase();
+          const matchLogin = !loginValue || rowLogin.includes(loginValue);
+          const matchTariff = !tariffValue || rowTariff === tariffValue;
+          const matchStatus = !statusValue || rowStatus === statusValue;
+          row.style.display = (matchLogin && matchTariff && matchStatus) ? "" : "none";
+        });
+      };
+
+      if (loginFilter instanceof HTMLInputElement) {
+        loginFilter.addEventListener("input", applyFilters);
+      }
+      if (tariffFilter instanceof HTMLSelectElement) {
+        tariffFilter.addEventListener("change", applyFilters);
+      }
+      if (statusFilter instanceof HTMLSelectElement) {
+        statusFilter.addEventListener("change", applyFilters);
+      }
+
+      const confirmModal = document.getElementById("confirm-delete-modal");
+      const confirmTitle = document.getElementById("confirm-delete-title");
+      const confirmText = document.getElementById("confirm-delete-text");
+      const confirmCancel = document.getElementById("confirm-delete-cancel");
+      const confirmAccept = document.getElementById("confirm-delete-accept");
+      let pendingDeleteForm = null;
+      const closeConfirmModal = () => {
+        if (!(confirmModal instanceof HTMLElement)) return;
+        confirmModal.classList.remove("active");
+        confirmModal.setAttribute("aria-hidden", "true");
+        pendingDeleteForm = null;
+      };
+      if (
+        confirmModal instanceof HTMLElement &&
+        confirmTitle instanceof HTMLElement &&
+        confirmText instanceof HTMLElement &&
+        confirmCancel instanceof HTMLButtonElement &&
+        confirmAccept instanceof HTMLButtonElement
+      ) {
+        document.addEventListener("click", (event) => {
+          const target = event.target;
+          if (!(target instanceof Element)) return;
+          const trigger = target.closest("[data-confirm-delete]");
+          if (!(trigger instanceof HTMLButtonElement)) return;
+          const form = trigger.closest("form");
+          if (!(form instanceof HTMLFormElement)) return;
+          event.preventDefault();
+          pendingDeleteForm = form;
+          confirmTitle.textContent = String(
+            trigger.getAttribute("data-confirm-title") || "Подтвердите действие"
+          ).trim() || "Подтвердите действие";
+          confirmText.textContent = String(
+            trigger.getAttribute("data-confirm-text") || "Это действие необратимо."
+          ).trim() || "Это действие необратимо.";
+          confirmModal.classList.add("active");
+          confirmModal.setAttribute("aria-hidden", "false");
+        });
+        confirmCancel.addEventListener("click", closeConfirmModal);
+        confirmAccept.addEventListener("click", () => {
+          if (pendingDeleteForm instanceof HTMLFormElement) {
+            pendingDeleteForm.submit();
+          }
+          closeConfirmModal();
+        });
+        confirmModal.addEventListener("click", (event) => {
+          if (event.target === confirmModal) {
+            closeConfirmModal();
+          }
+        });
+      }
+    })();
+  </script>
+</body>
+</html>
