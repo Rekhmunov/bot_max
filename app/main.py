@@ -9584,6 +9584,13 @@ def _build_chat_updates_payload(
         if threads_changed or not previous_threads_signature
         else []
     )
+    # Compact id list lets partial clients drop deleted/filtered-out rows
+    # without requiring a full thread dump.
+    thread_ids_payload = (
+        [int(cid) for cid in (page.all_matching_ids or []) if int(cid or 0) > 0]
+        if threads_changed or not previous_threads_signature
+        else []
+    )
 
     return {
         "active_conversation_id": int(active_thread.conversation_id) if active_thread is not None else 0,
@@ -9594,6 +9601,7 @@ def _build_chat_updates_payload(
         "messages_changed": messages_changed,
         "threads_changed": threads_changed,
         "threads": threads_payload,
+        "thread_ids": thread_ids_payload,
         "threads_partial": True,
         "has_more": bool(page.has_more),
         "next_cursor": page.next_cursor,
@@ -10163,6 +10171,9 @@ async def _render_chat_workspace(
             workspace_id=workspace_id,
             service_user_id=service_user_id,
         )
+        # Keep deep-linked chat visible in the sidebar even if it is outside page-0.
+        if active_thread is not None:
+            threads = list(threads) + [active_thread]
 
     messages = []
     mark_read_requested = request.query_params.get("mark_read") == "1"
@@ -10195,10 +10206,21 @@ async def _render_chat_workspace(
                 service_user_id=service_user_id,
             )
             threads = list(page.pinned) + list(page.items)
+            refreshed_active = None
             for item in threads:
                 if int(getattr(item, "conversation_id", 0) or 0) == int(active_thread.conversation_id):
-                    active_thread = item
+                    refreshed_active = item
                     break
+            if refreshed_active is not None:
+                active_thread = refreshed_active
+            else:
+                active_thread = load_chat_thread_by_id(
+                    db,
+                    conversation_id=int(active_thread.conversation_id),
+                    workspace_id=workspace_id,
+                    service_user_id=service_user_id,
+                ) or active_thread
+                threads = list(threads) + [active_thread]
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
         _hydrate_message_media_urls(db, messages)
     folder_unread_counts = dict(page.aggregates.folder_unread_counts or {})

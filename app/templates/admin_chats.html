@@ -6339,10 +6339,11 @@
           }
         }
       };
-      const upsertThreadNodesFromPayload = (threadsPayload) => {
+      const upsertThreadNodesFromPayload = (threadsPayload, options = {}) => {
         if (!Array.isArray(threadsPayload)) return false;
         const threadsContainer = document.querySelector(".threads");
         if (!(threadsContainer instanceof HTMLElement)) return false;
+        const appendOnly = Boolean(options && options.appendOnly);
         const existingNodes = Array.from(document.querySelectorAll(".thread[data-thread-id]"));
         const byId = new Map(
           existingNodes
@@ -6354,12 +6355,15 @@
           const id = Number(thread.conversation_id || 0);
           if (id <= 0) return;
           let node = byId.get(id);
-          if (!(node instanceof HTMLElement)) {
+          const isNewNode = !(node instanceof HTMLElement);
+          if (isNewNode) {
             node = createThreadNodeFromPayload(thread);
             if (!(node instanceof HTMLElement)) return;
             byId.set(id, node);
           } else {
             updateThreadNodeFromPayload(node, thread);
+            // Infinite-scroll pages should not reshuffle already loaded rows.
+            if (appendOnly) return;
           }
           const shouldPin = Boolean(thread.is_pinned);
           if (shouldPin) {
@@ -6953,7 +6957,7 @@
           if (!payload || payload.ok !== true) return;
           const items = Array.isArray(payload.items) ? payload.items : [];
           if (items.length) {
-            upsertThreadNodesFromPayload(items);
+            upsertThreadNodesFromPayload(items, { appendOnly: true });
           }
           threadsHasMore = Boolean(payload.has_more);
           threadsNextCursor = String(payload.next_cursor || "");
@@ -7140,13 +7144,32 @@
               unreadWithoutFolderCount: payload.unread_without_folder_count,
             }
           );
-          if (Object.prototype.hasOwnProperty.call(payload, "has_more")) {
-            threadsHasMore = Boolean(payload.has_more);
-          }
-          if (Object.prototype.hasOwnProperty.call(payload, "next_cursor")) {
-            threadsNextCursor = String(payload.next_cursor || "");
-          }
+          // Do not clobber infinite-scroll cursor with page-0 values from /updates.
+          // Cursor/has_more are owned by SSR init + /threads load-more responses only.
           const syncOptions = { partial: Boolean(payload.threads_partial) };
+          const pruneThreadNodesByIds = (threadIdsPayload) => {
+            if (!Array.isArray(threadIdsPayload) || !threadIdsPayload.length) return;
+            const keep = new Set(
+              threadIdsPayload
+                .map((value) => Number(value || 0))
+                .filter((value) => value > 0)
+            );
+            if (!keep.size) return;
+            Array.from(document.querySelectorAll(".thread[data-thread-id]")).forEach((node) => {
+              if (!(node instanceof HTMLElement)) return;
+              const id = Number(node.getAttribute("data-thread-id") || 0);
+              if (id > 0 && !keep.has(id)) {
+                node.remove();
+              }
+            });
+            const pinnedContainer = document.getElementById("pinned-threads");
+            if (pinnedContainer instanceof HTMLElement && !pinnedContainer.querySelector(".thread[data-thread-id]")) {
+              pinnedContainer.remove();
+            }
+          };
+          if (hasThreadsChanges) {
+            pruneThreadNodesByIds(payload.thread_ids);
+          }
           const hasOnlyThreadsChanges = hasThreadsChanges && !hasMessageChanges;
 
           if (hasOnlyThreadsChanges) {

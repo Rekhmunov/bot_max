@@ -580,17 +580,29 @@ def _paginate_unpinned_rows(
     *,
     cursor: str | None,
     limit: int,
-) -> tuple[list[ThreadSortRow], list[ThreadSortRow], str | None, bool]:
+) -> tuple[list[ThreadSortRow], list[ThreadSortRow], str | None, bool, bool]:
+    """
+    Returns: pinned_rows, page_rows, next_cursor, has_more, cursor_valid.
+    cursor_valid is False only when a non-empty cursor was provided but could not be decoded.
+    """
     pinned = sorted(
         [row for row in rows if row.is_pinned],
-        key=lambda row: (int(row.pin_order or 10**9), int(row.conversation_id or 0)),
+        key=lambda row: (
+            int(row.pin_order or 10**9),
+            0 if row.is_unread else 1,
+            -int(row.last_activity_id or 0),
+            -int(row.conversation_id or 0),
+        ),
     )
     unpinned = sorted(
         [row for row in rows if not row.is_pinned],
         key=_unpinned_sort_key,
     )
-    decoded = decode_thread_cursor(cursor)
-    if decoded is not None:
+    raw_cursor = str(cursor or "").strip()
+    if raw_cursor:
+        decoded = decode_thread_cursor(raw_cursor)
+        if decoded is None:
+            return pinned, [], None, False, False
         cursor_unread, cursor_activity, cursor_id = decoded
         cursor_key = (
             0 if cursor_unread else 1,
@@ -609,7 +621,7 @@ def _paginate_unpinned_rows(
             last_activity_id=int(last.last_activity_id or 0),
             conversation_id=int(last.conversation_id or 0),
         )
-    return pinned, page_rows, next_cursor, has_more
+    return pinned, page_rows, next_cursor, has_more, True
 
 
 def load_chat_threads_page(
@@ -683,13 +695,27 @@ def load_chat_threads_page(
         aggregates = _aggregates_from_sort_rows(refreshed_rows)
         filtered_rows = filter_sort_rows_by_folder(refreshed_rows, folder_id)
         list_signature = _signature_from_sort_rows(filtered_rows)
-        pinned_rows, page_rows, next_cursor, has_more = _paginate_unpinned_rows(
+        pinned_rows, page_rows, next_cursor, has_more, cursor_valid = _paginate_unpinned_rows(
             filtered_rows,
             cursor=cursor,
             limit=page_limit,
         )
+        include_pinned = not str(cursor or "").strip()
+        if not cursor_valid:
+            return ThreadListPage(
+                pinned=[],
+                items=[],
+                next_cursor=None,
+                has_more=False,
+                matching_count=len(filtered_rows),
+                list_signature=list_signature,
+                aggregates=aggregates,
+                all_matching_ids=[
+                    row.conversation_id for row in sorted(filtered_rows, key=_display_sort_key)
+                ],
+            )
         # First page includes pinned; cursor pages return only unpinned.
-        if decode_thread_cursor(cursor) is None:
+        if include_pinned:
             pinned_ids = [row.conversation_id for row in pinned_rows]
             page_ids = [row.conversation_id for row in page_rows]
             pinned_items = [item_by_id[cid] for cid in pinned_ids if cid in item_by_id]
@@ -717,12 +743,26 @@ def load_chat_threads_page(
     aggregates = _aggregates_from_sort_rows(sort_rows)
     filtered_rows = filter_sort_rows_by_folder(sort_rows, folder_id)
     list_signature = _signature_from_sort_rows(filtered_rows)
-    pinned_rows, page_rows, next_cursor, has_more = _paginate_unpinned_rows(
+    pinned_rows, page_rows, next_cursor, has_more, cursor_valid = _paginate_unpinned_rows(
         filtered_rows,
         cursor=cursor,
         limit=page_limit,
     )
-    if decode_thread_cursor(cursor) is None:
+    include_pinned = not str(cursor or "").strip()
+    if not cursor_valid:
+        return ThreadListPage(
+            pinned=[],
+            items=[],
+            next_cursor=None,
+            has_more=False,
+            matching_count=len(filtered_rows),
+            list_signature=list_signature,
+            aggregates=aggregates,
+            all_matching_ids=[
+                row.conversation_id for row in sorted(filtered_rows, key=_display_sort_key)
+            ],
+        )
+    if include_pinned:
         hydrate_ids = [row.conversation_id for row in pinned_rows] + [
             row.conversation_id for row in page_rows
         ]
@@ -735,7 +775,7 @@ def load_chat_threads_page(
         service_user_id=service_user_id,
     )
     by_id = {int(item.conversation_id): item for item in hydrated}
-    if decode_thread_cursor(cursor) is None:
+    if include_pinned:
         pinned_items = [by_id[row.conversation_id] for row in pinned_rows if row.conversation_id in by_id]
     else:
         pinned_items = []
