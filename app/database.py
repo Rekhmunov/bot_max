@@ -61,8 +61,9 @@ def _ensure_lightweight_migrations() -> None:
                 )
             conn.execute(
                 text(
-                    "INSERT OR IGNORE INTO workspaces (id, name, tenant_code, is_active, is_suspended, created_at, updated_at) "
-                    "VALUES (1, 'Default Workspace', 'default', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
+                    "INSERT OR IGNORE INTO workspaces "
+                    "(id, name, tenant_code, is_active, is_suspended, suspended_by_admin, created_at, updated_at) "
+                    "VALUES (1, 'Default Workspace', 'default', 1, 0, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)"
                 )
             )
 
