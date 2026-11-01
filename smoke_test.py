@@ -190,8 +190,8 @@ def _run_thread_list_pagination_smoke(client: TestClient, *, cookies) -> None:
             service_user_id=0,
         )
         baseline_count = int(baseline_page.matching_count)
-        # Create enough dialogs to force at least two pages.
-        need = max(0, (THREAD_PAGE_SIZE * 2 + 5) - baseline_count)
+        # Create enough dialogs to force at least three pages (first click + second click).
+        need = max(1, (THREAD_PAGE_SIZE * 3 + 5) - baseline_count)
         for index in range(need):
             conversation = Conversation(
                 workspace_id=1,
@@ -245,6 +245,22 @@ def _run_thread_list_pagination_smoke(client: TestClient, *, cookies) -> None:
         assert page2_ids
         assert page1_ids.isdisjoint(page2_ids)
         assert page2.pinned == []
+        assert page2.has_more is True
+        assert page2.next_cursor
+
+        page3 = load_chat_threads_page(
+            db,
+            query="",
+            folder_id=None,
+            cursor=page2.next_cursor,
+            limit=THREAD_PAGE_SIZE,
+            workspace_id=1,
+            service_user_id=0,
+        )
+        page3_ids = {int(item.conversation_id) for item in page3.items}
+        assert page3_ids
+        assert page1_ids.isdisjoint(page3_ids)
+        assert page2_ids.isdisjoint(page3_ids)
 
         search_ticket = f"T-{first_ticket}"
         search_page = load_chat_threads_page(
@@ -268,6 +284,47 @@ def _run_thread_list_pagination_smoke(client: TestClient, *, cookies) -> None:
     assert len(threads_payload.get("items") or []) <= THREAD_PAGE_SIZE
     assert "unread_total_count" in threads_payload
     assert "folder_unread_counts" in threads_payload
+    assert bool(threads_payload.get("has_more")) is True
+    assert threads_payload.get("next_cursor")
+
+    # Second and third pages must advance with a non-overlapping cursor chain.
+    # Guards the "first load-more works, second click no-ops" client regression:
+    # backend must keep returning distinct pages after the first cursor hop.
+    threads_api_2 = client.get(
+        "/admin/chats/threads",
+        params={"limit": 50, "cursor": threads_payload["next_cursor"]},
+        cookies=cookies,
+    )
+    assert threads_api_2.status_code == 200
+    threads_payload_2 = threads_api_2.json()
+    assert threads_payload_2.get("ok") is True
+    page1_http_ids = {int(item.get("conversation_id") or 0) for item in (threads_payload.get("items") or [])}
+    page2_http_ids = {int(item.get("conversation_id") or 0) for item in (threads_payload_2.get("items") or [])}
+    page2_http_ids.discard(0)
+    assert page2_http_ids
+    assert page1_http_ids.isdisjoint(page2_http_ids)
+    assert bool(threads_payload_2.get("has_more")) is True
+    assert threads_payload_2.get("next_cursor")
+
+    threads_api_3 = client.get(
+        "/admin/chats/threads",
+        params={"limit": 50, "cursor": threads_payload_2["next_cursor"]},
+        cookies=cookies,
+    )
+    assert threads_api_3.status_code == 200
+    threads_payload_3 = threads_api_3.json()
+    assert threads_payload_3.get("ok") is True
+    page3_http_ids = {int(item.get("conversation_id") or 0) for item in (threads_payload_3.get("items") or [])}
+    page3_http_ids.discard(0)
+    assert page3_http_ids
+    assert page1_http_ids.isdisjoint(page3_http_ids)
+    assert page2_http_ids.isdisjoint(page3_http_ids)
+
+    chats_html = client.get("/admin/chats", cookies=cookies)
+    assert chats_html.status_code == 200
+    html_body = chats_html.text
+    assert "window.__chatSyncThreadSelectionFromState" in html_body
+    assert "threads-load-more-btn" in html_body
 
     updates_api = client.get("/admin/chats/updates?last_message_id=0&threads_sig=", cookies=cookies)
     assert updates_api.status_code == 200
