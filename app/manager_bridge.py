@@ -3100,6 +3100,7 @@ async def _dispatch_outbox(
                     )
                     # Fallback for upload providers returning non-standard token response:
                     # send by URL attachments to avoid blocking operator flow.
+                    _release_db_connection(db)
                     return await _send_message_with_attachment_ready_retry(
                         chat_id=target_chat_id,
                         text=str(payload.get("text")) if payload.get("text") is not None else None,
@@ -3171,6 +3172,7 @@ async def _dispatch_outbox(
                     )
                     # Fallback for upload providers returning non-standard token response:
                     # send by URL attachments to avoid blocking operator flow.
+                    _release_db_connection(db)
                     return await _send_message_with_attachment_ready_retry(
                         user_id=target_user_id,
                         text=str(payload.get("text")) if payload.get("text") is not None else None,

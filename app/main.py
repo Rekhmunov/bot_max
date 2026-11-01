@@ -71,7 +71,6 @@ from app.manager_bridge import (
     list_active_quick_replies,
     list_chat_folders,
     load_chat_messages,
-    load_chat_threads,
     is_conversation_customer_blocked,
     pin_conversation_for_user,
     reorder_pins_for_user,
@@ -110,6 +109,11 @@ from app.manager_bridge import (
     replace_workspace_business_hours,
 )
 from app.max_client import MaxClient
+from app.thread_list import (
+    THREAD_PAGE_SIZE,
+    load_chat_thread_by_id,
+    load_chat_threads_page,
+)
 from app.email_utils import send_email_verification
 from app.models import (
     AuditLog,
@@ -5415,6 +5419,7 @@ def _admin_chats_ui() -> dict[str, str | bool]:
         "page_path": "/admin/chats",
         "page_query_prefix": "/admin/chats?",
         "updates_endpoint": "/admin/chats/updates",
+        "threads_endpoint": "/admin/chats/threads",
         "ws_endpoint": "/admin/chats/ws",
         "access_token": "",
         "create_folder_action": "/admin/chats/folders",
@@ -5456,6 +5461,7 @@ def _manager_mini_ui(token: str) -> dict[str, str | bool]:
         "page_path": "/mini/manager",
         "page_query_prefix": f"/mini/manager?token={token_value}&",
         "updates_endpoint": "/mini/manager/chats/updates",
+        "threads_endpoint": "/mini/manager/chats/threads",
         "ws_endpoint": "/mini/manager/chats/ws",
         "access_token": token,
         "create_folder_action": f"/mini/manager/chats/folders{query_suffix}",
@@ -6488,6 +6494,7 @@ async def app_chats_page(
             "page_path": "/app/chats",
             "page_query_prefix": query_scope_prefix,
             "updates_endpoint": "/app/chats/updates",
+            "threads_endpoint": "/app/chats/threads",
             "ws_endpoint": "/app/chats/ws",
             "create_folder_action": create_folder_action,
             "show_admin_nav": True,
@@ -9366,7 +9373,9 @@ def _thread_summary_dict(item: object) -> dict[str, object]:
         "last_message_time_label": thread_time_label,
         "last_message_from_customer_max": bool(
             getattr(item, "last_message_from_customer_max", False)
+            or getattr(item, "last_message_is_max_incoming", False)
         ),
+        "last_activity_id": int(getattr(item, "last_activity_id", 0) or 0),
         "folder_id": getattr(item, "folder_id", None),
         "folder_name": str(getattr(item, "folder_name", "") or ""),
         "folder_ids": [int(v) for v in (getattr(item, "folder_ids", []) or [])],
@@ -9633,18 +9642,27 @@ def _build_chat_updates_payload(
     threads_signature: str = "",
     messages_signature: str = "",
 ) -> dict[str, object]:
-    all_threads = load_chat_threads(
+    page = load_chat_threads_page(
         db,
         query=query,
+        folder_id=folder_id,
+        cursor=None,
+        limit=THREAD_PAGE_SIZE,
         workspace_id=workspace_id,
         service_user_id=int(service_user_id or 0),
     )
-    threads = _filter_threads_by_folder(all_threads, folder_id)
-
+    page_threads = list(page.pinned) + list(page.items)
     active_thread = _select_active_thread(
-        threads=threads,
+        threads=page_threads,
         conversation_id=conversation_id,
     )
+    if active_thread is None and conversation_id is not None:
+        active_thread = load_chat_thread_by_id(
+            db,
+            conversation_id=int(conversation_id),
+            workspace_id=workspace_id,
+            service_user_id=int(service_user_id or 0),
+        )
 
     messages: list[ChatMessage] = []
     if active_thread is not None:
@@ -9656,13 +9674,24 @@ def _build_chat_updates_payload(
                 setattr(active_thread, "is_unread", False)
             except Exception:
                 pass
-            for item in threads:
+            for item in page_threads:
                 if int(getattr(item, "conversation_id", 0) or 0) == int(active_thread.conversation_id):
                     try:
                         setattr(item, "is_unread", False)
                     except Exception:
                         pass
                     break
+            # Recompute page after mark-read so signature/badges stay consistent.
+            page = load_chat_threads_page(
+                db,
+                query=query,
+                folder_id=folder_id,
+                cursor=None,
+                limit=THREAD_PAGE_SIZE,
+                workspace_id=workspace_id,
+                service_user_id=int(service_user_id or 0),
+            )
+            page_threads = list(page.pinned) + list(page.items)
         messages = load_chat_messages(
             db,
             int(active_thread.conversation_id),
@@ -9672,12 +9701,13 @@ def _build_chat_updates_payload(
         _hydrate_message_media_urls(db, messages)
         _hydrate_message_link_previews(db, messages)
 
-    current_threads_signature = _threads_signature(threads)
+    current_threads_signature = str(page.list_signature or "")
     current_messages_signature = _messages_signature(
         _messages_signature_window(messages, limit=_CHAT_UPDATES_MESSAGES_LIMIT)
     )
-    folder_unread_counts = _folder_unread_counts(all_threads)
-    unread_total_count, unread_without_folder_count = _unread_chat_totals(all_threads)
+    folder_unread_counts = dict(page.aggregates.folder_unread_counts or {})
+    unread_total_count = int(page.aggregates.unread_total_count or 0)
+    unread_without_folder_count = int(page.aggregates.unread_without_folder_count or 0)
 
     active_last_message_id = int(messages[-1].id) if messages else 0
     previous_last_message_id = int(last_message_id or 0)
@@ -9700,15 +9730,32 @@ def _build_chat_updates_payload(
     if previous_threads_signature:
         threads_changed = current_threads_signature != previous_threads_signature
 
+    threads_payload = (
+        [_thread_summary_dict(item) for item in page_threads]
+        if threads_changed or not previous_threads_signature
+        else []
+    )
+    # Compact id list lets partial clients drop deleted/filtered-out rows
+    # without requiring a full thread dump.
+    thread_ids_payload = (
+        [int(cid) for cid in (page.all_matching_ids or []) if int(cid or 0) > 0]
+        if threads_changed or not previous_threads_signature
+        else []
+    )
+
     return {
         "active_conversation_id": int(active_thread.conversation_id) if active_thread is not None else 0,
         "active_last_message_id": active_last_message_id,
         "active_messages_signature": current_messages_signature,
         "threads_signature": current_threads_signature,
-        "threads_count": len(threads),
+        "threads_count": int(page.matching_count),
         "messages_changed": messages_changed,
         "threads_changed": threads_changed,
-        "threads": [_thread_summary_dict(item) for item in threads],
+        "threads": threads_payload,
+        "thread_ids": thread_ids_payload,
+        "threads_partial": True,
+        "has_more": bool(page.has_more),
+        "next_cursor": page.next_cursor,
         "messages": [_message_summary_dict(item) for item in messages],
         "folder_unread_counts": {int(key): int(value) for key, value in folder_unread_counts.items()},
         "unread_total_count": int(unread_total_count),
@@ -10027,6 +10074,133 @@ def manager_mini_updates(
     return JSONResponse({"ok": True, **payload}, status_code=200)
 
 
+def _build_chat_threads_page_payload(
+    *,
+    db: Session,
+    workspace_id: int,
+    service_user_id: int = 0,
+    query: str = "",
+    folder_id: int | None = None,
+    cursor: str | None = None,
+    limit: int = THREAD_PAGE_SIZE,
+) -> dict[str, object]:
+    page = load_chat_threads_page(
+        db,
+        query=query,
+        folder_id=folder_id,
+        cursor=cursor,
+        limit=limit,
+        workspace_id=workspace_id,
+        service_user_id=int(service_user_id or 0),
+    )
+    include_pinned = not str(cursor or "").strip()
+    return {
+        "pinned": (
+            [_thread_summary_dict(item) for item in page.pinned]
+            if include_pinned
+            else []
+        ),
+        "items": [_thread_summary_dict(item) for item in page.items],
+        "next_cursor": page.next_cursor,
+        "has_more": bool(page.has_more),
+        "threads_count": int(page.matching_count),
+        "threads_signature": str(page.list_signature or ""),
+        "threads_partial": True,
+        "folder_unread_counts": {
+            int(key): int(value)
+            for key, value in (page.aggregates.folder_unread_counts or {}).items()
+        },
+        "unread_total_count": int(page.aggregates.unread_total_count or 0),
+        "unread_without_folder_count": int(page.aggregates.unread_without_folder_count or 0),
+    }
+
+
+@app.get("/admin/chats/threads", response_class=JSONResponse)
+def admin_chats_threads(
+    q: str = "",
+    folder_id: int | None = None,
+    cursor: str = "",
+    limit: int = THREAD_PAGE_SIZE,
+    _admin: str = Depends(require_admin),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    payload = _build_chat_threads_page_payload(
+        db=db,
+        workspace_id=DEFAULT_WORKSPACE_ID,
+        service_user_id=0,
+        query=q,
+        folder_id=folder_id,
+        cursor=cursor,
+        limit=limit,
+    )
+    return JSONResponse({"ok": True, **payload}, status_code=200)
+
+
+@app.get("/app/chats/threads", response_class=JSONResponse)
+def app_chats_threads(
+    request: Request,
+    q: str = "",
+    folder_id: int | None = None,
+    cursor: str = "",
+    limit: int = THREAD_PAGE_SIZE,
+    workspace_id: int | None = None,
+    current_user: ServiceUser = Depends(require_service_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    if current_user.role == "superadmin":
+        raise HTTPException(status_code=403, detail="Для superadmin доступна только панель /app/superadmin")
+    _check_rate_limit_or_raise(
+        request,
+        scope="app_view_threads",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 60),
+    )
+    workspace_id, _scoped_workspace, _is_superadmin_scoped = _resolve_app_workspace_scope(
+        db=db,
+        current_user=current_user,
+        workspace_id=workspace_id,
+    )
+    payload = _build_chat_threads_page_payload(
+        db=db,
+        workspace_id=workspace_id,
+        service_user_id=int(current_user.id or 0),
+        query=q,
+        folder_id=folder_id,
+        cursor=cursor,
+        limit=limit,
+    )
+    return JSONResponse({"ok": True, **payload}, status_code=200)
+
+
+@app.get("/mini/manager/chats/threads", response_class=JSONResponse)
+def manager_mini_threads(
+    request: Request,
+    token: str,
+    q: str = "",
+    folder_id: int | None = None,
+    cursor: str = "",
+    limit: int = THREAD_PAGE_SIZE,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    _check_rate_limit_or_raise(
+        request,
+        scope="mini_ops",
+        limit=max(1, int(settings.rate_limit_login_per_minute) * 6),
+    )
+    claims = _require_manager_mini_access(token=token, db=db)
+    workspace_id = int(claims.get("workspace_id") or DEFAULT_WORKSPACE_ID)
+    manager_user_id = int(claims.get("service_user_id") or 0)
+    payload = _build_chat_threads_page_payload(
+        db=db,
+        workspace_id=workspace_id,
+        service_user_id=manager_user_id,
+        query=q,
+        folder_id=folder_id,
+        cursor=cursor,
+        limit=limit,
+    )
+    return JSONResponse({"ok": True, **payload}, status_code=200)
+
+
 @app.websocket("/admin/chats/ws")
 async def admin_chats_ws(
     websocket: WebSocket,
@@ -10126,19 +10300,31 @@ async def _render_chat_workspace(
         current_user=ui.get("current_user") if isinstance(ui.get("current_user"), ServiceUser) else None,
         manager_claims=ui.get("manager_claims") if isinstance(ui.get("manager_claims"), dict) else None,
     )
-    all_threads = load_chat_threads(
+    page = load_chat_threads_page(
         db,
         query=q,
+        folder_id=folder_id,
+        cursor=None,
+        limit=THREAD_PAGE_SIZE,
         workspace_id=workspace_id,
         service_user_id=service_user_id,
     )
-    threads = all_threads
-    threads = _filter_threads_by_folder(threads, folder_id)
+    threads = list(page.pinned) + list(page.items)
 
     active_thread = _select_active_thread(
         threads=threads,
         conversation_id=conversation_id,
     )
+    if active_thread is None and conversation_id is not None:
+        active_thread = load_chat_thread_by_id(
+            db,
+            conversation_id=int(conversation_id),
+            workspace_id=workspace_id,
+            service_user_id=service_user_id,
+        )
+        # Keep deep-linked chat visible in the sidebar even if it is outside page-0.
+        if active_thread is not None:
+            threads = list(threads) + [active_thread]
 
     messages = []
     mark_read_requested = request.query_params.get("mark_read") == "1"
@@ -10160,21 +10346,41 @@ async def _render_chat_workspace(
                 setattr(active_thread, "is_unread", False)
             except Exception:
                 pass
-            for item in all_threads:
+            # Refresh first page after mark-read so badges/signature stay aligned.
+            page = load_chat_threads_page(
+                db,
+                query=q,
+                folder_id=folder_id,
+                cursor=None,
+                limit=THREAD_PAGE_SIZE,
+                workspace_id=workspace_id,
+                service_user_id=service_user_id,
+            )
+            threads = list(page.pinned) + list(page.items)
+            refreshed_active = None
+            for item in threads:
                 if int(getattr(item, "conversation_id", 0) or 0) == int(active_thread.conversation_id):
-                    try:
-                        setattr(item, "is_unread", False)
-                    except Exception:
-                        pass
+                    refreshed_active = item
                     break
+            if refreshed_active is not None:
+                active_thread = refreshed_active
+            else:
+                active_thread = load_chat_thread_by_id(
+                    db,
+                    conversation_id=int(active_thread.conversation_id),
+                    workspace_id=workspace_id,
+                    service_user_id=service_user_id,
+                ) or active_thread
+                threads = list(threads) + [active_thread]
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
         _hydrate_message_media_urls(db, messages)
         _hydrate_message_link_previews(db, messages)
-    folder_unread_counts = _folder_unread_counts(all_threads)
-    unread_total_count, unread_without_folder_count = _unread_chat_totals(all_threads)
+    folder_unread_counts = dict(page.aggregates.folder_unread_counts or {})
+    unread_total_count = int(page.aggregates.unread_total_count or 0)
+    unread_without_folder_count = int(page.aggregates.unread_without_folder_count or 0)
     message_summaries = [_message_summary_dict(item) for item in messages]
     mobile_chat_view = view.strip().lower() == "chat"
-    threads_signature = _threads_signature(threads)
+    threads_signature = str(page.list_signature or "")
     chat_state = {
         "active_conversation_id": (active_thread.conversation_id if active_thread else 0),
         "active_last_message_id": (message_summaries[-1]["id"] if message_summaries else 0),
@@ -10184,7 +10390,10 @@ async def _render_chat_workspace(
             _messages_signature_window(messages, limit=_CHAT_UPDATES_MESSAGES_LIMIT)
         ),
         "threads_signature": threads_signature,
-        "threads_count": len(threads),
+        "threads_count": int(page.matching_count),
+        "threads_partial": True,
+        "has_more": bool(page.has_more),
+        "next_cursor": page.next_cursor,
         "folder_unread_counts": {int(key): int(value) for key, value in folder_unread_counts.items()},
         "unread_total_count": int(unread_total_count),
         "unread_without_folder_count": int(unread_without_folder_count),

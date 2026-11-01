@@ -175,6 +175,109 @@ def _run_websocket_resync_event_shape_smoke(client: TestClient, *, cookies) -> N
     assert str(payload.get("source") or "") == "rate_limited_hint"
 
 
+def _run_thread_list_pagination_smoke(client: TestClient, *, cookies) -> None:
+    from app.thread_list import THREAD_PAGE_SIZE, load_chat_threads_page
+
+    created_ids: list[int] = []
+    with SessionLocal() as db:
+        baseline_page = load_chat_threads_page(
+            db,
+            query="",
+            folder_id=None,
+            cursor=None,
+            limit=THREAD_PAGE_SIZE,
+            workspace_id=1,
+            service_user_id=0,
+        )
+        baseline_count = int(baseline_page.matching_count)
+        # Create enough dialogs to force at least two pages.
+        need = max(0, (THREAD_PAGE_SIZE * 2 + 5) - baseline_count)
+        for index in range(need):
+            conversation = Conversation(
+                workspace_id=1,
+                chat_id=f"chat_page_{uuid4().hex[:10]}_{index}",
+                customer_account_id=f"buyer_page_{uuid4().hex[:10]}_{index}",
+                manager_added=False,
+                is_active=True,
+            )
+            db.add(conversation)
+            db.flush()
+            ticket_no = 9_100_000 + int(conversation.id)
+            meta = ConversationMeta(
+                workspace_id=1,
+                conversation_id=int(conversation.id),
+                ticket_no=ticket_no,
+                status="new",
+                is_unread=(index % 2 == 0),
+                manual_unread_mark=False,
+            )
+            db.add(meta)
+            created_ids.append(int(conversation.id))
+        db.commit()
+        first_ticket = 9_100_000 + int(created_ids[0])
+
+        page1 = load_chat_threads_page(
+            db,
+            query="",
+            folder_id=None,
+            cursor=None,
+            limit=THREAD_PAGE_SIZE,
+            workspace_id=1,
+            service_user_id=0,
+        )
+        assert len(page1.items) <= THREAD_PAGE_SIZE
+        assert len(page1.pinned) + len(page1.items) <= len(page1.pinned) + THREAD_PAGE_SIZE
+        assert page1.matching_count >= baseline_count + need
+        assert page1.has_more is True
+        assert page1.next_cursor
+        page1_ids = {int(item.conversation_id) for item in page1.items}
+
+        page2 = load_chat_threads_page(
+            db,
+            query="",
+            folder_id=None,
+            cursor=page1.next_cursor,
+            limit=THREAD_PAGE_SIZE,
+            workspace_id=1,
+            service_user_id=0,
+        )
+        page2_ids = {int(item.conversation_id) for item in page2.items}
+        assert page2_ids
+        assert page1_ids.isdisjoint(page2_ids)
+        assert page2.pinned == []
+
+        search_ticket = f"T-{first_ticket}"
+        search_page = load_chat_threads_page(
+            db,
+            query=search_ticket,
+            folder_id=None,
+            cursor=None,
+            limit=THREAD_PAGE_SIZE,
+            workspace_id=1,
+            service_user_id=0,
+        )
+        assert search_page.matching_count >= 1
+        assert any(int(item.conversation_id) == int(created_ids[0]) for item in (search_page.pinned + search_page.items))
+
+    threads_api = client.get("/admin/chats/threads?limit=50", cookies=cookies)
+    assert threads_api.status_code == 200
+    threads_payload = threads_api.json()
+    assert threads_payload.get("ok") is True
+    assert bool(threads_payload.get("threads_partial")) is True
+    assert isinstance(threads_payload.get("items"), list)
+    assert len(threads_payload.get("items") or []) <= THREAD_PAGE_SIZE
+    assert "unread_total_count" in threads_payload
+    assert "folder_unread_counts" in threads_payload
+
+    updates_api = client.get("/admin/chats/updates?last_message_id=0&threads_sig=", cookies=cookies)
+    assert updates_api.status_code == 200
+    updates_payload = updates_api.json()
+    assert updates_payload.get("ok") is True
+    assert bool(updates_payload.get("threads_partial")) is True
+    assert isinstance(updates_payload.get("threads"), list)
+    assert len(updates_payload.get("threads") or []) <= THREAD_PAGE_SIZE + 20
+
+
 def _run_scroll_near_bottom_snap_smoke(client: TestClient, *, cookies) -> None:
     page = client.get("/admin/chats", cookies=cookies, follow_redirects=False)
     assert page.status_code == 200
@@ -488,9 +591,14 @@ def run() -> None:
 
         superadmin_workspaces = client.get("/app/superadmin/workspaces", cookies=superadmin_cookies)
         assert superadmin_workspaces.status_code == 200
-        assert "Default Workspace" in superadmin_workspaces.text
+        assert "Клиенты (рабочие пространства)" in superadmin_workspaces.text
+        # Default workspace is intentionally hidden from clients list until a
+        # non-default tenant with registered users exists.
         assert "Открыть чаты клиента" not in superadmin_workspaces.text
         with SessionLocal() as db:
+            default_workspace = db.query(Workspace).filter(Workspace.id == 1).first()
+            assert default_workspace is not None
+            assert str(default_workspace.name or "") == "Default Workspace"
             assert (
                 db.query(ServiceUser)
                 .filter(ServiceUser.workspace_id == 1, ServiceUser.role == "manager")
@@ -697,6 +805,7 @@ def run() -> None:
         _run_websocket_seq_monotonic_smoke(client, cookies=cookies)
         _run_websocket_resync_event_shape_smoke(client, cookies=cookies)
         _run_scroll_near_bottom_snap_smoke(client, cookies=cookies)
+        _run_thread_list_pagination_smoke(client, cookies=cookies)
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
         _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
 
