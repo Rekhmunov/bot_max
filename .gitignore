@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+# SQLite main DB + WAL/SHM (never let `git clean -fd` delete these)
+bot.db
+bot.db-wal
+bot.db-shm
+*.db
+*.db-wal
+*.db-shm
+app/static/uploads/*
+!app/static/uploads/.gitkeep

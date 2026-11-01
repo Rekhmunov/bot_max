@@ -1,0 +1,2875 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
+  <title>Админка Max Support Bot</title>
+  <style>
+    :root {
+      --bg: #eef3ff;
+      --card: #ffffff;
+      --text: #121a2b;
+      --muted: #63728e;
+      --line: #dbe5fb;
+      --primary: #1f7bff;
+      --primary-soft: #ebf3ff;
+      --danger: #d94848;
+      --danger-soft: #fff2f2;
+      --ok-bg: #ecf9f1;
+      --ok-border: #ccefdc;
+      --error-bg: #fff3f3;
+      --error-border: #ffd2d2;
+      --shadow: 0 12px 36px rgba(29, 56, 108, 0.12);
+      --shadow-soft: 0 4px 12px rgba(29, 56, 108, 0.08);
+      --radius: 16px;
+      --space-1: 8px;
+      --space-2: 16px;
+      --space-3: 24px;
+      --motion-fast: 160ms;
+      --motion-base: 240ms;
+      --motion-slow: 320ms;
+      --ease-standard: cubic-bezier(.2, 0, 0, 1);
+      --ease-emphasized: cubic-bezier(.2, .8, .2, 1);
+      --ease-out: cubic-bezier(0, 0, 0, 1);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+      background:
+        radial-gradient(80rem 40rem at -10% -20%, #d9e8ff 0%, transparent 60%),
+        radial-gradient(80rem 40rem at 120% -10%, #e5f1ff 0%, transparent 55%),
+        var(--bg);
+      color: var(--text);
+    }
+    .container {
+      max-width: 1220px;
+      margin: 0 auto;
+      padding: 18px var(--space-2) 28px;
+    }
+    .top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: var(--space-2);
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px var(--space-2);
+      position: sticky;
+      top: 10px;
+      z-index: 40;
+      backdrop-filter: blur(8px);
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.02em;
+    }
+    .logout-btn {
+      border: 1px solid var(--line);
+      background: #f7faff;
+      color: #435574;
+      padding: 8px 12px;
+      border-radius: 11px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+      transition:
+        transform var(--motion-fast) var(--ease-emphasized),
+        box-shadow var(--motion-fast) var(--ease-standard),
+        border-color var(--motion-fast) var(--ease-standard);
+    }
+    .logout-btn:hover {
+      border-color: #bfd4ff;
+      box-shadow: var(--shadow-soft);
+      transform: translateY(-1px);
+    }
+    .grid {
+      display: block;
+      gap: var(--space-2);
+    }
+    .grid > .card + .card {
+      margin-top: var(--space-2);
+    }
+    .section-gap-top {
+      margin-top: var(--space-2);
+    }
+    .section-gap-bottom {
+      margin-bottom: var(--space-2);
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: var(--space-2);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+    }
+    .card::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background: linear-gradient(180deg, rgba(32, 117, 255, 0.045) 0%, transparent 28%);
+    }
+    h2 {
+      margin: 0 0 var(--space-2) 0;
+      font-size: 17px;
+      font-weight: 800;
+    }
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: calc(var(--space-2) * -1) calc(var(--space-2) * -1) var(--space-2);
+      padding: 12px var(--space-2);
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, #fcfdff 0%, #eff5ff 100%);
+    }
+    .card-title {
+      margin: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .section-icon {
+      width: 28px;
+      height: 28px;
+      border-radius: 10px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(180deg, #f5f9ff 0%, #e9f2ff 100%);
+      border: 1px solid #cfe0ff;
+      font-size: 14px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .section-icon-max {
+      padding: 0;
+      overflow: hidden;
+      background: #fff;
+    }
+    .section-icon-max svg {
+      width: 20px;
+      height: 20px;
+      display: block;
+    }
+    .card-head-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .card-head-kicker {
+      color: #40506a;
+      border: 1px solid var(--line);
+      background: #f8fbff;
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .card-toggle-btn {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #3a4761;
+      border-radius: 8px;
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      line-height: 1;
+      cursor: pointer;
+      padding: 0;
+      font-weight: 700;
+    }
+    .card-title .card-toggle-btn {
+      width: 24px;
+      height: 24px;
+      margin-left: 6px;
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+    .card-head.is-collapsible {
+      cursor: pointer;
+    }
+    .card-head.is-collapsible:focus-visible {
+      outline: 2px solid #c3d7ff;
+      outline-offset: 2px;
+    }
+    .card-toggle-btn:hover {
+      background: #f5f7fc;
+    }
+    .card-collapsible-body {
+      display: grid;
+      grid-template-rows: 1fr;
+      opacity: 1;
+      transform: translateY(0);
+      max-height: 2400px;
+      overflow: hidden;
+      transition:
+        grid-template-rows var(--motion-slow) var(--ease-standard),
+        opacity var(--motion-base) var(--ease-out),
+        transform var(--motion-base) var(--ease-out),
+        max-height var(--motion-slow) var(--ease-standard);
+      will-change: opacity, transform, max-height;
+    }
+    .card-collapsible-body[hidden] {
+      display: grid !important;
+      grid-template-rows: 0fr;
+      opacity: 0;
+      transform: translateY(-6px);
+      max-height: 0;
+      pointer-events: none;
+    }
+    .settings-collapsible-initializing .card-collapsible-body {
+      transition: none !important;
+    }
+    .card.is-collapsed {
+      padding-bottom: 0;
+    }
+    .card.is-collapsed .card-head {
+      margin-bottom: 0;
+    }
+    .subsection-title {
+      margin: var(--space-2) 0 var(--space-1);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 16px;
+      font-weight: 800;
+    }
+    .subsection-title .section-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 8px;
+      font-size: 12px;
+    }
+    .top-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+    .top-link {
+      text-decoration: none;
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 11px;
+      background: linear-gradient(180deg, #f8fbff 0%, #ebf3ff 100%);
+      border: 1px solid #cfe0ff;
+      padding: 7px 10px;
+      display: inline-block;
+      transition:
+        transform var(--motion-fast) var(--ease-emphasized),
+        box-shadow var(--motion-fast) var(--ease-standard);
+    }
+    .top-link:hover {
+      transform: translateY(-1px);
+      box-shadow: var(--shadow-soft);
+    }
+    label {
+      display: block;
+      margin: var(--space-1) 0 6px;
+      font-weight: 700;
+      font-size: 13px;
+      color: #4f5b73;
+    }
+    input, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 11px;
+      font: inherit;
+      background: #fbfdff;
+      transition:
+        border-color var(--motion-fast) var(--ease-standard),
+        box-shadow var(--motion-fast) var(--ease-standard);
+    }
+    input:focus, textarea:focus, select:focus {
+      outline: none;
+      border-color: #b8d0ff;
+      box-shadow: 0 0 0 3px rgba(31, 123, 255, 0.14);
+      background: #fff;
+    }
+    textarea { min-height: 90px; resize: vertical; }
+    .btn {
+      margin-top: var(--space-2);
+      background: linear-gradient(180deg, #2a86ff 0%, #1d77f6 100%);
+      border: 0;
+      color: #fff;
+      padding: 9px 13px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 13px;
+      text-decoration: none;
+      display: inline-block;
+      box-shadow: 0 8px 18px rgba(29, 119, 246, 0.28);
+      transition:
+        transform var(--motion-fast) var(--ease-emphasized),
+        box-shadow var(--motion-fast) var(--ease-standard),
+        filter var(--motion-fast) var(--ease-standard);
+    }
+    .btn:hover {
+      transform: translateY(-1px);
+      filter: saturate(1.03);
+      box-shadow: 0 10px 20px rgba(29, 119, 246, 0.30);
+    }
+    .btn.secondary {
+      background: #f5f8ff;
+      color: #556079;
+      border: 1px solid var(--line);
+      font-weight: 600;
+      box-shadow: none;
+    }
+    .card-toggle-btn,
+    .format-trigger,
+    .format-menu button,
+    .manager-remove-btn,
+    .edit-quick-reply-btn {
+      transition:
+        background-color var(--motion-fast) var(--ease-standard),
+        border-color var(--motion-fast) var(--ease-standard),
+        color var(--motion-fast) var(--ease-standard),
+        transform var(--motion-fast) var(--ease-emphasized),
+        box-shadow var(--motion-fast) var(--ease-standard);
+    }
+    .card-toggle-btn:hover,
+    .manager-remove-btn:hover,
+    .edit-quick-reply-btn:hover {
+      transform: translateY(-1px);
+    }
+    .edit-quick-reply-btn {
+      border: 1px solid var(--line);
+      background: var(--primary-soft);
+      color: #2b4c89;
+      border-radius: 10px;
+      padding: 6px 10px;
+      cursor: pointer;
+      margin-right: 6px;
+      font-weight: 700;
+    }
+    .notice {
+      margin: var(--space-1) 0 var(--space-2);
+      padding: 10px 12px;
+      border-radius: 13px;
+      font-size: 13px;
+      border: 1px solid transparent;
+      box-shadow: var(--shadow-soft);
+    }
+    .notice.ok {
+      background: var(--ok-bg);
+      border: 1px solid var(--ok-border);
+    }
+    .notice.error {
+      background: var(--error-bg);
+      border: 1px solid var(--error-border);
+      color: var(--danger);
+    }
+    .hint {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: var(--space-1);
+    }
+    table {
+      width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      margin-top: 12px;
+      font-size: 13px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: var(--shadow-soft);
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: linear-gradient(180deg, #fafdff 0%, #f2f7ff 100%);
+      color: #4d5f7f;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .01em;
+    }
+    .preview {
+      max-width: 120px;
+      max-height: 90px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      object-fit: cover;
+    }
+    .quick-reply-media-input {
+      margin-top: 2px;
+    }
+    .media-sort-wrap {
+      margin-top: 10px;
+    }
+    .media-sort-grid {
+      display: flex;
+      flex-wrap: nowrap;
+      gap: 8px;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }
+    .media-chip {
+      min-width: 86px;
+      width: 86px;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 10px;
+      padding: 6px;
+      cursor: grab;
+      text-align: center;
+      color: #34405c;
+      font-size: 11px;
+      user-select: none;
+      position: relative;
+    }
+    .media-chip.dragging {
+      opacity: 0.45;
+      cursor: grabbing;
+    }
+    .media-chip img {
+      width: 72px;
+      height: 72px;
+      object-fit: cover;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      display: block;
+      margin: 0 auto 4px;
+      background: #f5f7fb;
+    }
+    .media-chip .name {
+      display: block;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .media-chip-remove {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 0;
+      background: rgba(15, 24, 44, 0.82);
+      color: #fff;
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+    .delete {
+      border: 1px solid #f3c4c4;
+      background: var(--danger-soft);
+      color: var(--danger);
+      border-radius: 10px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .manager-ids-wrap {
+      display: grid;
+      gap: 8px;
+    }
+    .manager-id-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .manager-id-row input {
+      min-width: 0;
+    }
+    .manager-row-copy-btn {
+      border: 1px solid var(--line);
+      background: var(--primary-soft);
+      color: #2b4c89;
+      border-radius: 10px;
+      width: 34px;
+      height: 34px;
+      font-size: 14px;
+      line-height: 1;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .manager-id-extra { display: none; }
+    .manager-status-kpis {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      margin: 10px 0 2px;
+    }
+    .manager-status-kpi {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 8px 10px;
+      background: linear-gradient(180deg, #fcfdff 0%, #f5f9ff 100%);
+    }
+    .manager-status-kpi .label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .manager-status-kpi .value {
+      font-size: 20px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .diag-grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      margin-top: 8px;
+    }
+    .diag-item {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 8px 10px;
+      background: linear-gradient(180deg, #fcfdff 0%, #f5f9ff 100%);
+    }
+    .diag-item .label {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    .diag-item .value {
+      font-size: 18px;
+      font-weight: 700;
+      line-height: 1.1;
+    }
+    .status-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      border: 1px solid transparent;
+      white-space: nowrap;
+    }
+    .status-chip.connected {
+      color: #126b3c;
+      background: #e8f8ef;
+      border-color: #b9e6cc;
+    }
+    .status-chip.pending {
+      color: #7a5a00;
+      background: #fff6de;
+      border-color: #f0da9d;
+    }
+    .status-chip.failed {
+      color: #9e2c2c;
+      background: #fdeaea;
+      border-color: #f2c8c8;
+    }
+    .status-chip.not_sent {
+      color: #4a5568;
+      background: #eef2f7;
+      border-color: #d8e0ec;
+    }
+    .status-chip.deactivated {
+      color: #6b2f91;
+      background: #f3eaff;
+      border-color: #dbc3f5;
+    }
+    .manager-remove-btn {
+      border: 1px solid #f3c4c4;
+      background: var(--danger-soft);
+      color: var(--danger);
+      border-radius: 10px;
+      width: 30px;
+      height: 30px;
+      font-size: 14px;
+      line-height: 1;
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .manager-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .manager-delete-permission-btn {
+      border: 1px solid #c8d7fb;
+      background: #eef4ff;
+      color: #244887;
+      border-radius: 10px;
+      padding: 6px 9px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .manager-delete-permission-btn.is-enabled {
+      border-color: #b9e6cc;
+      background: #e8f8ef;
+      color: #126b3c;
+    }
+    .manager-delete-permission-btn.is-disabled {
+      border-color: #f0da9d;
+      background: #fff6de;
+      color: #7a5a00;
+    }
+    .format-toolbar {
+      position: relative;
+      margin: 6px 0 8px;
+      display: inline-block;
+    }
+    .format-trigger {
+      border: 1px solid var(--line);
+      background: #f8faff;
+      color: #2f3a52;
+      border-radius: 10px;
+      padding: 7px 10px;
+      font-size: 13px;
+      cursor: pointer;
+      min-width: 130px;
+      text-align: left;
+    }
+    .format-menu {
+      position: absolute;
+      z-index: 20;
+      top: calc(100% + 6px);
+      left: 0;
+      min-width: 220px;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+      padding: 6px;
+      display: none;
+    }
+    .format-menu.open {
+      display: block;
+    }
+    .format-menu button {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      border-radius: 8px;
+      padding: 8px 10px;
+      cursor: pointer;
+      font-size: 13px;
+      color: #25304a;
+    }
+    .format-menu button:hover {
+      background: var(--primary-soft);
+    }
+    .rich-editor-source {
+      position: absolute !important;
+      left: -10000px !important;
+      top: auto !important;
+      width: 1px !important;
+      height: 1px !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    .rich-editor {
+      min-height: 116px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: #fff;
+      color: #1a202f;
+      font-size: 14px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      outline: none;
+    }
+    .rich-editor:focus {
+      border-color: #c7d2e7;
+      box-shadow: 0 0 0 3px rgba(25, 118, 255, 0.12);
+    }
+    .rich-editor.is-empty::before {
+      content: attr(data-placeholder);
+      color: #8b95a7;
+      pointer-events: none;
+    }
+    .rich-editor code {
+      background: #eef2fa;
+      border-radius: 6px;
+      padding: 1px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+    }
+    .rich-editor a {
+      color: var(--primary);
+      text-decoration: underline;
+      word-break: break-all;
+    }
+    code {
+      background: #eef2fa;
+      padding: 2px 6px;
+      border-radius: 6px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .table-mobile-cards td {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .token-line {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+    .token-line .token-mask {
+      display: inline-block;
+      max-width: 100%;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+    .token-delete-form {
+      display: inline;
+      margin-left: 8px;
+    }
+    .token-inline-offset {
+      margin-left: 8px;
+    }
+    .token-action-btn,
+    .token-add-btn {
+      margin-top: 0;
+      padding: 7px 12px;
+      border-radius: 10px;
+    }
+    .token-edit-panel {
+      margin-bottom: 10px;
+    }
+    .token-edit-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+    }
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.48);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      z-index: 10000;
+    }
+    .modal-overlay.active {
+      display: flex;
+    }
+    .modal-card {
+      width: min(420px, 100%);
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    .modal-title {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 800;
+      color: #1f2937;
+    }
+    .modal-close-icon {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #334155;
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 20px;
+      line-height: 1;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal-text {
+      margin: 0;
+      font-size: 14px;
+      color: #4b5563;
+      line-height: 1.4;
+    }
+    .modal-actions {
+      margin-top: 12px;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    .modal-close-btn {
+      margin-top: 0;
+      min-width: 96px;
+    }
+    .settings-row-checkbox {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .settings-row-checkbox input {
+      width: auto;
+    }
+    .quick-cancel-btn {
+      margin-left: var(--space-1);
+    }
+    .media-preview-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      max-width: 100%;
+    }
+    .inline-edit-form {
+      display: inline;
+    }
+    .manager-ids-wrap {
+      margin-bottom: 10px;
+    }
+    .manager-inline-label {
+      margin-top: 0;
+    }
+    .routing-mode-select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      max-width: 420px;
+    }
+    .business-hours-row {
+      display: grid;
+      grid-template-columns: 130px 1fr;
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      background: #fbfcff;
+    }
+    .business-hours-day {
+      font-weight: 700;
+      color: #2d3954;
+    }
+    .business-hours-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .business-hours-controls input[type="time"] {
+      width: 120px;
+      min-width: 0;
+      padding: 7px 8px;
+    }
+    .business-hours-preview {
+      margin-top: 10px;
+      padding: 9px 10px;
+      border: 1px dashed var(--line);
+      border-radius: 10px;
+      color: #4f5b73;
+      font-size: 13px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .business-hours-preview .btn {
+      margin-top: 0;
+    }
+    .business-hours-preview-result {
+      color: #4f5b73;
+      font-size: 13px;
+    }
+    /* Strong visual refresh (layout/logic unchanged) */
+    body {
+      background:
+        radial-gradient(70rem 34rem at -12% -16%, #cfe0ff 0%, transparent 62%),
+        radial-gradient(64rem 30rem at 112% -12%, #d7e7ff 0%, transparent 58%),
+        linear-gradient(180deg, #f5f8ff 0%, #edf3ff 100%);
+    }
+    .container {
+      max-width: 1320px;
+      padding: 20px var(--space-2) 30px;
+    }
+    .top {
+      border: 1px solid rgba(42, 93, 202, 0.28);
+      background: linear-gradient(135deg, #0e57db 0%, #0a44b8 42%, #173074 100%);
+      box-shadow: 0 16px 36px rgba(8, 47, 129, 0.28);
+    }
+    h1 {
+      color: #fff;
+      text-shadow: 0 1px 0 rgba(0, 0, 0, 0.08);
+    }
+    .top-link {
+      color: #fff;
+      border: 1px solid rgba(255, 255, 255, 0.34);
+      background: rgba(255, 255, 255, 0.14);
+    }
+    .top-link:hover {
+      box-shadow: 0 8px 18px rgba(7, 38, 104, 0.35);
+      background: rgba(255, 255, 255, 0.2);
+    }
+    .logout-btn {
+      color: #eaf2ff;
+      border-color: rgba(255, 255, 255, 0.28);
+      background: rgba(255, 255, 255, 0.12);
+    }
+    .logout-btn:hover {
+      border-color: rgba(255, 255, 255, 0.42);
+      box-shadow: 0 8px 18px rgba(7, 38, 104, 0.35);
+    }
+    .card {
+      border: 1px solid #d4e2ff;
+      border-radius: 20px;
+      background: linear-gradient(180deg, #ffffff 0%, #f9fbff 100%);
+      box-shadow:
+        0 14px 34px rgba(23, 65, 145, 0.12),
+        0 2px 6px rgba(12, 32, 72, 0.06);
+    }
+    .card::after {
+      background: linear-gradient(180deg, rgba(37, 120, 255, 0.08) 0%, transparent 34%);
+    }
+    .card-head {
+      background:
+        linear-gradient(180deg, rgba(244, 249, 255, 0.95) 0%, rgba(234, 243, 255, 0.95) 100%);
+      border-bottom: 1px solid #dbe7ff;
+    }
+    .card-head-kicker {
+      border-color: #c6d8ff;
+      background: #eef4ff;
+      color: #2b4f98;
+    }
+    .section-icon {
+      border-color: #bfd4ff;
+      background: linear-gradient(180deg, #f8fbff 0%, #eaf2ff 100%);
+      color: #1d4eb7;
+    }
+    input, textarea, select {
+      border: 1px solid #d4e2ff;
+      border-radius: 13px;
+      background: #fdfefe;
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: #8db5ff;
+      box-shadow: 0 0 0 4px rgba(31, 123, 255, 0.18);
+    }
+    .btn {
+      border-radius: 13px;
+      background: linear-gradient(180deg, #2a87ff 0%, #1569ea 100%);
+      box-shadow: 0 10px 22px rgba(21, 105, 234, 0.32);
+    }
+    .btn:hover {
+      box-shadow: 0 12px 24px rgba(21, 105, 234, 0.36);
+    }
+    .btn.secondary {
+      border: 1px solid #d2e1ff;
+      background: linear-gradient(180deg, #ffffff 0%, #f3f7ff 100%);
+      color: #355086;
+    }
+    .notice {
+      border-radius: 14px;
+      box-shadow: 0 8px 20px rgba(12, 32, 72, 0.1);
+    }
+    table {
+      border: 1px solid #d4e2ff;
+      border-radius: 14px;
+      box-shadow: 0 10px 24px rgba(21, 58, 126, 0.1);
+    }
+    tr:nth-child(even) td {
+      background: #fbfdff;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 1ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 1ms !important;
+        scroll-behavior: auto !important;
+      }
+      .card-collapsible-body {
+        transition: none !important;
+      }
+    }
+    @media (max-width: 760px) {
+      body {
+        overflow-x: hidden;
+      }
+      .container {
+        margin: 0 auto;
+        padding: 12px 12px 20px;
+      }
+      .top {
+        flex-direction: row;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px;
+        gap: 8px;
+      }
+      h1 {
+        font-size: 18px;
+        line-height: 1.2;
+        overflow-wrap: anywhere;
+      }
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .card {
+        min-width: 0;
+        padding: 12px;
+      }
+      .card-head {
+        margin: -12px -12px 12px;
+        padding: 10px 12px;
+      }
+      .card-head-kicker {
+        padding: 3px 8px;
+        font-size: 11px;
+      }
+      .hint {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+      .token-line form {
+        margin-left: 0 !important;
+      }
+      .token-edit-row {
+        grid-template-columns: 1fr;
+      }
+      .manager-status-kpis {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .diag-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .business-hours-grid {
+        grid-template-columns: 1fr;
+      }
+      .business-hours-row {
+        grid-template-columns: 1fr;
+      }
+      .business-hours-controls {
+        align-items: flex-start;
+      }
+      .table-mobile-cards,
+      .table-mobile-cards thead,
+      .table-mobile-cards tbody,
+      .table-mobile-cards tr,
+      .table-mobile-cards th,
+      .table-mobile-cards td {
+        display: block;
+        width: 100%;
+      }
+      .table-mobile-cards thead {
+        display: none;
+      }
+      .table-mobile-cards tr {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 8px 10px;
+        margin-bottom: 8px;
+      }
+      .table-mobile-cards td {
+        border: 0;
+        padding: 6px 0;
+      }
+      .table-mobile-cards td::before {
+        content: attr(data-label);
+        display: block;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--muted);
+        margin-bottom: 2px;
+      }
+      .table-mobile-cards td[data-label="Действия"]::before {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="top">
+      <h1>
+        {% if ui_mode == "app" %}
+          Настройки
+        {% elif ui_mode == "manager" %}
+          Быстрые ответы менеджера
+        {% else %}
+          Админ-панель бота Max
+        {% endif %}
+      </h1>
+      <div class="top-actions">
+        <a class="top-link" href="{{ chats_href or '/admin/chats' }}">Чаты</a>
+        <form method="post" action="{{ logout_action or '/admin/logout' }}">
+          <button class="logout-btn" type="submit">Выйти</button>
+        </form>
+      </div>
+    </div>
+
+    {% if message %}
+      <div class="notice ok">{{ message }}</div>
+    {% endif %}
+    {% if error %}
+      <div class="notice error">{{ error }}</div>
+    {% endif %}
+    <div class="grid">
+      {% if (show_settings_card | default(true)) %}
+      <section class="card" data-settings-block="bot-settings">
+        <div class="card-head">
+          <h2 class="card-title">
+            <span class="section-icon section-icon-max" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img" focusable="false" aria-hidden="true">
+                <rect x="1.5" y="1.5" width="21" height="21" rx="6" fill="#1976ff"></rect>
+                <text x="12" y="15" text-anchor="middle" font-size="8" font-family="Inter, Arial, sans-serif" font-weight="800" fill="#ffffff">MAX</text>
+              </svg>
+            </span>
+            Настройки бота MAX
+          </h2>
+          <div class="card-head-actions">
+            <span class="card-head-kicker">Конфигурация</span>
+          </div>
+        </div>
+        <form id="bot-settings-form" method="post" action="{{ settings_action or '/admin/settings' }}">
+          {% if ui_mode == "app" %}
+          <div class="hint" style="margin-bottom:8px;"><strong>Подключение вашего бота Max</strong></div>
+          <div class="hint token-line" style="margin-bottom:8px;">
+            Токен вашего бота:
+            <code
+              id="token-mask-value"
+              class="token-mask token-inline-offset"
+              {% if not workspace_bot_token_masked %}hidden{% endif %}
+            >{{ workspace_bot_token_masked }}</code>
+            <span
+              id="token-mask-empty"
+              class="token-inline-offset"
+              {% if workspace_bot_token_masked %}hidden{% endif %}
+            >не задан.</span>
+            <button
+              type="button"
+              id="token-toggle-btn"
+              class="btn secondary token-action-btn token-inline-offset"
+            >{% if workspace_bot_token_masked %}Обновить токен{% else %}Ввести токен{% endif %}</button>
+            {% if workspace_bot_token_masked %}
+              <button
+                type="submit"
+                class="delete token-delete-btn"
+                formaction="{{ token_delete_action or '/app/settings/delete-bot-token' }}"
+                formmethod="post"
+                formnovalidate
+              >Удалить</button>
+            {% endif %}
+          </div>
+          <div class="hint" style="margin-top:-2px; margin-bottom:10px;">
+            Статус подключения:
+            {% if workspace_bot_connection_ok %}
+              <b>Подключено</b>
+            {% elif workspace_bot_token_masked %}
+              <b>Требуется проверка</b>
+            {% else %}
+              <b>Не подключено</b>
+            {% endif %}
+          </div>
+          {% if storage_health and false %}
+            <div class="hint storage-health" style="margin-top:-4px; margin-bottom:10px;">
+              Хранилище медиа:
+              {% if storage_health.ok %}
+                <b>{{ storage_health.summary or "OK" }}</b>
+              {% else %}
+                <b style="color:#991b1b;">{{ storage_health.summary or "Ошибка" }}</b>
+              {% endif %}
+              <button
+                type="button"
+                class="btn btn-ghost btn-xs storage-health-refresh"
+                data-storage-health-endpoint="{% if ui_mode in ['app', 'manager'] %}/app/settings/storage-health{% else %}/admin/settings/storage-health{% endif %}"
+                style="margin-left:8px;"
+              >Проверить</button>
+              <span class="storage-health-status" style="margin-left:6px;"></span>
+              <div class="hint storage-health-details" style="margin-top:4px;">
+                {% if storage_health.error %}
+                  <span style="color:#991b1b;">{{ storage_health.error }}</span>
+                {% endif %}
+              </div>
+            </div>
+          {% endif %}
+          {% if workspace_bot_connection_note %}
+            <div class="hint" style="margin-top:-2px; margin-bottom:10px;">{{ workspace_bot_connection_note }}</div>
+          {% endif %}
+          <div id="token-input-wrap" class="token-edit-panel" hidden>
+            <label for="bot_token_input">Токен вашего бота Max</label>
+            <div class="token-edit-row">
+              <input
+                id="bot_token_input"
+                value=""
+                placeholder="Вставьте токен бота"
+                autocomplete="off"
+              />
+              <button type="button" id="token-add-btn" class="btn token-add-btn">Добавить</button>
+            </div>
+          </div>
+          <input id="bot_token" name="bot_token" type="hidden" value="" />
+          {% endif %}
+          <label for="prestart_message">Сообщение до нажатия Start</label>
+          <textarea id="prestart_message" name="prestart_message" required>{{ template_prestart }}</textarea>
+
+          <label for="start_message">Сообщение после Start (просим номер)</label>
+          <div class="format-toolbar" data-format-target="start_message_editor">
+            <button type="button" class="format-trigger">Форматирование ▾</button>
+            <div class="format-menu">
+              <button type="button" data-format-action="italic">Курсив</button>
+              <button type="button" data-format-action="bold">Жирный</button>
+              <button type="button" data-format-action="strike">Зачеркнутый</button>
+              <button type="button" data-format-action="underline">Подчеркнутый</button>
+              <button type="button" data-format-action="mono">Моноширинный</button>
+              <button type="button" data-format-action="link">Ссылка</button>
+            </div>
+          </div>
+          <textarea
+            id="start_message"
+            name="start_message"
+            class="rich-editor-source"
+            data-required="1"
+            aria-hidden="true"
+            tabindex="-1"
+          >{{ template_start }}</textarea>
+          <div
+            id="start_message_editor"
+            class="rich-editor"
+            contenteditable="true"
+            data-markdown-source-id="start_message"
+            data-placeholder="Введите сообщение после Start"
+            role="textbox"
+            aria-multiline="true"
+          ></div>
+          <label class="settings-row-checkbox">
+            <input
+              id="request_customer_phone"
+              type="checkbox"
+              name="request_customer_phone"
+              value="1"
+              {% if settings.request_customer_phone %}checked{% endif %}
+            />
+            Запрос номера телефона у покупателя
+          </label>
+
+          <label for="after_phone_message">Сообщение после подтверждения номера</label>
+          <div class="format-toolbar" data-format-target="after_phone_message_editor">
+            <button type="button" class="format-trigger">Форматирование ▾</button>
+            <div class="format-menu">
+              <button type="button" data-format-action="italic">Курсив</button>
+              <button type="button" data-format-action="bold">Жирный</button>
+              <button type="button" data-format-action="strike">Зачеркнутый</button>
+              <button type="button" data-format-action="underline">Подчеркнутый</button>
+              <button type="button" data-format-action="mono">Моноширинный</button>
+              <button type="button" data-format-action="link">Ссылка</button>
+            </div>
+          </div>
+          <textarea
+            id="after_phone_message"
+            name="after_phone_message"
+            class="rich-editor-source"
+            data-required="1"
+            aria-hidden="true"
+            tabindex="-1"
+          >{{ template_after_phone }}</textarea>
+          <div
+            id="after_phone_message_editor"
+            class="rich-editor"
+            contenteditable="true"
+            data-markdown-source-id="after_phone_message"
+            data-placeholder="Введите сообщение после подтверждения номера"
+            role="textbox"
+            aria-multiline="true"
+          ></div>
+          {% set manager_ids = manager_id_rows if manager_id_rows is defined else [] %}
+          {% set single_manager_id = (manager_ids[0] if manager_ids else "") %}
+
+          <input type="hidden" name="admin_account_id" value="{{ settings.admin_account_id }}" />
+
+          <input type="hidden" name="routing_mode" value="{{ settings.routing_mode or 'round_robin' }}" />
+
+          <button class="btn" type="submit">Сохранить настройки</button>
+        </form>
+      </section>
+      {% endif %}
+
+      {% if (show_business_hours_card | default(false)) and business_hours %}
+      <section class="card" data-business-hours-form data-settings-block="business-hours">
+        <div class="card-head">
+          <h2 class="card-title"><span class="section-icon">🕒</span>Рабочее время</h2>
+          <div class="card-head-actions">
+            <span class="card-head-kicker">Автоответ</span>
+          </div>
+        </div>
+        <form method="post" action="{{ settings_action or '/app/settings' }}">
+          <label class="settings-row-checkbox">
+            <input
+              type="checkbox"
+              name="business_hours_enabled"
+              value="1"
+              {% if business_hours.enabled %}checked{% endif %}
+            />
+            Включить автоответ в нерабочее время
+          </label>
+
+          <label for="business_timezone">Часовой пояс</label>
+          <select id="business_timezone" name="business_timezone">
+            {% for tz in business_hours.timezone_options %}
+              <option value="{{ tz }}" {% if business_hours.timezone == tz %}selected{% endif %}>{{ tz }}</option>
+            {% endfor %}
+          </select>
+
+          <div class="business-hours-grid">
+            {% for day in business_hours.weekdays %}
+              <div class="business-hours-row">
+                <div class="business-hours-day">{{ day.label }}</div>
+                <div class="business-hours-controls">
+                  <label class="settings-row-checkbox" style="margin:0;">
+                    <input
+                      type="checkbox"
+                      name="business_day_{{ day.weekday }}_enabled"
+                      value="1"
+                      {% if day.enabled %}checked{% endif %}
+                    />
+                    рабочий
+                  </label>
+                  <input
+                    type="time"
+                    name="business_day_{{ day.weekday }}_start"
+                    value="{{ day.start_hhmm }}"
+                    step="60"
+                  />
+                  <span>—</span>
+                  <input
+                    type="time"
+                    name="business_day_{{ day.weekday }}_end"
+                    value="{{ day.end_hhmm }}"
+                    step="60"
+                  />
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+
+          <label for="offhours_message">Сообщение в нерабочее время</label>
+          <textarea
+            id="offhours_message"
+            name="offhours_message"
+            placeholder="Например: Сейчас мы вне рабочего времени. Ответим в {next_work_time} ({timezone})."
+          >{{ business_hours.offhours_message }}</textarea>
+
+          <label for="offhours_cooldown_minutes">Cooldown автоответа (минут)</label>
+          <input
+            id="offhours_cooldown_minutes"
+            name="offhours_cooldown_minutes"
+            type="number"
+            min="1"
+            max="10080"
+            value="{{ business_hours.cooldown_minutes }}"
+          />
+
+          <div class="business-hours-preview">
+            <button type="button" class="btn secondary" id="business-hours-preview-btn">Проверить сейчас</button>
+            <span class="business-hours-preview-result" id="business-hours-preview-result">—</span>
+          </div>
+
+          <input type="hidden" name="prestart_message" value="{{ template_prestart }}" />
+          <input type="hidden" name="start_message" value="{{ template_start }}" />
+          <input type="hidden" name="after_phone_message" value="{{ template_after_phone }}" />
+          <input type="hidden" name="admin_account_id" value="{{ settings.admin_account_id }}" />
+          <input type="hidden" name="routing_mode" value="{{ settings.routing_mode or 'round_robin' }}" />
+          <input type="hidden" name="settings_section" value="business_hours" />
+          {% if settings.request_customer_phone %}
+            <input type="hidden" name="request_customer_phone" value="1" />
+          {% endif %}
+
+          <button class="btn" type="submit">Сохранить рабочее время</button>
+        </form>
+      </section>
+      {% endif %}
+
+      <section class="card" data-settings-block="quick-replies">
+        <div class="card-head">
+          <h2 id="quick-reply-form-title" class="card-title">
+            <span class="section-icon">💬</span>
+            {% if quick_reply_edit_target %}Редактировать быстрый ответ{% else %}Добавить быстрый ответ{% endif %}
+          </h2>
+          <div class="card-head-actions">
+            <span class="card-head-kicker">Быстрые ответы</span>
+          </div>
+        </div>
+        <form
+          id="quick-reply-form"
+          method="post"
+          action="{% if quick_reply_edit_target %}{{ quick_reply_delete_action_prefix or '/admin/quick-replies/' }}{{ quick_reply_edit_target.id }}/update{% else %}{{ quick_reply_create_action or '/admin/quick-replies' }}{% endif %}"
+          enctype="multipart/form-data"
+          data-edit-quick-reply-id="{% if quick_reply_edit_target %}{{ quick_reply_edit_target.id }}{% endif %}"
+        >
+          <label for="command">Команда менеджера (без /)</label>
+          <input
+            id="command"
+            name="command"
+            placeholder="price"
+            required
+            value="{{ quick_reply_edit_target.command if quick_reply_edit_target else '' }}"
+          />
+
+          <label for="title">Название в админке</label>
+          <input
+            id="title"
+            name="title"
+            placeholder="Прайс"
+            required
+            value="{{ quick_reply_edit_target.title if quick_reply_edit_target else '' }}"
+          />
+
+          <label for="photos">Медиафайлы (можно несколько, до 1 МБ каждый)</label>
+          <input
+            id="photos"
+            class="quick-reply-media-input"
+            type="file"
+            name="photos"
+            multiple
+            accept=".png,.jpg,.jpeg,.gif,.webp"
+          />
+          <div class="hint">
+            Сначала загрузите медиафайлы (каждый до 1 МБ), затем заполните текст ответа.
+            {% if quick_reply_edit_target %}Если новые медиа не выбраны, текущие файлы сохраняются.{% endif %}
+          </div>
+          <div class="media-sort-wrap" id="media-sort-wrap" hidden>
+            <div class="hint">Порядок медиа (перетаскивайте влево/вправо):</div>
+            <div class="media-sort-grid" id="media-sort-grid"></div>
+          </div>
+          <input type="hidden" name="media_order" id="media_order" value="" />
+          <input type="hidden" name="remove_media_paths" id="remove_media_paths" value="" />
+
+          <label for="text">Текст ответа</label>
+          <div class="format-toolbar" data-format-target="text_editor">
+            <button type="button" class="format-trigger">Форматирование ▾</button>
+            <div class="format-menu">
+              <button type="button" data-format-action="italic">Курсив</button>
+              <button type="button" data-format-action="bold">Жирный</button>
+              <button type="button" data-format-action="strike">Зачеркнутый</button>
+              <button type="button" data-format-action="underline">Подчеркнутый</button>
+              <button type="button" data-format-action="mono">Моноширинный</button>
+              <button type="button" data-format-action="link">Ссылка</button>
+            </div>
+          </div>
+          <textarea
+            id="text"
+            class="rich-editor-source"
+            name="text"
+            data-required="0"
+            placeholder="Текст, который бот отправит по команде /price"
+          >{{ quick_reply_edit_target.text if quick_reply_edit_target else '' }}</textarea>
+          <div
+            id="text_editor"
+            class="rich-editor"
+            contenteditable="true"
+            data-markdown-source-id="text"
+            data-placeholder="Текст, который бот отправит по команде /price"
+          ></div>
+
+          <button class="btn" type="submit">
+            {% if quick_reply_edit_target %}Сохранить изменения{% else %}Добавить быстрый ответ{% endif %}
+          </button>
+          {% if quick_reply_edit_target %}
+            <a
+              class="btn secondary"
+              href="{% if ui_mode in ['app', 'manager'] %}/app/settings{% else %}/admin{% endif %}"
+              class="quick-cancel-btn"
+            >Отмена</a>
+          {% endif %}
+        </form>
+        <div class="hint">Менеджер вызывает ответ в чате командой вида <code>/price</code>.</div>
+
+        <h3 class="subsection-title"><span class="section-icon">📚</span>Список быстрых ответов</h3>
+        {% if quick_replies %}
+          <table class="table-mobile-cards quick-replies-table">
+            <thead>
+              <tr>
+                <th>Команда</th>
+                <th>Название</th>
+                <th>Текст</th>
+                <th>Медиа</th>
+                <th>Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for item in quick_replies %}
+                <tr>
+                  <td data-label="Команда"><code>/{{ item.command }}</code></td>
+                  <td data-label="Название">{{ item.title }}</td>
+                  <td data-label="Текст">{{ item.text }}</td>
+                  <td data-label="Медиа">
+                    {% if item.media_items %}
+                      <div class="media-preview-row">
+                        {% for media in item.media_items %}
+                          <img class="preview" src="{{ media.media_path }}" alt="{{ item.title }}" />
+                        {% endfor %}
+                      </div>
+                    {% elif item.image_path %}
+                      <img class="preview" src="{{ item.image_path }}" alt="{{ item.title }}" />
+                    {% else %}
+                      —
+                    {% endif %}
+                  </td>
+                  <td data-label="Действия">
+                    <form method="get" action="{% if ui_mode in ['app', 'manager'] %}/app/settings{% else %}/admin{% endif %}" class="inline-edit-form">
+                      <input type="hidden" name="edit_quick_reply_id" value="{{ item.id }}" />
+                      <button class="edit-quick-reply-btn" type="submit" title="Редактировать">✏️</button>
+                    </form>
+                    <form method="post" action="{{ quick_reply_delete_action_prefix or '/admin/quick-replies/' }}{{ item.id }}/delete">
+                      <button class="delete" type="submit">Удалить</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <div class="hint">Быстрые ответы пока не созданы.</div>
+        {% endif %}
+      </section>
+    </div>
+
+    {% if (show_webhook_card | default((show_settings_card | default(true)) and ui_mode == "admin")) %}
+      <section class="card section-gap-top">
+        <div class="card-head">
+          <h2 class="card-title"><span class="section-icon">🪝</span>Webhook для Max</h2>
+          <div class="card-head-actions">
+            <span class="card-head-kicker">Интеграция</span>
+          </div>
+        </div>
+        <div class="hint">
+          Укажите этот URL в настройках бота Max:
+          <code>{{ webhook_url }}</code>
+        </div>
+        <div class="hint">Путь webhook на сервере: <code>{{ webhook_path }}</code></div>
+      </section>
+    {% endif %}
+
+    {% if (show_delivery_card | default(true)) %}
+    <section class="card section-gap-top" data-settings-block="delivery-stats">
+      <div class="card-head">
+        <h2 class="card-title"><span class="section-icon">📈</span>Статистика доставки сообщений</h2>
+        <div class="card-head-actions">
+          <span class="card-head-kicker">Метрики</span>
+        </div>
+      </div>
+      <div class="hint">Успешная доставка: <b>{{ delivery_metrics.success_rate }}%</b></div>
+      <div class="hint">Попыток отправки: <b>{{ delivery_metrics.total_sent_attempts }}</b></div>
+      <div class="hint">Среднее число повторов: <b>{{ delivery_metrics.avg_retry_count }}</b></div>
+      <div class="hint">Неустранимых ошибок: <b>{{ delivery_metrics.permanent_failures }}</b></div>
+    </section>
+    {% endif %}
+
+    {% if (show_managers_card | default(ui_mode == "app")) %}
+    {% set manager_summary = manager_status_summary if manager_status_summary is defined else {"connected": 0, "pending": 0, "failed": 0, "total": 0} %}
+    <section class="card section-gap-top" data-settings-block="managers-status">
+      <div class="card-head">
+        <h2 class="card-title"><span class="section-icon">👥</span>Менеджеры: статусы подключения</h2>
+        <div class="card-head-actions">
+          <span class="card-head-kicker">Команда</span>
+        </div>
+      </div>
+      {% set manager_ids = manager_id_rows if manager_id_rows is defined else [] %}
+      {% set single_manager_id = (manager_ids[0] if manager_ids else "") %}
+      <div class="manager-ids-wrap" id="manager-ids-wrap">
+        <label for="manager_account_id" class="manager-inline-label">Добавление нового менеджера</label>
+        <div class="manager-id-row">
+          <input
+            id="manager_account_id"
+            name="manager_account_ids"
+            value="{{ single_manager_id }}"
+            placeholder="ID менеджера в Max"
+          />
+          <button
+            type="button"
+            class="manager-row-copy-btn"
+            name="copy_manager_id"
+            value="{{ single_manager_id }}"
+            data-copy-action="{{ manager_invite_copy_action or '/app/settings/copy-manager-link' }}"
+            aria-label="Скопировать ссылку приглашения"
+            title="Скопировать ссылку приглашения"
+          >⧉</button>
+        </div>
+      </div>
+      <div class="manager-status-kpis">
+        <div class="manager-status-kpi">
+          <div class="label">Подключено</div>
+          <div class="value">{{ manager_summary.connected or 0 }}</div>
+        </div>
+        <div class="manager-status-kpi">
+          <div class="label">Ожидает подключения</div>
+          <div class="value">{{ manager_summary.pending or 0 }}</div>
+        </div>
+        <div class="manager-status-kpi">
+          <div class="label">Ошибки отправки</div>
+          <div class="value">{{ manager_summary.failed or 0 }}</div>
+        </div>
+        <div class="manager-status-kpi">
+          <div class="label">Всего ID в настройках</div>
+          <div class="value">{{ manager_summary.total or 0 }}</div>
+        </div>
+      </div>
+      {% if manager_status_rows %}
+      <table class="table-mobile-cards manager-status-table">
+        <thead>
+          <tr>
+            <th>ID в Max</th>
+            <th>Статус</th>
+            <th>Ссылка отправлена</th>
+            <th>Подключился</th>
+            <th>Последний вход</th>
+            <th>Действия</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in manager_status_rows %}
+          <tr>
+            <td data-label="ID в Max"><code>{{ row.max_account_id }}</code></td>
+            <td data-label="Статус">
+              <span class="status-chip {{ row.status_key }}">{{ row.status_label }}</span>
+            </td>
+            <td data-label="Ссылка отправлена">{{ row.link_sent_at }}</td>
+            <td data-label="Подключился">{{ row.connected_at }}</td>
+            <td data-label="Последний вход">{{ row.last_login_at }}</td>
+            <td data-label="Действия">
+              <div class="manager-actions">
+                {% if ui_mode == "app" and current_user and current_user.role in ["user", "owner", "admin"] and row.has_service_user %}
+                  <button
+                    type="button"
+                    class="manager-delete-permission-btn {% if row.can_delete_chats %}is-enabled{% else %}is-disabled{% endif %}"
+                    data-manager-delete-permission-btn="1"
+                    data-manager-id="{{ row.max_account_id }}"
+                    data-can-delete="{{ '1' if row.can_delete_chats else '0' }}"
+                    data-toggle-action="/app/settings/manager-delete-permission"
+                    aria-label="Переключить право удаления чатов"
+                    title="Разрешить/запретить удаление чатов и сообщений"
+                  >
+                    {% if row.can_delete_chats %}Удаление: разрешено{% else %}Удаление: запрещено{% endif %}
+                  </button>
+                {% endif %}
+                <button
+                  type="button"
+                  class="manager-remove-btn"
+                  data-remove-manager-id="{{ row.max_account_id }}"
+                  data-remove-action="{{ manager_remove_action or '/app/settings/remove-manager' }}"
+                  aria-label="Удалить менеджера"
+                  title="Удалить менеджера"
+                >🗑</button>
+              </div>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <div class="hint">Добавьте хотя бы один ID менеджера, чтобы отслеживать статус подключения.</div>
+      {% endif %}
+      <label for="routing_mode_manager" style="margin-top:14px;">Режим назначения менеджера</label>
+      <select id="routing_mode_manager" name="routing_mode" class="routing-mode-select">
+        {% set mode = (settings.routing_mode or "round_robin") %}
+        <option value="round_robin" {% if mode == "round_robin" %}selected{% endif %}>Распределять по очереди</option>
+        <option value="random" {% if mode == "random" %}selected{% endif %}>Случайное назначение</option>
+      </select>
+    </section>
+    {% endif %}
+
+    {% if (show_tariff_card | default(true)) and subscription %}
+    {% set plan_code_key = (subscription.plan_code or "")|lower %}
+    {% set plan_code_labels = {
+      "basic": "Начальный",
+      "trial": "Начальный",
+      "unlimited": "Безлимит"
+    } %}
+    {% set status_key = (subscription.status or "")|lower %}
+    {% set status_labels = {
+      "active": "Активна",
+      "basic": "Начальный",
+      "trial": "Начальный",
+      "unlimited": "Безлимит",
+      "past_due": "Просрочена оплата",
+      "paused": "На паузе",
+      "cancelled": "Отменена"
+    } %}
+    <section class="card section-gap-top" data-settings-block="tariff-limits">
+      <div class="card-head">
+        <h2 class="card-title"><span class="section-icon">💳</span>Тариф и лимиты</h2>
+        <div class="card-head-actions">
+          <span class="card-head-kicker">{{ plan_code_labels.get(plan_code_key, subscription.plan_code) }}</span>
+        </div>
+      </div>
+      <div class="hint">План: <b>{{ plan_code_labels.get(plan_code_key, subscription.plan_code) }}</b></div>
+      <div class="hint">Статус: <b>{{ status_labels.get(status_key, subscription.status) }}</b></div>
+      {% if tenant_metrics %}
+        {% set connected_managers_total = (manager_status_summary.connected or 0) if (ui_mode == "app" and manager_status_summary is defined) else tenant_metrics.managers_active %}
+        {% set pending_managers_total = (manager_status_summary.pending or 0) if (ui_mode == "app" and manager_status_summary is defined) else 0 %}
+        <div class="hint">Менеджеры (подключено): <b>{{ connected_managers_total }}</b> / <b>{{ subscription.manager_limit }}</b></div>
+        {% if pending_managers_total %}
+          <div class="hint">Менеджеры (ожидают подключения): <b>{{ pending_managers_total }}</b></div>
+        {% endif %}
+        <div class="hint">Диалоги: <b>{{ tenant_metrics.dialogs_total }}</b> / <b>{{ subscription.dialogs_limit }}</b></div>
+        <div class="hint">Сообщения в текущем месяце: <b>{{ tenant_metrics.messages_month }}</b> / <b>{{ subscription.messages_per_month_limit }}</b></div>
+        <div class="hint">Быстрые ответы: <b>{{ tenant_metrics.quick_replies_total }}</b> / <b>{{ subscription.quick_replies_limit }}</b></div>
+        <div class="hint">Папки: <b>{{ tenant_metrics.folders_total }}</b> / <b>{{ subscription.folders_limit }}</b></div>
+        <div class="hint">Закрепленные чаты: <b>{{ tenant_metrics.pins_total }}</b> / <b>{{ subscription.pinned_chats_limit }}</b></div>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {% if (show_intro_steps_card | default(true)) and intro_steps %}
+    <section class="card section-gap-top">
+      <div class="card-head">
+        <h2 class="card-title"><span class="section-icon">🧩</span>Intro шаги (после подтверждения телефона)</h2>
+        <div class="card-head-actions">
+          <span class="card-head-kicker">Автоматизация</span>
+        </div>
+      </div>
+      <table class="table-mobile-cards intro-steps-table">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Задержка (сек)</th>
+            <th>Текст</th>
+            <th>Активен</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for step in intro_steps %}
+          <tr>
+            <td data-label="#">{{ step.step_order }}</td>
+            <td data-label="Задержка (сек)">{{ step.delay_seconds }}</td>
+            <td data-label="Текст">{{ step.text }}</td>
+            <td data-label="Активен">{{ "да" if step.is_active else "нет" }}</td>
+            <td data-label="Действия">
+              <form method="post" action="{{ intro_delete_action_prefix or '/app/intro-steps/' }}{{ step.id }}/delete">
+                <button class="delete" type="submit">Удалить</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endif %}
+
+    {% if (show_intro_form | default(false)) %}
+    <section class="card section-gap-top">
+      <div class="card-head">
+        <h2 class="card-title"><span class="section-icon">➕</span>Добавить intro шаг</h2>
+        <div class="card-head-actions">
+          <span class="card-head-kicker">Конструктор</span>
+        </div>
+      </div>
+      <form method="post" action="{{ intro_create_action or '/app/intro-steps' }}">
+        <label for="step_order">Порядок</label>
+        <input id="step_order" name="step_order" type="number" value="1" min="1" />
+        <label for="delay_seconds">Задержка перед отправкой (сек)</label>
+        <input id="delay_seconds" name="delay_seconds" type="number" value="0" min="0" max="3600" />
+        <label for="intro_text">Текст шага</label>
+        <textarea id="intro_text" name="text" required></textarea>
+        <label><input type="checkbox" name="is_active" value="1" checked /> Активен</label>
+        <button class="btn" type="submit">Добавить шаг</button>
+      </form>
+    </section>
+    {% endif %}
+
+  </div>
+  <div
+    id="token-required-modal"
+    class="modal-overlay"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="token-required-modal-title"
+    aria-hidden="true"
+  >
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 id="token-required-modal-title" class="modal-title">Нужно добавить токен</h3>
+        <button type="button" id="token-required-modal-close-x" class="modal-close-icon" aria-label="Закрыть окно">✕</button>
+      </div>
+      <p class="modal-text">Перед сохранением настроек нажмите «Ввести токен», вставьте токен и нажмите «Добавить».</p>
+      <div class="modal-actions">
+        <button type="button" id="token-required-modal-close" class="btn secondary modal-close-btn">Понятно</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    (() => {
+      const settingsUiMode = "{{ ui_mode }}";
+      const isSettingsUi = settingsUiMode === "app" || settingsUiMode === "manager";
+      if (!isSettingsUi) return;
+      const grid = document.querySelector(".grid");
+      if (!(grid instanceof HTMLElement)) return;
+      grid.classList.add("settings-collapsible-initializing");
+
+      const desiredOrder = settingsUiMode === "manager"
+        ? ["quick-replies"]
+        : [
+            "bot-settings",
+            "managers-status",
+            "business-hours",
+            "quick-replies",
+            "delivery-stats",
+            "tariff-limits",
+          ];
+      const orderedSections = [];
+      desiredOrder.forEach((blockKey) => {
+        const section = document.querySelector(`section[data-settings-block="${blockKey}"]`);
+        if (section instanceof HTMLElement) {
+          orderedSections.push(section);
+        }
+      });
+
+      // Keep all requested settings blocks in explicit order.
+      orderedSections.forEach((section) => {
+        grid.appendChild(section);
+      });
+
+      const OPEN_BLOCK_STORAGE_KEY = "settings-open-block";
+      const savedOpenBlock = (() => {
+        try {
+          return String(window.sessionStorage.getItem(OPEN_BLOCK_STORAGE_KEY) || "").trim();
+        } catch (_) {
+          return "";
+        }
+      })();
+      const persistOpenBlock = (blockKey) => {
+        try {
+          const normalized = String(blockKey || "").trim();
+          if (!normalized) return;
+          window.sessionStorage.setItem(OPEN_BLOCK_STORAGE_KEY, normalized);
+        } catch (_) {}
+      };
+
+      let bodyIdSeq = 1;
+      orderedSections.forEach((section) => {
+        const blockKey = String(section.getAttribute("data-settings-block") || "").trim();
+        const header = section.querySelector(".card-head");
+        if (!(header instanceof HTMLElement)) return;
+        const title = header.querySelector(".card-title");
+        if (!(title instanceof HTMLElement)) return;
+
+        let body = section.querySelector(":scope > .card-collapsible-body");
+        if (!(body instanceof HTMLElement)) {
+          const collapsible = document.createElement("div");
+          collapsible.className = "card-collapsible-body";
+          while (section.children.length > 1) {
+            collapsible.appendChild(section.children[1]);
+          }
+          section.appendChild(collapsible);
+          body = collapsible;
+        }
+        if (!body.id) {
+          body.id = `settings-collapsible-body-${bodyIdSeq}`;
+          bodyIdSeq += 1;
+        }
+
+        const toggleBtn = document.createElement("button");
+        toggleBtn.type = "button";
+        toggleBtn.className = "card-toggle-btn";
+        toggleBtn.setAttribute("aria-label", "Свернуть или развернуть блок");
+        toggleBtn.setAttribute("aria-controls", body.id);
+        title.appendChild(toggleBtn);
+        header.classList.add("is-collapsible");
+        header.tabIndex = 0;
+        header.setAttribute("role", "button");
+        header.setAttribute("aria-controls", body.id);
+
+        const setExpanded = (expanded, options = {}) => {
+          const animate = options.animate !== false;
+          section.classList.toggle("is-collapsed", !expanded);
+          toggleBtn.textContent = expanded ? "▾" : "▸";
+          toggleBtn.setAttribute("aria-expanded", expanded ? "true" : "false");
+          header.setAttribute("aria-expanded", expanded ? "true" : "false");
+          if (expanded) {
+            persistOpenBlock(blockKey);
+          }
+          body.classList.toggle("is-open", expanded);
+          if (!animate) {
+            body.hidden = !expanded;
+            body.style.maxHeight = expanded ? "none" : "";
+            return;
+          }
+          if (expanded) {
+            body.hidden = false;
+            const targetHeight = `${body.scrollHeight}px`;
+            body.style.maxHeight = targetHeight;
+            window.setTimeout(() => {
+              if (body.classList.contains("is-open")) {
+                body.style.maxHeight = "none";
+              }
+            }, 320);
+          } else {
+            if (body.hidden) return;
+            if (body.style.maxHeight === "none" || !body.style.maxHeight) {
+              body.style.maxHeight = `${body.scrollHeight}px`;
+            }
+            void body.offsetHeight;
+            body.style.maxHeight = "0px";
+            window.setTimeout(() => {
+              if (!body.classList.contains("is-open")) {
+                body.hidden = true;
+                body.style.maxHeight = "";
+              }
+            }, 320);
+          }
+        };
+        const toggleExpanded = () => {
+          const expandedNow = toggleBtn.getAttribute("aria-expanded") === "true";
+          setExpanded(!expandedNow);
+        };
+
+        // Settings sections should be expanded by default.
+        const shouldStartExpanded = true;
+        setExpanded(shouldStartExpanded, { animate: false });
+        toggleBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleExpanded();
+        });
+        header.addEventListener("click", (event) => {
+          const target = event.target;
+          if (
+            target instanceof HTMLElement
+            && target.closest("a, input, textarea, select, label, form")
+            && !target.closest(".card-toggle-btn")
+          ) {
+            return;
+          }
+          toggleExpanded();
+        });
+        header.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          toggleExpanded();
+        });
+
+        const sectionForms = Array.from(section.querySelectorAll("form"));
+        sectionForms.forEach((form) => {
+          if (!(form instanceof HTMLFormElement)) return;
+          form.addEventListener("submit", () => {
+            persistOpenBlock(blockKey);
+          });
+        });
+        if (blockKey === "quick-replies") {
+          const quickReplyActionButtons = Array.from(
+            section.querySelectorAll(".quick-replies-table .inline-edit-form button, .quick-replies-table form .delete")
+          );
+          quickReplyActionButtons.forEach((button) => {
+            if (!(button instanceof HTMLButtonElement)) return;
+            button.addEventListener("click", () => {
+              persistOpenBlock(blockKey);
+            });
+          });
+        }
+      });
+      window.requestAnimationFrame(() => {
+        grid.classList.remove("settings-collapsible-initializing");
+      });
+    })();
+
+    (() => {
+      const previewBtn = document.getElementById("business-hours-preview-btn");
+      const previewNode = document.getElementById("business-hours-preview-result");
+      const previewSection = previewBtn instanceof HTMLElement ? previewBtn.closest("section") : null;
+      const form = previewSection ? previewSection.querySelector("form") : null;
+      if (
+        form instanceof HTMLFormElement &&
+        previewBtn instanceof HTMLButtonElement &&
+        previewNode instanceof HTMLElement
+      ) {
+        previewBtn.addEventListener("click", async (event) => {
+          event.preventDefault();
+          previewNode.textContent = "Проверяю...";
+          const formData = new FormData(form);
+          try {
+            const response = await fetch(
+              "{{ business_hours_preview_action or '/app/settings/business-hours/preview' }}",
+              {
+                method: "POST",
+                body: formData,
+              },
+            );
+            const payload = await response.json();
+            if (!response.ok || !payload || payload.ok !== true) {
+              const text = (payload && payload.error) ? String(payload.error) : "Не удалось проверить статус.";
+              previewNode.textContent = text;
+              return;
+            }
+            if (!payload.enabled) {
+              previewNode.textContent = "График выключен: автоответы нерабочего времени не отправляются.";
+              return;
+            }
+            if (payload.is_open) {
+              previewNode.textContent = `Сейчас рабочее время (${payload.timezone || "UTC"}).`;
+              return;
+            }
+            const nextLabel = payload.next_open_label ? ` Следующее открытие: ${payload.next_open_label}.` : "";
+            previewNode.textContent = `Сейчас нерабочее время (${payload.timezone || "UTC"}).${nextLabel}`;
+          } catch (_) {
+            previewNode.textContent = "Не удалось проверить статус.";
+          }
+        });
+      }
+    })();
+
+    (() => {
+      const tokenToggleBtn = document.getElementById("token-toggle-btn");
+      const tokenWrap = document.getElementById("token-input-wrap");
+      const tokenDraftInput = document.getElementById("bot_token_input");
+      const tokenHiddenInput = document.getElementById("bot_token");
+      const tokenAddBtn = document.getElementById("token-add-btn");
+      const tokenMaskValue = document.getElementById("token-mask-value");
+      const tokenMaskEmpty = document.getElementById("token-mask-empty");
+      if (
+        tokenToggleBtn instanceof HTMLButtonElement &&
+        tokenWrap instanceof HTMLElement &&
+        tokenDraftInput instanceof HTMLInputElement &&
+        tokenHiddenInput instanceof HTMLInputElement &&
+        tokenAddBtn instanceof HTMLButtonElement
+      ) {
+        const maskToken = (value) => {
+          const raw = String(value || "").trim();
+          if (!raw) return "";
+          if (raw.length <= 4) return "*".repeat(raw.length);
+          return `${raw.slice(0, 2)}${"*".repeat(Math.max(raw.length - 4, 4))}${raw.slice(-2)}`;
+        };
+        const initialMaskedToken =
+          tokenMaskValue instanceof HTMLElement ? String(tokenMaskValue.textContent || "").trim() : "";
+        const syncTokenPresentation = (rawToken) => {
+          const clean = String(rawToken || "").trim();
+          const hasToken = clean.length > 0;
+          tokenToggleBtn.textContent = hasToken ? "Обновить токен" : "Ввести токен";
+          if (tokenMaskValue instanceof HTMLElement) {
+            tokenMaskValue.textContent = hasToken ? maskToken(clean) : "";
+            tokenMaskValue.hidden = !hasToken;
+          }
+          if (tokenMaskEmpty instanceof HTMLElement) {
+            tokenMaskEmpty.hidden = hasToken;
+          }
+        };
+        tokenToggleBtn.textContent = initialMaskedToken ? "Обновить токен" : "Ввести токен";
+
+        tokenToggleBtn.addEventListener("click", (event) => {
+          event.preventDefault();
+          const shouldShow = tokenWrap.hidden;
+          tokenWrap.hidden = !shouldShow;
+          if (shouldShow) {
+            tokenDraftInput.focus();
+          } else {
+            tokenDraftInput.value = "";
+          }
+        });
+        tokenDraftInput.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter") return;
+          event.preventDefault();
+          tokenAddBtn.click();
+        });
+        tokenAddBtn.addEventListener("click", () => {
+          const tokenValue = tokenDraftInput.value.trim();
+          if (!tokenValue) {
+            tokenDraftInput.focus();
+            return;
+          }
+          tokenHiddenInput.value = tokenValue;
+          syncTokenPresentation(tokenValue);
+          tokenDraftInput.value = "";
+          tokenWrap.hidden = true;
+        });
+      }
+    })();
+
+    (() => {
+      const uiMode = "{{ ui_mode }}";
+      if (uiMode !== "app") return;
+      const settingsForm = document.getElementById("bot-settings-form");
+      const tokenHiddenInput = document.getElementById("bot_token");
+      const tokenMaskValue = document.getElementById("token-mask-value");
+      const tokenDraftInput = document.getElementById("bot_token_input");
+      const tokenModal = document.getElementById("token-required-modal");
+      const tokenModalClose = document.getElementById("token-required-modal-close");
+      const tokenModalCloseX = document.getElementById("token-required-modal-close-x");
+      if (
+        !(settingsForm instanceof HTMLFormElement) ||
+        !(tokenHiddenInput instanceof HTMLInputElement) ||
+        !(tokenModal instanceof HTMLElement) ||
+        !(tokenModalClose instanceof HTMLButtonElement) ||
+        !(tokenModalCloseX instanceof HTMLButtonElement)
+      ) {
+        return;
+      }
+
+      const hasSavedToken = () => {
+        if (!(tokenMaskValue instanceof HTMLElement)) return false;
+        return String(tokenMaskValue.textContent || "").trim().length > 0;
+      };
+      const hasDraftToken = () => String(tokenHiddenInput.value || "").trim().length > 0;
+      const openModal = () => {
+        tokenModal.classList.add("active");
+        tokenModal.setAttribute("aria-hidden", "false");
+      };
+      const closeModal = () => {
+        tokenModal.classList.remove("active");
+        tokenModal.setAttribute("aria-hidden", "true");
+      };
+
+      tokenModalClose.addEventListener("click", () => {
+        closeModal();
+        if (tokenDraftInput instanceof HTMLInputElement) {
+          tokenDraftInput.focus();
+        }
+      });
+      tokenModalCloseX.addEventListener("click", () => {
+        closeModal();
+        if (tokenDraftInput instanceof HTMLInputElement) {
+          tokenDraftInput.focus();
+        }
+      });
+      tokenModal.addEventListener("click", (event) => {
+        if (event.target === tokenModal) {
+          closeModal();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && tokenModal.classList.contains("active")) {
+          closeModal();
+        }
+      });
+      settingsForm.addEventListener("submit", (event) => {
+        if (hasDraftToken() || hasSavedToken()) return;
+        event.preventDefault();
+        openModal();
+      });
+    })();
+
+    (() => {
+      const refreshBtn = document.querySelector(".storage-health-refresh");
+      if (!(refreshBtn instanceof HTMLButtonElement)) return;
+      const endpoint = String(refreshBtn.getAttribute("data-storage-health-endpoint") || "").trim();
+      if (!endpoint) return;
+      const card = refreshBtn.closest(".storage-health");
+      const statusEl = card ? card.querySelector(".storage-health-status") : null;
+      const detailsEl = card ? card.querySelector(".storage-health-details") : null;
+      const setStatus = (text, isError = false) => {
+        if (!(statusEl instanceof HTMLElement)) return;
+        statusEl.textContent = text;
+        statusEl.style.color = isError ? "#991b1b" : "#0f172a";
+      };
+      refreshBtn.addEventListener("click", async () => {
+        refreshBtn.disabled = true;
+        setStatus("Проверяю...");
+        try {
+          const response = await fetch(endpoint, { method: "GET", headers: { "Accept": "application/json" } });
+          const payload = await response.json();
+          const health = payload && payload.health ? payload.health : {};
+          const ok = Boolean(payload && payload.ok);
+          const summary = String(health.summary || (ok ? "OK" : "Ошибка"));
+          setStatus(summary, !ok);
+          if (detailsEl instanceof HTMLElement) {
+            const error = String(health.error || "");
+            const html = error ? `<span style="color:#991b1b;">${error}</span>` : "";
+            detailsEl.innerHTML = html;
+          }
+        } catch (_) {
+          setStatus("Не удалось обновить статус", true);
+        } finally {
+          refreshBtn.disabled = false;
+        }
+      });
+    })();
+
+    (() => {
+      const filesInput = document.getElementById("photos");
+      const mediaSortWrap = document.getElementById("media-sort-wrap");
+      const mediaSortGrid = document.getElementById("media-sort-grid");
+      const mediaOrderInput = document.getElementById("media_order");
+      const removeExistingMediaInput = document.getElementById("remove_media_paths");
+      const QUICK_REPLY_MAX_FILE_BYTES = 1 * 1024 * 1024;
+      if (
+        !(filesInput instanceof HTMLInputElement) ||
+        !(mediaSortWrap instanceof HTMLElement) ||
+        !(mediaSortGrid instanceof HTMLElement) ||
+        !(mediaOrderInput instanceof HTMLInputElement)
+      ) {
+        return;
+      }
+
+      const canUseDataTransfer = () => {
+        try {
+          return typeof DataTransfer !== "undefined" && Boolean(new DataTransfer());
+        } catch (_) {
+          return false;
+        }
+      };
+
+      let selectedEntries = [];
+      let removedExistingPaths = [];
+      let draggedToken = "";
+
+      const updateOrderInput = () => {
+        mediaOrderInput.value = selectedEntries.map((item) => item.token).join(",");
+      };
+
+      const updateRemovedExistingInput = () => {
+        if (removeExistingMediaInput instanceof HTMLInputElement) {
+          removeExistingMediaInput.value = removedExistingPaths.join(",");
+        }
+      };
+
+      let canSyncNativeFiles = canUseDataTransfer();
+      const syncNativeFiles = () => {
+        if (!canSyncNativeFiles) return false;
+        try {
+          const dt = new DataTransfer();
+          selectedEntries.forEach((entry) => {
+            if (entry.kind === "new" && entry.file instanceof File) {
+              dt.items.add(entry.file);
+            }
+          });
+          filesInput.files = dt.files;
+          return true;
+        } catch (_) {
+          // Some browsers/webviews expose DataTransfer but reject assigning input.files.
+          // Keep preview/reorder working instead of breaking the whole UI.
+          canSyncNativeFiles = false;
+          return false;
+        }
+      };
+
+      const rebuildFileListAndPreview = () => {
+        mediaSortGrid.innerHTML = "";
+        selectedEntries.forEach((entry, idx) => {
+          const chip = document.createElement("div");
+          chip.className = "media-chip";
+          chip.setAttribute("draggable", "true");
+          chip.dataset.token = entry.token;
+          chip.innerHTML = `<img alt="preview" /><span class="name"></span>`;
+
+          const img = chip.querySelector("img");
+          if (img instanceof HTMLImageElement) {
+            img.src = String(entry.previewUrl || "");
+          }
+
+          const name = chip.querySelector(".name");
+          if (name instanceof HTMLElement) {
+            const displayName = String(
+              entry.name || (entry.file instanceof File ? entry.file.name : `image_${idx + 1}`)
+            );
+            name.textContent = `${idx + 1}. ${displayName}`;
+          }
+
+          const removeBtn = document.createElement("button");
+          removeBtn.type = "button";
+          removeBtn.className = "media-chip-remove";
+          removeBtn.textContent = "×";
+          removeBtn.title = "Удалить фото";
+          removeBtn.setAttribute("aria-label", "Удалить фото");
+          removeBtn.addEventListener("click", (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (entry.isObjectUrl && entry.previewUrl) {
+              try { URL.revokeObjectURL(entry.previewUrl); } catch (_) {}
+            }
+            if (entry.kind === "existing") {
+              const existingPath = String(entry.path || "").trim();
+              if (existingPath && !removedExistingPaths.includes(existingPath)) {
+                removedExistingPaths.push(existingPath);
+                updateRemovedExistingInput();
+              }
+            }
+            selectedEntries = selectedEntries.filter((item) => item.token !== entry.token);
+            rebuildFileListAndPreview();
+          });
+          chip.appendChild(removeBtn);
+
+          chip.addEventListener("dragstart", () => {
+            draggedToken = String(entry.token || "");
+            chip.classList.add("dragging");
+          });
+          chip.addEventListener("dragend", () => {
+            draggedToken = "";
+            chip.classList.remove("dragging");
+          });
+          chip.addEventListener("dragover", (event) => {
+            event.preventDefault();
+          });
+          chip.addEventListener("drop", (event) => {
+            event.preventDefault();
+            const targetToken = String(chip.dataset.token || "");
+            if (!draggedToken || !targetToken || draggedToken === targetToken) return;
+            const from = selectedEntries.findIndex((item) => item.token === draggedToken);
+            const to = selectedEntries.findIndex((item) => item.token === targetToken);
+            if (from < 0 || to < 0) return;
+            const [moved] = selectedEntries.splice(from, 1);
+            selectedEntries.splice(to, 0, moved);
+            rebuildFileListAndPreview();
+          });
+
+          mediaSortGrid.appendChild(chip);
+        });
+
+        updateOrderInput();
+        updateRemovedExistingInput();
+        mediaSortWrap.hidden = selectedEntries.length === 0;
+        syncNativeFiles();
+      };
+
+      filesInput.addEventListener("change", () => {
+        const files = Array.from(filesInput.files || []);
+        if (!files.length) {
+          return;
+        }
+
+        const notImage = files.find((file) => !String(file.type || "").toLowerCase().startsWith("image/"));
+        if (notImage) {
+          alert(`Файл "${notImage.name}" не является изображением.`);
+          filesInput.value = "";
+          return;
+        }
+
+        const oversized = files.find((file) => Number(file.size || 0) > QUICK_REPLY_MAX_FILE_BYTES);
+        if (oversized) {
+          alert(`Файл "${oversized.name}" больше 1 МБ. Загрузите файл размером до 1 МБ.`);
+          filesInput.value = "";
+          return;
+        }
+
+        const existingTokens = new Set(selectedEntries.map((entry) => String(entry.token || "")));
+        files.forEach((file, idx) => {
+          const token = `${idx}|${file.name}|${file.size}|${file.lastModified}`;
+          if (existingTokens.has(token)) return;
+          selectedEntries.push({
+            kind: "new",
+            file,
+            token,
+            previewUrl: URL.createObjectURL(file),
+            isObjectUrl: true,
+            name: file.name,
+            path: "",
+          });
+        });
+
+        rebuildFileListAndPreview();
+      });
+
+      // When editing an existing quick reply, preload its current media previews
+      // into the sortable strip so preview is visible before reupload.
+      const quickReplyForm = document.getElementById("quick-reply-form");
+      const editQuickReplyId = quickReplyForm instanceof HTMLFormElement
+        ? String(quickReplyForm.getAttribute("data-edit-quick-reply-id") || "").trim()
+        : "";
+      if (!selectedEntries.length && editQuickReplyId) {
+        const rowEditInput = Array.from(
+          document.querySelectorAll(".quick-replies-table tr td form.inline-edit-form input[name='edit_quick_reply_id']")
+        ).find((node) => node instanceof HTMLInputElement && String(node.value || "").trim() === editQuickReplyId);
+        const row = rowEditInput ? rowEditInput.closest("tr") : null;
+        if (row instanceof HTMLElement) {
+          const rowPreviews = Array.from(row.querySelectorAll("img.preview"));
+          rowPreviews.forEach((imgNode, idx) => {
+            const src = String(imgNode.getAttribute("src") || "").trim();
+            if (!src) return;
+            selectedEntries.push({
+              kind: "existing",
+              file: null,
+              token: `existing:${src}`,
+              previewUrl: src,
+              isObjectUrl: false,
+              path: src,
+              name: `current_${idx + 1}`,
+            });
+          });
+          rebuildFileListAndPreview();
+        }
+      }
+    })();
+
+    (() => {
+      const normalizeHttpUrl = (value) => {
+        const raw = String(value || "").trim();
+        if (!raw) return "";
+        if (/^https?:\/\//i.test(raw)) return raw;
+        return `https://${raw}`;
+      };
+      const escapeHtml = (value) => (
+        String(value || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+      );
+      const wrapSelectionTextArea = (textarea, leftToken, rightToken) => {
+        if (!(textarea instanceof HTMLTextAreaElement)) return;
+        const value = textarea.value || "";
+        const start = textarea.selectionStart ?? 0;
+        const end = textarea.selectionEnd ?? 0;
+        const selected = value.slice(start, end) || "текст";
+        const result = value.slice(0, start) + leftToken + selected + rightToken + value.slice(end);
+        textarea.value = result;
+        const cursorStart = start + leftToken.length;
+        const cursorEnd = cursorStart + selected.length;
+        textarea.focus();
+        textarea.setSelectionRange(cursorStart, cursorEnd);
+      };
+      const applyMarkdownActionTextArea = (textarea, action) => {
+        if (!(textarea instanceof HTMLTextAreaElement)) return;
+        if (action === "italic") return wrapSelectionTextArea(textarea, "*", "*");
+        if (action === "bold") return wrapSelectionTextArea(textarea, "**", "**");
+        if (action === "strike") return wrapSelectionTextArea(textarea, "~~", "~~");
+        if (action === "underline") return wrapSelectionTextArea(textarea, "++", "++");
+        if (action === "mono") return wrapSelectionTextArea(textarea, "`", "`");
+        if (action === "link") {
+          const currentText = textarea.value || "";
+          const start = textarea.selectionStart ?? 0;
+          const end = textarea.selectionEnd ?? 0;
+          const selected = currentText.slice(start, end) || "текст ссылки";
+          const entered = window.prompt("Введите URL ссылки", "https://");
+          const normalizedUrl = normalizeHttpUrl(entered);
+          if (!normalizedUrl) return;
+          const markdownLink = `[${selected}](${normalizedUrl})`;
+          textarea.value = currentText.slice(0, start) + markdownLink + currentText.slice(end);
+          const newPos = start + markdownLink.length;
+          textarea.focus();
+          textarea.setSelectionRange(newPos, newPos);
+        }
+      };
+
+      const richEditors = Array.from(document.querySelectorAll(".rich-editor[data-markdown-source-id]"));
+      const editorBySourceId = new Map();
+      const setEditorEmptyClass = (editor) => {
+        if (!(editor instanceof HTMLElement)) return;
+        const text = String(editor.textContent || "").replace(/\u00a0/g, " ").trim();
+        editor.classList.toggle("is-empty", text.length === 0);
+      };
+      const markdownToEditorHtml = (markdownValue) => {
+        let html = escapeHtml(markdownValue || "");
+        const stash = [];
+        const save = (value) => {
+          const key = `__TOKEN_${stash.length}__`;
+          stash.push(value);
+          return key;
+        };
+        html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/gi, (_m, text, url) => {
+          return save(`<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${text}</a>`);
+        });
+        html = html.replace(/`([^`]+)`/g, (_m, text) => `<code>${text}</code>`);
+        html = html.replace(/\+\+([^+]+)\+\+/g, (_m, text) => `<u>${text}</u>`);
+        html = html.replace(/\*\*([^*]+)\*\*/g, (_m, text) => `<strong>${text}</strong>`);
+        html = html.replace(/~~([^~]+)~~/g, (_m, text) => `<s>${text}</s>`);
+        html = html.replace(/\*([^*\n]+)\*/g, (_m, text) => `<em>${text}</em>`);
+        html = html.replace(/\n/g, "<br>");
+        html = html.replace(/__TOKEN_(\d+)__/g, (_m, idx) => stash[Number(idx)] || "");
+        return html;
+      };
+      const nodesToMarkdown = (nodes) => {
+        let out = "";
+        nodes.forEach((node) => {
+          if (node.nodeType === Node.TEXT_NODE) {
+            out += String(node.textContent || "").replace(/\u00a0/g, " ");
+            return;
+          }
+          if (!(node instanceof HTMLElement)) return;
+          const tag = node.tagName.toLowerCase();
+          const inner = nodesToMarkdown(Array.from(node.childNodes));
+          if (tag === "br") {
+            out += "\n";
+            return;
+          }
+          if (tag === "strong" || tag === "b") {
+            out += `**${inner || "текст"}**`;
+            return;
+          }
+          if (tag === "em" || tag === "i") {
+            out += `*${inner || "текст"}*`;
+            return;
+          }
+          if (tag === "s" || tag === "strike" || tag === "del") {
+            out += `~~${inner || "текст"}~~`;
+            return;
+          }
+          if (tag === "u") {
+            out += `++${inner || "текст"}++`;
+            return;
+          }
+          if (tag === "code") {
+            out += `\`${inner || "текст"}\``;
+            return;
+          }
+          if (tag === "a") {
+            const href = normalizeHttpUrl(node.getAttribute("href") || "");
+            if (href) {
+              out += `[${inner || "ссылка"}](${href})`;
+            } else {
+              out += inner;
+            }
+            return;
+          }
+          if (tag === "div" || tag === "p") {
+            out += inner;
+            if (!out.endsWith("\n")) out += "\n";
+            return;
+          }
+          out += inner;
+        });
+        return out;
+      };
+      const editorToMarkdown = (editor) => {
+        if (!(editor instanceof HTMLElement)) return "";
+        const raw = nodesToMarkdown(Array.from(editor.childNodes));
+        return raw
+          .replace(/\n{3,}/g, "\n\n")
+          .replace(/[ \t]+\n/g, "\n")
+          .trim();
+      };
+      const syncEditorToSource = (editor) => {
+        if (!(editor instanceof HTMLElement)) return;
+        const sourceId = String(editor.getAttribute("data-markdown-source-id") || "").trim();
+        if (!sourceId) return;
+        const source = document.getElementById(sourceId);
+        if (!(source instanceof HTMLTextAreaElement)) return;
+        source.value = editorToMarkdown(editor);
+        setEditorEmptyClass(editor);
+      };
+      const tryWrapSelectionInRichEditor = (editor, tagName) => {
+        const selection = window.getSelection();
+        if (!selection || selection.rangeCount === 0) return false;
+        const range = selection.getRangeAt(0);
+        if (!editor.contains(range.commonAncestorContainer)) return false;
+        const selectedText = String(selection.toString() || "").trim();
+        const safeText = selectedText || "текст";
+        if (selectedText) {
+          try {
+            const wrapper = document.createElement(tagName);
+            range.surroundContents(wrapper);
+            selection.removeAllRanges();
+            const newRange = document.createRange();
+            newRange.selectNodeContents(wrapper);
+            selection.addRange(newRange);
+            return true;
+          } catch (_) {
+            document.execCommand("insertHTML", false, `<${tagName}>${escapeHtml(safeText)}</${tagName}>`);
+            return true;
+          }
+        }
+        document.execCommand("insertHTML", false, `<${tagName}>${escapeHtml(safeText)}</${tagName}>`);
+        return true;
+      };
+      const applyRichEditorAction = (editor, action) => {
+        if (!(editor instanceof HTMLElement)) return;
+        editor.focus();
+        if (action === "bold") document.execCommand("bold");
+        if (action === "italic") document.execCommand("italic");
+        if (action === "underline") document.execCommand("underline");
+        if (action === "strike") document.execCommand("strikeThrough");
+        if (action === "mono") tryWrapSelectionInRichEditor(editor, "code");
+        if (action === "link") {
+          const entered = window.prompt("Введите URL ссылки", "https://");
+          const normalizedUrl = normalizeHttpUrl(entered);
+          if (normalizedUrl) {
+            document.execCommand("createLink", false, normalizedUrl);
+            const selection = window.getSelection();
+            const anchorNode = selection && selection.anchorNode instanceof HTMLElement
+              ? selection.anchorNode.closest("a")
+              : null;
+            if (anchorNode instanceof HTMLAnchorElement) {
+              anchorNode.setAttribute("target", "_blank");
+              anchorNode.setAttribute("rel", "noopener noreferrer");
+            }
+          }
+        }
+        syncEditorToSource(editor);
+      };
+
+      richEditors.forEach((editor) => {
+        if (!(editor instanceof HTMLElement)) return;
+        const sourceId = String(editor.getAttribute("data-markdown-source-id") || "").trim();
+        if (!sourceId) return;
+        const source = document.getElementById(sourceId);
+        if (!(source instanceof HTMLTextAreaElement)) return;
+        editorBySourceId.set(sourceId, editor);
+        editor.innerHTML = markdownToEditorHtml(source.value || "");
+        setEditorEmptyClass(editor);
+        editor.addEventListener("input", () => syncEditorToSource(editor));
+        editor.addEventListener("blur", () => syncEditorToSource(editor));
+        editor.addEventListener("keyup", () => setEditorEmptyClass(editor));
+      });
+
+      const toolbars = Array.from(document.querySelectorAll(".format-toolbar"));
+      if (!toolbars.length) return;
+      const closeAllMenus = () => {
+        toolbars.forEach((toolbar) => {
+          const menu = toolbar.querySelector(".format-menu");
+          if (menu instanceof HTMLElement) {
+            menu.classList.remove("open");
+          }
+        });
+      };
+      document.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        if (!target.closest(".format-toolbar")) {
+          closeAllMenus();
+        }
+      });
+      toolbars.forEach((toolbar) => {
+        const targetId = toolbar.getAttribute("data-format-target") || "";
+        const target = document.getElementById(targetId);
+        const trigger = toolbar.querySelector(".format-trigger");
+        const menu = toolbar.querySelector(".format-menu");
+        if (!(trigger instanceof HTMLButtonElement) || !(menu instanceof HTMLElement) || !target) return;
+
+        trigger.addEventListener("click", (event) => {
+          event.preventDefault();
+          const alreadyOpen = menu.classList.contains("open");
+          closeAllMenus();
+          if (!alreadyOpen) menu.classList.add("open");
+        });
+        menu.addEventListener("click", (event) => {
+          const clickTarget = event.target;
+          if (!(clickTarget instanceof Element)) return;
+          const actionBtn = clickTarget.closest("button[data-format-action]");
+          if (!(actionBtn instanceof HTMLButtonElement)) return;
+          event.preventDefault();
+          const action = String(actionBtn.getAttribute("data-format-action") || "").trim();
+          if (!action) return;
+          if (target instanceof HTMLTextAreaElement) {
+            applyMarkdownActionTextArea(target, action);
+          } else if (target instanceof HTMLElement && target.classList.contains("rich-editor")) {
+            applyRichEditorAction(target, action);
+          }
+          menu.classList.remove("open");
+        });
+      });
+
+      const forms = Array.from(document.querySelectorAll("form"));
+      forms.forEach((form) => {
+        if (!(form instanceof HTMLFormElement)) return;
+        const editors = Array.from(form.querySelectorAll(".rich-editor[data-markdown-source-id]"));
+        if (!editors.length) return;
+        form.addEventListener("submit", (event) => {
+          editors.forEach((editorNode) => {
+            if (!(editorNode instanceof HTMLElement)) return;
+            syncEditorToSource(editorNode);
+            const sourceId = String(editorNode.getAttribute("data-markdown-source-id") || "").trim();
+            const source = sourceId ? document.getElementById(sourceId) : null;
+            if (!(source instanceof HTMLTextAreaElement)) return;
+            const required = String(source.getAttribute("data-required") || "").trim() === "1";
+            if (!required) return;
+            if (!String(source.value || "").trim()) {
+              event.preventDefault();
+              alert("Заполните обязательное поле сообщения.");
+              editorNode.focus();
+            }
+          });
+        });
+      });
+    })();
+
+    (() => {
+      const rowsWrap = document.getElementById("manager-ids-wrap");
+      if (!rowsWrap) return;
+      const managerSection = rowsWrap.closest("section");
+      const clickScope = managerSection instanceof HTMLElement ? managerSection : rowsWrap;
+      const showToast = (message, kind = "ok") => {
+        const toast = document.createElement("div");
+        toast.textContent = String(message || "");
+        toast.style.position = "fixed";
+        toast.style.right = "16px";
+        toast.style.bottom = "16px";
+        toast.style.maxWidth = "320px";
+        toast.style.padding = "10px 12px";
+        toast.style.borderRadius = "10px";
+        toast.style.boxShadow = "0 8px 24px rgba(17, 24, 39, .18)";
+        toast.style.fontSize = "13px";
+        toast.style.fontWeight = "600";
+        toast.style.zIndex = "9999";
+        toast.style.opacity = "0";
+        toast.style.transform = "translateY(8px)";
+        toast.style.transition = "opacity .18s ease, transform .18s ease";
+        if (kind === "error") {
+          toast.style.background = "#fee2e2";
+          toast.style.color = "#991b1b";
+          toast.style.border = "1px solid #fecaca";
+        } else {
+          toast.style.background = "#dcfce7";
+          toast.style.color = "#166534";
+          toast.style.border = "1px solid #86efac";
+        }
+        document.body.appendChild(toast);
+        requestAnimationFrame(() => {
+          toast.style.opacity = "1";
+          toast.style.transform = "translateY(0)";
+        });
+        window.setTimeout(() => {
+          toast.style.opacity = "0";
+          toast.style.transform = "translateY(8px)";
+          window.setTimeout(() => toast.remove(), 220);
+        }, 2600);
+      };
+      rowsWrap.addEventListener("input", (event) => {
+        const target = event.target;
+        if (!(target instanceof HTMLInputElement)) return;
+        if (target.name !== "manager_account_ids") return;
+        const row = target.closest(".manager-id-row");
+        const copyBtn = row?.querySelector("button[name='copy_manager_id']");
+        if (copyBtn instanceof HTMLButtonElement) {
+          copyBtn.value = target.value.trim();
+        }
+      });
+      clickScope.addEventListener("click", (event) => {
+        const target = event.target;
+        if (!(target instanceof Element)) return;
+        const removeBtn = target.closest("button.manager-remove-btn");
+        if (removeBtn instanceof HTMLButtonElement) {
+          const removeAction = removeBtn.getAttribute("data-remove-action") || "{{ manager_remove_action or '/app/settings/remove-manager' }}";
+          const removeManagerId = (removeBtn.getAttribute("data-remove-manager-id") || "").trim();
+          if (!removeManagerId) {
+            showToast("Не удалось определить ID менеджера для удаления.", "error");
+            return;
+          }
+          const confirmed = window.confirm(`Удалить менеджера ${removeManagerId}?`);
+          if (!confirmed) {
+            return;
+          }
+          const payload = new FormData();
+          payload.set("remove_manager_id", removeManagerId);
+          fetch(removeAction, { method: "POST", body: payload })
+            .then((resp) => resp.json().catch(() => ({ ok: false, error: "Некорректный ответ сервера." })))
+            .then((data) => {
+              if (!data || !data.ok) {
+                showToast((data && data.error) ? data.error : "Не удалось удалить менеджера.", "error");
+                return;
+              }
+              if (data.message) {
+                showToast(String(data.message), "ok");
+              }
+              window.location.reload();
+            })
+            .catch(() => {
+              showToast("Не удалось удалить менеджера.", "error");
+            });
+          return;
+        }
+        const permissionBtn = target.closest("button[data-manager-delete-permission-btn='1']");
+        if (permissionBtn instanceof HTMLButtonElement) {
+          const managerId = (permissionBtn.getAttribute("data-manager-id") || "").trim();
+          const toggleAction = permissionBtn.getAttribute("data-toggle-action") || "/app/settings/manager-delete-permission";
+          const currentCanDelete = String(permissionBtn.getAttribute("data-can-delete") || "0") === "1";
+          if (!managerId) {
+            showToast("Не удалось определить ID менеджера.", "error");
+            return;
+          }
+          const nextCanDelete = !currentCanDelete;
+          const confirmed = window.confirm(
+            nextCanDelete
+              ? `Разрешить ${managerId} удалять чаты и сообщения?`
+              : `Запретить ${managerId} удалять чаты и сообщения?`
+          );
+          if (!confirmed) {
+            return;
+          }
+          const payload = new FormData();
+          payload.set("manager_max_account_id", managerId);
+          payload.set("can_delete_chats", nextCanDelete ? "1" : "0");
+          fetch(toggleAction, { method: "POST", body: payload })
+            .then((resp) => resp.json().catch(() => ({ ok: false, error: "Некорректный ответ сервера." })))
+            .then((data) => {
+              if (!data || !data.ok) {
+                showToast((data && data.error) ? data.error : "Не удалось обновить право удаления.", "error");
+                return;
+              }
+              showToast(
+                data.message || (nextCanDelete ? "Право удаления разрешено." : "Право удаления запрещено."),
+                "ok"
+              );
+              window.location.reload();
+            })
+            .catch(() => {
+              showToast("Не удалось обновить право удаления.", "error");
+            });
+          return;
+        }
+        const copyBtn = target.closest("button.manager-row-copy-btn");
+        if (copyBtn instanceof HTMLButtonElement) {
+          const row = copyBtn.closest(".manager-id-row");
+          const managerInput = row?.querySelector("input[name='manager_account_ids']");
+          const managerId = managerInput instanceof HTMLInputElement ? managerInput.value.trim() : "";
+          const copyAction = copyBtn.getAttribute("data-copy-action") || "{{ manager_invite_copy_action or '/app/settings/copy-manager-link' }}";
+          const payload = new FormData();
+          payload.set("copy_manager_id", managerId);
+          fetch(copyAction, { method: "POST", body: payload })
+            .then((resp) => resp.json().catch(() => ({ ok: false, error: "Некорректный ответ сервера." })))
+            .then(async (data) => {
+              if (!data || !data.ok || !data.link) {
+                showToast((data && data.error) ? data.error : "Не удалось сформировать ссылку.", "error");
+                return;
+              }
+              try {
+                await navigator.clipboard.writeText(String(data.link));
+                showToast("Ссылка скопирована. Отправьте ее менеджеру в Max.", "ok");
+              } catch (_) {
+                const tempInput = document.createElement("input");
+                tempInput.type = "text";
+                tempInput.value = String(data.link);
+                tempInput.style.position = "fixed";
+                tempInput.style.opacity = "0";
+                document.body.appendChild(tempInput);
+                tempInput.focus();
+                tempInput.select();
+                document.execCommand("copy");
+                document.body.removeChild(tempInput);
+                showToast("Ссылка скопирована. Отправьте ее менеджеру в Max.", "ok");
+              }
+            })
+            .catch(() => {
+              showToast("Не удалось сформировать ссылку.", "error");
+            });
+          return;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
