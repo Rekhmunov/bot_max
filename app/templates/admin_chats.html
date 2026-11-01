@@ -5145,6 +5145,8 @@
         });
         updateBulkToolbarState();
       };
+      // Poller/thread-list IIFE calls this after upsert/rebuild; keep a stable window hook.
+      window.__chatSyncThreadSelectionFromState = syncThreadSelectionFromState;
       const setBulkMode = (enabled) => {
         bulkMode = Boolean(enabled);
         window.__chatBulkModeActive = bulkMode;
@@ -6298,10 +6300,71 @@
       let currentLastMessageId = Number(initialState.active_last_message_id || 0);
       let currentThreadsSignature = String(initialState.threads_signature || "");
       let currentMessagesSignature = String(initialState.active_messages_signature || "");
-      let threadsNextCursor = String(initialState.next_cursor || "");
-      let threadsHasMore = Boolean(initialState.has_more);
+      const threadsPagingStateKey = "__chatThreadsPagingState";
+      const threadsPagingScopeKey = [
+        String(window.location.pathname || ""),
+        String(queryValue || ""),
+        folderFilter === null || folderFilter === undefined ? "" : String(folderFilter),
+      ].join("|");
+      const readPersistedThreadsPaging = () => {
+        try {
+          const raw = window[threadsPagingStateKey];
+          if (!raw || typeof raw !== "object") return null;
+          if (String(raw.scope || "") !== threadsPagingScopeKey) return null;
+          return raw;
+        } catch (_) {
+          return null;
+        }
+      };
+      const persistThreadsPaging = (cursorValue, hasMoreValue) => {
+        try {
+          window[threadsPagingStateKey] = {
+            scope: threadsPagingScopeKey,
+            nextCursor: String(cursorValue || ""),
+            hasMore: Boolean(hasMoreValue),
+            savedAt: Date.now(),
+          };
+        } catch (_) {
+          // Paging must keep working even if window assignment fails.
+        }
+      };
+      const persistedThreadsPaging = readPersistedThreadsPaging();
+      const markerBoot = document.getElementById("threads-load-more");
+      const markerBootCursor = (
+        markerBoot instanceof HTMLElement
+          ? String(markerBoot.dataset.nextCursor || "").trim()
+          : ""
+      );
+      const markerBootHasMore = (
+        markerBoot instanceof HTMLElement
+          ? markerBoot.dataset.hasMore === "1"
+          : false
+      );
+      // Soft-nav rewrites DOM back to page-0; only reuse window paging when
+      // the list already contains more than the first page.
+      const loadedThreadCountBoot = document.querySelectorAll(".thread[data-thread-id]").length;
+      const canReusePersistedPaging = Boolean(
+        persistedThreadsPaging
+        && loadedThreadCountBoot > 60
+      );
+      let threadsNextCursor = String(
+        (canReusePersistedPaging && persistedThreadsPaging.nextCursor)
+        || markerBootCursor
+        || initialState.next_cursor
+        || ""
+      );
+      let threadsHasMore = Boolean(
+        canReusePersistedPaging
+          ? persistedThreadsPaging.hasMore
+          : (markerBootHasMore || initialState.has_more)
+      );
       let threadsLoadingMore = false;
       let inFlight = false;
+      const syncThreadSelectionFromState = () => {
+        if (typeof window.__chatSyncThreadSelectionFromState === "function") {
+          window.__chatSyncThreadSelectionFromState();
+        }
+      };
       let suppressRefreshUntil = 0;
       const basePollMs = 30000;
       const maxPollMs = 30000;
@@ -6670,12 +6733,21 @@
         }
         return pinnedContainer;
       };
-      const insertUnpinnedThreadNode = (node) => {
+      const insertUnpinnedThreadNode = (node, options = {}) => {
         const threadsContainer = document.querySelector(".threads");
         if (!(threadsContainer instanceof HTMLElement) || !(node instanceof HTMLElement)) return;
         const emptyNode = threadsContainer.querySelector(".empty");
         if (emptyNode instanceof HTMLElement) emptyNode.remove();
         const loadMore = document.getElementById("threads-load-more");
+        const appendAtEnd = Boolean(options && options.appendAtEnd);
+        if (appendAtEnd) {
+          if (loadMore instanceof HTMLElement) {
+            threadsContainer.insertBefore(node, loadMore);
+          } else {
+            threadsContainer.appendChild(node);
+          }
+          return;
+        }
         const existingUnpinned = Array.from(threadsContainer.querySelectorAll(".thread[data-thread-id]"))
           .filter((item) => item instanceof HTMLElement && item.dataset.threadPinned !== "1");
         const nodeKey = unpinnedSortKeyFromNode(node);
@@ -6706,6 +6778,7 @@
             .map((node) => [Number(node.getAttribute("data-thread-id") || 0), node])
             .filter(([id, node]) => Number(id) > 0 && node instanceof HTMLElement)
         );
+        let appendedCount = 0;
         threadsPayload.forEach((thread) => {
           if (!thread || typeof thread !== "object") return;
           const id = Number(thread.conversation_id || 0);
@@ -6744,7 +6817,9 @@
             if (pinnedContainer instanceof HTMLElement && node.parentElement === pinnedContainer) {
               node.remove();
             }
-            insertUnpinnedThreadNode(node);
+            // Load-more pages keep server order: append before the button.
+            insertUnpinnedThreadNode(node, { appendAtEnd: appendOnly });
+            if (appendOnly && isNewNode) appendedCount += 1;
           }
         });
         const pinnedContainer = document.getElementById("pinned-threads");
@@ -6764,7 +6839,7 @@
           emptyNode.remove();
         }
         syncThreadSelectionFromState();
-        return true;
+        return appendOnly ? appendedCount : true;
       };
       const syncThreadNodesFromPayload = (threadsPayload, options = {}) => {
         if (!Array.isArray(threadsPayload)) return false;
@@ -7347,6 +7422,7 @@
         if (!(marker instanceof HTMLElement)) return;
         marker.dataset.hasMore = threadsHasMore ? "1" : "0";
         marker.dataset.nextCursor = threadsHasMore ? String(threadsNextCursor || "") : "";
+        persistThreadsPaging(threadsNextCursor, threadsHasMore);
         if (threadsHasMore) {
           marker.hidden = false;
         } else {
@@ -7361,8 +7437,23 @@
       };
       syncThreadsLoadMoreMarker();
 
+      const readLoadMoreCursorFromDom = () => {
+        const marker = document.getElementById("threads-load-more");
+        if (!(marker instanceof HTMLElement)) return "";
+        return String(marker.dataset.nextCursor || "").trim();
+      };
+
       const loadMoreThreads = async () => {
-        if (!threadsEndpoint || threadsLoadingMore || !threadsHasMore) return;
+        if (!threadsEndpoint || threadsLoadingMore) return;
+        // Prefer live marker/DOM cursor so soft-nav re-init cannot rewind paging.
+        const domCursor = readLoadMoreCursorFromDom();
+        if (domCursor) {
+          threadsNextCursor = domCursor;
+        }
+        if (domCursor || threadsNextCursor) {
+          threadsHasMore = true;
+        }
+        if (!threadsHasMore) return;
         const cursorValue = String(threadsNextCursor || "").trim();
         if (!cursorValue) {
           threadsHasMore = false;
@@ -7377,15 +7468,25 @@
             credentials: "same-origin",
             cache: "no-store",
           });
-          if (!response.ok) return;
+          if (!response.ok) {
+            throw new Error(`threads_http_${response.status}`);
+          }
           const payload = await response.json().catch(() => null);
-          if (!payload || payload.ok !== true) return;
+          if (!payload || payload.ok !== true) {
+            throw new Error("threads_bad_payload");
+          }
+          // Advance cursor before DOM work so a later client exception cannot
+          // leave the button stuck re-fetching the same page.
+          const nextHasMore = Boolean(payload.has_more);
+          const nextCursor = String(payload.next_cursor || "");
+          threadsHasMore = nextHasMore;
+          threadsNextCursor = nextHasMore ? nextCursor : "";
+          persistThreadsPaging(threadsNextCursor, threadsHasMore);
+          syncThreadsLoadMoreMarker();
           const items = Array.isArray(payload.items) ? payload.items : [];
           if (items.length) {
             upsertThreadNodesFromPayload(items, { appendOnly: true });
           }
-          threadsHasMore = Boolean(payload.has_more);
-          threadsNextCursor = String(payload.next_cursor || "");
           if (payload.threads_signature) {
             currentThreadsSignature = String(payload.threads_signature || currentThreadsSignature);
           }
@@ -7397,8 +7498,8 @@
               unreadWithoutFolderCount: payload.unread_without_folder_count,
             }
           );
-        } catch (_) {
-          // Keep silent; user can press the button again.
+        } catch (err) {
+          console.error("[threads-load-more] failed:", String(err || ""));
         } finally {
           threadsLoadingMore = false;
           syncThreadsLoadMoreMarker();
