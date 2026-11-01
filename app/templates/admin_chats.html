@@ -327,6 +327,35 @@
       border-bottom: 1px dashed #d8e3f8;
       min-width: 0;
     }
+    .threads-load-more {
+      display: grid;
+      gap: 6px;
+      margin: 4px 0 2px;
+      min-width: 0;
+    }
+    .threads-load-more[hidden] {
+      display: none !important;
+    }
+    .threads-load-more-btn {
+      width: 100%;
+      border: 1px solid #c9daf8;
+      background: #f5f9ff;
+      color: #1f4f9c;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      min-width: 0;
+    }
+    .threads-load-more-btn:hover:not(:disabled) {
+      background: #ebf3ff;
+      border-color: #b5cdf5;
+    }
+    .threads-load-more-btn:disabled {
+      opacity: 0.72;
+      cursor: default;
+    }
     .thread.pinned {
       border-color: #d3e2ff;
       background: #f7fbff;
@@ -2913,8 +2942,17 @@
             class="threads-load-more"
             data-has-more="{{ '1' if (chat_state.has_more if chat_state is defined else false) else '0' }}"
             data-next-cursor="{{ chat_state.next_cursor if chat_state is defined and chat_state.next_cursor else '' }}"
-            hidden
-          ></div>
+            {% if not (chat_state.has_more if chat_state is defined else false) %}hidden{% endif %}
+          >
+            <button
+              type="button"
+              id="threads-load-more-btn"
+              class="threads-load-more-btn"
+              {% if not (chat_state.has_more if chat_state is defined else false) %}disabled{% endif %}
+            >
+              Подгрузить следующие 50 чатов
+            </button>
+          </div>
         </div>
       </div>
     </aside>
@@ -7305,9 +7343,21 @@
 
       const syncThreadsLoadMoreMarker = () => {
         const marker = document.getElementById("threads-load-more");
+        const btn = document.getElementById("threads-load-more-btn");
         if (!(marker instanceof HTMLElement)) return;
         marker.dataset.hasMore = threadsHasMore ? "1" : "0";
         marker.dataset.nextCursor = threadsHasMore ? String(threadsNextCursor || "") : "";
+        if (threadsHasMore) {
+          marker.hidden = false;
+        } else {
+          marker.hidden = true;
+        }
+        if (btn instanceof HTMLButtonElement) {
+          btn.disabled = !threadsHasMore || threadsLoadingMore || !threadsEndpoint;
+          btn.textContent = threadsLoadingMore
+            ? "Загрузка…"
+            : "Подгрузить следующие 50 чатов";
+        }
       };
       syncThreadsLoadMoreMarker();
 
@@ -7320,6 +7370,7 @@
           return;
         }
         threadsLoadingMore = true;
+        syncThreadsLoadMoreMarker();
         try {
           const response = await fetch(buildThreadsPageUrl(cursorValue), {
             method: "GET",
@@ -7346,23 +7397,19 @@
               unreadWithoutFolderCount: payload.unread_without_folder_count,
             }
           );
-          syncThreadsLoadMoreMarker();
         } catch (_) {
-          // Keep silent; next scroll will retry.
+          // Keep silent; user can press the button again.
         } finally {
           threadsLoadingMore = false;
+          syncThreadsLoadMoreMarker();
         }
       };
 
-      const threadsScrollRoot = document.querySelector(".chat-list-body") || document.querySelector(".threads");
-      if (threadsScrollRoot instanceof HTMLElement && threadsEndpoint) {
-        threadsScrollRoot.addEventListener("scroll", () => {
-          if (!threadsHasMore || threadsLoadingMore) return;
-          const remaining = threadsScrollRoot.scrollHeight - threadsScrollRoot.scrollTop - threadsScrollRoot.clientHeight;
-          if (remaining <= 240) {
-            loadMoreThreads();
-          }
-        }, { passive: true });
+      const threadsLoadMoreBtn = document.getElementById("threads-load-more-btn");
+      if (threadsLoadMoreBtn instanceof HTMLButtonElement) {
+        threadsLoadMoreBtn.addEventListener("click", () => {
+          loadMoreThreads();
+        });
       }
 
       const scheduleNext = (delayMs) => {
