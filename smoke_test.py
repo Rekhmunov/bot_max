@@ -326,6 +326,38 @@ def _run_thread_list_pagination_smoke(client: TestClient, *, cookies) -> None:
     assert "window.__chatSyncThreadSelectionFromState" in html_body
     assert "threads-load-more-btn" in html_body
 
+    # Opening an unread chat must clear unread in-place and keep list position
+    # (pre-pagination behavior). It must not jump to the bottom of page-0.
+    import re as _re
+
+    list_ids_before = [int(value) for value in _re.findall(r'data-thread-id="(\d+)"', html_body)]
+    unread_match = _re.search(
+        r'data-thread-id="(\d+)"[^>]*data-thread-unread="1"|data-thread-unread="1"[^>]*data-thread-id="(\d+)"',
+        html_body,
+    )
+    assert unread_match is not None
+    unread_open_id = int(unread_match.group(1) or unread_match.group(2) or 0)
+    assert unread_open_id > 0
+    assert unread_open_id in list_ids_before
+    pos_before = list_ids_before.index(unread_open_id)
+    opened_unread = client.get(
+        f"/admin/chats?conversation_id={unread_open_id}&view=chat&mark_read=1",
+        cookies=cookies,
+        follow_redirects=False,
+    )
+    assert opened_unread.status_code == 200
+    opened_html = opened_unread.text
+    list_ids_after = [int(value) for value in _re.findall(r'data-thread-id="(\d+)"', opened_html)]
+    assert unread_open_id in list_ids_after
+    pos_after = list_ids_after.index(unread_open_id)
+    assert pos_after == pos_before
+    opened_anchor = _re.search(
+        rf'<a[^>]*data-thread-id="{unread_open_id}"[^>]*>',
+        opened_html,
+    )
+    assert opened_anchor is not None
+    assert 'data-thread-unread="0"' in opened_anchor.group(0)
+
     updates_api = client.get("/admin/chats/updates?last_message_id=0&threads_sig=", cookies=cookies)
     assert updates_api.status_code == 200
     updates_payload = updates_api.json()

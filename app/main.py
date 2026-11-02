@@ -10346,7 +10346,22 @@ async def _render_chat_workspace(
                 setattr(active_thread, "is_unread", False)
             except Exception:
                 pass
-            # Refresh first page after mark-read so badges/signature stay aligned.
+            # Pre-pagination behavior: clear unread in-place and keep sidebar order.
+            # Rebuilding page-0 after mark-read made the opened chat jump to the
+            # bottom when it fell out of the unread window.
+            for item in threads:
+                if int(getattr(item, "conversation_id", 0) or 0) == int(active_thread.conversation_id):
+                    try:
+                        setattr(item, "is_unread", False)
+                    except Exception:
+                        pass
+                    break
+            # Refresh badges/signature only; keep pagination cursor tied to the
+            # rows still shown in the sidebar.
+            from dataclasses import replace as _dc_replace
+
+            stable_has_more = bool(page.has_more)
+            stable_next_cursor = page.next_cursor
             page = load_chat_threads_page(
                 db,
                 query=q,
@@ -10356,22 +10371,11 @@ async def _render_chat_workspace(
                 workspace_id=workspace_id,
                 service_user_id=service_user_id,
             )
-            threads = list(page.pinned) + list(page.items)
-            refreshed_active = None
-            for item in threads:
-                if int(getattr(item, "conversation_id", 0) or 0) == int(active_thread.conversation_id):
-                    refreshed_active = item
-                    break
-            if refreshed_active is not None:
-                active_thread = refreshed_active
-            else:
-                active_thread = load_chat_thread_by_id(
-                    db,
-                    conversation_id=int(active_thread.conversation_id),
-                    workspace_id=workspace_id,
-                    service_user_id=service_user_id,
-                ) or active_thread
-                threads = list(threads) + [active_thread]
+            page = _dc_replace(
+                page,
+                next_cursor=stable_next_cursor,
+                has_more=stable_has_more,
+            )
         messages = load_chat_messages(db, active_thread.conversation_id, workspace_id=workspace_id)
         _hydrate_message_media_urls(db, messages)
         _hydrate_message_link_previews(db, messages)
