@@ -80,6 +80,7 @@ from app.manager_bridge import (
     _try_delete_unreferenced_media_file,
     handle_customer_event,
     apply_incoming_customer_message_edit,
+    apply_incoming_customer_message_remove,
     handle_manager_message,
     backfill_chat_message_media_assets,
     cleanup_orphan_chat_message_media_links,
@@ -1284,6 +1285,7 @@ async def _auto_subscribe_workspace_webhook(settings_row: BotSettings) -> tuple[
         update_types=[
             "message_created",
             "message_edited",
+            "message_removed",
             "message_callback",
             "bot_started",
         ],
@@ -11155,6 +11157,7 @@ async def max_webhook(
     accepted_update_types = {
         "message_created",
         "message_edited",
+        "message_removed",
         "message_callback",
         "new_message",
         "message_read",
@@ -11265,6 +11268,32 @@ async def max_webhook(
                     )
                 )
         return edit_result
+
+    if update_type == "message_removed":
+        remove_result = await apply_incoming_customer_message_remove(
+            db=db,
+            settings=settings_db,
+            event=event,
+        )
+        _wh_log.warning(
+            "[WEBHOOK] handled type=message_removed key=%s workspace=%s flow=%s mid=%s",
+            str(webhook_key or "")[:24],
+            int(workspace_id),
+            str((remove_result or {}).get("flow") or (remove_result or {}).get("ignored") or "-"),
+            str(event.message_mid or "")[:48],
+        )
+        # Refresh open chat UIs when an existing customer message was removed.
+        if str((remove_result or {}).get("flow") or "") == "message_removed":
+            with suppress(Exception):
+                conversation_hint_id = _extract_conversation_id_from_result(remove_result)
+                asyncio.create_task(
+                    _broadcast_workspace_chat_update(
+                        workspace_id=workspace_id,
+                        conversation_id=conversation_hint_id,
+                        source="incoming_customer_message_removed",
+                    )
+                )
+        return remove_result
 
     result = await handle_customer_event(
         db=db,
