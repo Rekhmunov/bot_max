@@ -128,13 +128,10 @@ class MaxWebhookEvent(BaseModel):
     video_tokens: list[str] = Field(default_factory=list)
 
     def event_uid_value(self) -> str | None:
-        if self.update_id:
-            return f"update:{self.update_id}"
         update_type = (self.update_type or "").strip().lower()
-        if update_type == "message_read" and self.read_message_mid:
-            return f"read:{self.chat_id}:{self.sender_id}:{self.read_message_mid}"
-        # Edits reuse the same message mid as message_created; include content
-        # fingerprint so a real edit is not dropped by webhook dedupe.
+        # Edits reuse the same message mid as message_created; fingerprint
+        # content so retries dedupe and real edits are not dropped. Prefer
+        # this over generic update_id which may collide across event kinds.
         if update_type == "message_edited" and self.message_mid:
             images_key = ",".join(
                 str(url).strip() for url in (self.image_urls or []) if str(url).strip()
@@ -145,6 +142,10 @@ class MaxWebhookEvent(BaseModel):
             return (
                 f"edit:{self.chat_id}:{self.sender_id}:{self.message_mid}:{digest}"
             )
+        if self.update_id:
+            return f"update:{self.update_id}"
+        if update_type == "message_read" and self.read_message_mid:
+            return f"read:{self.chat_id}:{self.sender_id}:{self.read_message_mid}"
         if self.message_mid:
             return f"message:{self.chat_id}:{self.sender_id}:{self.message_mid}"
         if self.message_mid:
