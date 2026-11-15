@@ -772,6 +772,10 @@ class MaxClient:
             payload["secret"] = str(secret).strip()
         return await self._post("/subscriptions", payload)
 
+    async def list_subscriptions(self) -> dict[str, Any]:
+        """GET /subscriptions — current webhook subscriptions for this bot token."""
+        return await self._get("/subscriptions")
+
     async def unsubscribe_webhook(self, *, url: str) -> dict[str, Any]:
         normalized = str(url or "").strip()
         if not normalized:

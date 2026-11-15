@@ -916,6 +916,107 @@ def _run_customer_message_removed_smoke(client: TestClient, *, cookies) -> None:
         assert follow_up == 1
 
 
+def _run_max_edit_remove_docs_contract_smoke(client: TestClient, *, cookies) -> None:
+    """
+    Contracts from Max docs (Update + POST/GET /subscriptions), not guesses:
+    - message_edited carries message.body.mid
+    - message_removed carries top-level message_id/chat_id/user_id
+    - update_types must include message_edited + message_removed
+    - webhook secret is verified via X-Max-Bot-Api-Secret
+    """
+    from app.main import (
+        REQUIRED_WEBHOOK_UPDATE_TYPES,
+        _subscription_missing_required_types,
+        _subscription_update_types,
+    )
+    from app.schemas import MaxWebhookEvent
+    from app.security import verify_max_webhook_secret
+
+    assert "message_edited" in REQUIRED_WEBHOOK_UPDATE_TYPES
+    assert "message_removed" in REQUIRED_WEBHOOK_UPDATE_TYPES
+    assert "message_created" in REQUIRED_WEBHOOK_UPDATE_TYPES
+
+    # Stale production subscription from before edit/remove support.
+    stale = {"url": "https://example.com/webhook/max/k", "update_types": ["message_created", "bot_started"]}
+    missing = _subscription_missing_required_types(stale)
+    assert "message_edited" in missing
+    assert "message_removed" in missing
+    assert _subscription_update_types({"update_types": None}) is None
+    assert _subscription_missing_required_types({"update_types": None}) == []
+    assert _subscription_missing_required_types(None) == list(REQUIRED_WEBHOOK_UPDATE_TYPES)
+
+    assert verify_max_webhook_secret(secret="abcde", provided_secret="abcde") is True
+    assert verify_max_webhook_secret(secret="abcde", provided_secret="abcdf") is False
+    assert verify_max_webhook_secret(secret="abcde", provided_secret="abcd") is False
+
+    edited_event = MaxWebhookEvent.from_payload(
+        {
+            "update_type": "message_edited",
+            "timestamp": 0,
+            "message": {
+                "sender": {"user_id": 11, "first_name": "A", "is_bot": False},
+                "recipient": {"chat_id": 22, "chat_type": "dialog"},
+                "timestamp": 0,
+                "body": {"mid": "mid.edited.docs", "seq": 1, "text": "after edit", "attachments": []},
+            },
+        }
+    )
+    assert edited_event is not None
+    assert edited_event.update_type == "message_edited"
+    assert edited_event.message_mid == "mid.edited.docs"
+    assert edited_event.chat_id == "22"
+    assert edited_event.sender_id == "11"
+    assert edited_event.text == "after edit"
+
+    removed_event = MaxWebhookEvent.from_payload(
+        {
+            "update_type": "message_removed",
+            "timestamp": 0,
+            "message_id": "mid.removed.docs",
+            "chat_id": 22,
+            "user_id": 11,
+        }
+    )
+    assert removed_event is not None
+    assert removed_event.update_type == "message_removed"
+    assert removed_event.message_mid == "mid.removed.docs"
+    assert removed_event.chat_id == "22"
+    assert removed_event.sender_id == "11"
+
+    # Secret header path used by Max when subscription was created with `secret`.
+    from app.config import settings as app_settings
+
+    previous_secret = app_settings.webhook_secret
+    try:
+        app_settings.webhook_secret = "docs_secret_ok"
+        rejected = client.post(
+            "/webhook/max/ws1key",
+            headers={"X-Max-Bot-Api-Secret": "wrong_secret_xx"},
+            json={
+                "update_type": "message_removed",
+                "message_id": "mid.secret.reject",
+                "chat_id": "chat.secret",
+                "user_id": "user.secret",
+            },
+        )
+        assert rejected.status_code == 403
+
+        accepted = client.post(
+            "/webhook/max/ws1key",
+            headers={"X-Max-Bot-Api-Secret": "docs_secret_ok"},
+            json={
+                "update_type": "message_removed",
+                "message_id": f"mid.secret.accept.{uuid4().hex[:8]}",
+                "chat_id": "chat.secret",
+                "user_id": "user.secret",
+            },
+        )
+        assert accepted.status_code == 200
+        assert accepted.json().get("ok") is True
+    finally:
+        app_settings.webhook_secret = previous_secret
+
+
 def _run_scroll_near_bottom_snap_smoke(client: TestClient, *, cookies) -> None:
     page = client.get("/admin/chats", cookies=cookies, follow_redirects=False)
     assert page.status_code == 200
@@ -1447,6 +1548,7 @@ def run() -> None:
         _run_customer_message_edited_smoke(client, cookies=cookies)
         _run_customer_edit_does_not_retrigger_prestart_smoke(client, cookies=cookies)
         _run_customer_message_removed_smoke(client, cookies=cookies)
+        _run_max_edit_remove_docs_contract_smoke(client, cookies=cookies)
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
         _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
 
