@@ -3121,12 +3121,7 @@
                     {% else %}
                       <span class="bubble-tail-time">{{ msg.created_at_label or "—" }}</span>
                       {% if is_edited %}
-                        <span class="bubble-edited-mark" aria-label="Отредактировано">
-                          Ред.
-                          {% if msg.original_text is defined and msg.original_text is not none %}
-                            <span class="bubble-edited-tooltip">{{ msg.original_text }}</span>
-                          {% endif %}
-                        </span>
+                        <span class="bubble-edited-mark" aria-label="Отредактировано">Ред.{% if msg.original_text is defined and msg.original_text is not none %}<span class="bubble-edited-tooltip">{{ msg.original_text }}</span>{% endif %}</span>
                       {% endif %}
                       {% if msg.direction == "bot" %}
                         {% if state == "failed" %}
@@ -7356,10 +7351,32 @@
           }))
           .filter((item) => item.messageId > 0);
         const payloadRenderableIds = payloadRenderableRows.map((item) => item.messageId);
-        const canAppendOnly =
+        const idsArePrefix =
           existingIds.length > 0 &&
           payloadRenderableIds.length >= existingIds.length &&
           existingIds.every((id, idx) => id === payloadRenderableIds[idx]);
+        // Append-only is safe only when overlapping bubbles already match the
+        // latest fingerprint. Otherwise edits / soft-deletes / delivery ticks
+        // on existing rows would stay stale in short chats.
+        let canAppendOnly = false;
+        if (idsArePrefix) {
+          canAppendOnly = true;
+          for (let idx = 0; idx < existingIds.length; idx += 1) {
+            const existingNode = existingBubbleNodes[idx];
+            const row = payloadRenderableRows[idx]?.row;
+            if (!(existingNode instanceof HTMLElement) || !row) {
+              canAppendOnly = false;
+              break;
+            }
+            const previousFingerprint = String(existingNode.dataset.renderFingerprint || "");
+            const nextFingerprint = bubbleRenderFingerprint(row);
+            // Missing fingerprint (SSR) or content drift => rebuild path.
+            if (!previousFingerprint || previousFingerprint !== nextFingerprint) {
+              canAppendOnly = false;
+              break;
+            }
+          }
+        }
         const previousDistanceToBottom = Math.max(
           0,
           messagesWrap.scrollHeight - messagesWrap.scrollTop - messagesWrap.clientHeight
