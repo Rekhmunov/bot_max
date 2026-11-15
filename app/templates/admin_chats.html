@@ -978,10 +978,22 @@
       border-bottom-left-radius: 6px;
       background: #fbfdff;
     }
+    .bubble.customer-deleted {
+      /* Border-only marker for customer soft-delete; keep normal bubble fill. */
+      border-color: var(--danger);
+      background: #fbfdff;
+    }
     .bubble.bot {
       align-self: flex-end;
       border-bottom-right-radius: 6px;
       background: #f2f7ff;
+    }
+    .customer-deleted-status {
+      margin-top: 6px;
+      color: var(--danger);
+      font-size: 12px;
+      font-weight: 600;
+      background: transparent;
     }
     .bubble-meta {
       font-size: 12px;
@@ -1788,6 +1800,40 @@
       color: var(--muted);
       white-space: nowrap;
     }
+    .bubble-edited-mark {
+      position: relative;
+      font-size: 11px;
+      color: var(--muted);
+      white-space: nowrap;
+      cursor: default;
+      user-select: none;
+    }
+    .bubble-edited-tooltip {
+      display: none;
+      position: absolute;
+      right: 0;
+      bottom: calc(100% + 6px);
+      z-index: 5;
+      min-width: 120px;
+      max-width: min(280px, 70vw);
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: #1f2a45;
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      word-break: break-word;
+      box-shadow: var(--shadow);
+      pointer-events: none;
+    }
+    @media (hover: hover) and (pointer: fine) {
+      .bubble-edited-mark:hover .bubble-edited-tooltip {
+        display: block;
+      }
+    }
     .scheduled-label {
       font-size: 11px;
       color: var(--muted);
@@ -2526,6 +2572,10 @@
     .bubble.customer {
       background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
     }
+    .bubble.customer-deleted {
+      border-color: var(--danger);
+      background: linear-gradient(180deg, #ffffff 0%, #f7fbff 100%);
+    }
     .bubble.bot {
       background: linear-gradient(180deg, #f3f8ff 0%, #eaf3ff 100%);
       border-color: #c6dbff;
@@ -3016,12 +3066,16 @@
               {% set message_images = (msg.image_urls if msg.image_urls is defined else []) %}
               {% if msg.text or message_images or (msg.direction == "bot" and msg.delivery_state == "failed") %}
               {% set shown.count = shown.count + 1 %}
+              {% set is_deleted_by_customer = (msg.is_deleted_by_customer if msg.is_deleted_by_customer is defined else false) %}
+              {% set is_edited = (msg.is_edited if msg.is_edited is defined else false) %}
               <article
-                class="bubble {{ msg.direction }}"
+                class="bubble {{ msg.direction }}{% if is_deleted_by_customer %} customer-deleted{% endif %}"
                 data-message-id="{{ msg.id }}"
                 data-message-text="{{ (msg.text or '')|e }}"
                 data-message-direction="{{ msg.direction }}"
                 data-message-mid="{{ (msg.max_message_mid or '')|e }}"
+                {% if is_edited %}data-is-edited="1"{% endif %}
+                {% if is_deleted_by_customer %}data-deleted-by-customer="1"{% endif %}
                 {% if msg.link_mid %}data-link-mid="{{ (msg.link_mid or '')|e }}"{% endif %}
               >
                 {% if msg.link_mid %}
@@ -3066,6 +3120,14 @@
                       </span>
                     {% else %}
                       <span class="bubble-tail-time">{{ msg.created_at_label or "—" }}</span>
+                      {% if is_edited %}
+                        <span class="bubble-edited-mark" aria-label="Отредактировано">
+                          Ред.
+                          {% if msg.original_text is defined and msg.original_text is not none %}
+                            <span class="bubble-edited-tooltip">{{ msg.original_text }}</span>
+                          {% endif %}
+                        </span>
+                      {% endif %}
                       {% if msg.direction == "bot" %}
                         {% if state == "failed" %}
                           {% set ticks = "✓✓" %}
@@ -3094,6 +3156,9 @@
                       {% endif %}
                     {% endif %}
                   </div>
+                {% endif %}
+                {% if is_deleted_by_customer %}
+                  <div class="customer-deleted-status">Пользователь удалил сообщение</div>
                 {% endif %}
                 {% if msg.direction == "bot" and msg.delivery_state == "failed" %}
                   <div class="delivery-error">
@@ -7032,6 +7097,9 @@
         const maxMessageMid = String(row.max_message_mid || "").trim();
         const linkMid = String(row.link_mid || "").trim();
         const linkPreviewText = String(row.link_preview_text || "").trim();
+        const isEdited = Boolean(row.is_edited);
+        const originalText = isEdited ? String(row.original_text || "") : "";
+        const isDeletedByCustomer = Boolean(row.is_deleted_by_customer);
         const imageUrlsRaw = Array.isArray(row.image_urls) ? row.image_urls : [];
         const imageUrls = imageUrlsRaw
           .map((url) => String(url || "").trim())
@@ -7058,6 +7126,9 @@
           maxMessageMid,
           linkMid,
           linkPreviewText,
+          isEdited,
+          originalText,
+          isDeletedByCustomer,
         };
       };
       const bubbleRenderFingerprint = (row) => {
@@ -7077,6 +7148,9 @@
           maxMessageMid,
           linkMid,
           linkPreviewText,
+          isEdited,
+          originalText,
+          isDeletedByCustomer,
         } = meta;
         return [
           String(messageId || 0),
@@ -7092,6 +7166,9 @@
           String(maxMessageMid || ""),
           String(linkMid || ""),
           String(linkPreviewText || ""),
+          isEdited ? "1" : "0",
+          String(originalText || ""),
+          isDeletedByCustomer ? "1" : "0",
         ].join("::");
       };
       const createMessageBubbleNode = (row) => {
@@ -7111,10 +7188,13 @@
           maxMessageMid,
           linkMid,
           linkPreviewText,
+          isEdited,
+          originalText,
+          isDeletedByCustomer,
         } = meta;
 
         const bubble = document.createElement("article");
-        bubble.className = `bubble ${direction || "bot"}`.trim();
+        bubble.className = `bubble ${direction || "bot"}${isDeletedByCustomer ? " customer-deleted" : ""}`.trim();
         if (messageId > 0 && !seenMessageIds.has(messageId)) {
           bubble.classList.add("is-new");
           seenMessageIds.add(messageId);
@@ -7123,6 +7203,8 @@
         bubble.dataset.messageText = text;
         bubble.dataset.messageDirection = direction || "bot";
         bubble.dataset.messageMid = maxMessageMid || "";
+        if (isEdited) bubble.dataset.isEdited = "1";
+        if (isDeletedByCustomer) bubble.dataset.deletedByCustomer = "1";
         if (linkMid) bubble.dataset.linkMid = linkMid;
 
         if (linkMid) {
@@ -7196,6 +7278,17 @@
             timeNode.className = "bubble-tail-time";
             timeNode.textContent = String(createdAtLabel || "—");
             tail.appendChild(timeNode);
+            if (isEdited) {
+              const editedNode = document.createElement("span");
+              editedNode.className = "bubble-edited-mark";
+              editedNode.setAttribute("aria-label", "Отредактировано");
+              editedNode.appendChild(document.createTextNode("Ред."));
+              const tooltipNode = document.createElement("span");
+              tooltipNode.className = "bubble-edited-tooltip";
+              tooltipNode.textContent = String(originalText || "");
+              editedNode.appendChild(tooltipNode);
+              tail.appendChild(editedNode);
+            }
             if (direction === "bot") {
               let ticks = "✓";
               let statusClass = "sent";
@@ -7225,6 +7318,13 @@
             }
           }
           bubble.appendChild(tail);
+        }
+
+        if (isDeletedByCustomer) {
+          const deletedStatus = document.createElement("div");
+          deletedStatus.className = "customer-deleted-status";
+          deletedStatus.textContent = "Пользователь удалил сообщение";
+          bubble.appendChild(deletedStatus);
         }
 
         if (direction === "bot" && deliveryState === "failed") {

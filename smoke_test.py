@@ -442,6 +442,8 @@ def _run_customer_message_edited_smoke(client: TestClient, *, cookies) -> None:
         row = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
         assert row is not None
         assert str(row.text or "") == "edited text"
+        assert str(getattr(row, "original_text", None) or "") == "original text"
+        assert getattr(row, "edited_at", None) is not None
         messages_after = (
             db.query(ChatMessage)
             .filter(
@@ -811,7 +813,10 @@ def _run_customer_message_removed_smoke(client: TestClient, *, cookies) -> None:
 
     with SessionLocal() as db:
         row = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
-        assert row is None
+        assert row is not None
+        assert bool(getattr(row, "is_deleted_by_customer", False)) is True
+        assert getattr(row, "deleted_at", None) is not None
+        assert str(row.text or "") == "please delete me"
         messages_after = (
             db.query(ChatMessage)
             .filter(
@@ -821,7 +826,7 @@ def _run_customer_message_removed_smoke(client: TestClient, *, cookies) -> None:
             )
             .count()
         )
-        assert messages_after == messages_before - 1
+        assert messages_after == messages_before
 
     # Same remove redelivery must be ignored by dedupe and must not recreate rows.
     removed_again = client.post(
@@ -914,6 +919,96 @@ def _run_customer_message_removed_smoke(client: TestClient, *, cookies) -> None:
             .count()
         )
         assert follow_up == 1
+
+
+def _run_edit_delete_ui_markers_smoke(client: TestClient, *, cookies) -> None:
+    """SSR + payload markers for «Ред.» and soft-deleted customer messages."""
+    from app.models import ChatMessage
+    from app.services import get_or_create_settings
+
+    page = client.get("/admin/chats", cookies=cookies, follow_redirects=False)
+    assert page.status_code == 200
+    html = page.text
+    assert "bubble-edited-mark" in html
+    assert "customer-deleted" in html
+    assert "Пользователь удалил сообщение" in html
+    assert "@media (hover: hover) and (pointer: fine)" in html
+
+    buyer_id = f"buyer_ui_{uuid4().hex[:8]}"
+    chat_id = f"chat_ui_{uuid4().hex[:8]}"
+    message_mid = f"mid_ui_{uuid4().hex[:10]}"
+    with SessionLocal() as db:
+        ws1_settings = get_or_create_settings(db, workspace_id=1)
+        ws1_settings.bot_token = "token_ui_markers_ws1"
+        ws1_settings.webhook_key = "ws1key"
+        db.add(ws1_settings)
+        db.commit()
+
+    created = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_created",
+            "message": {
+                "sender": {"user_id": buyer_id, "first_name": "UI Buyer"},
+                "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                "body": {"mid": message_mid, "text": "before edit ui"},
+            },
+        },
+    )
+    assert created.status_code == 200
+    edited = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_edited",
+            "message": {
+                "sender": {"user_id": buyer_id, "first_name": "UI Buyer"},
+                "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                "body": {"mid": message_mid, "text": "after edit ui"},
+            },
+        },
+    )
+    assert edited.status_code == 200
+    assert edited.json().get("flow") == "message_edited"
+    removed = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_removed",
+            "message_id": message_mid,
+            "chat_id": chat_id,
+            "user_id": buyer_id,
+        },
+    )
+    assert removed.status_code == 200
+    assert removed.json().get("flow") == "message_removed"
+
+    with SessionLocal() as db:
+        row = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.workspace_id == 1,
+                ChatMessage.max_message_mid == message_mid,
+                ChatMessage.direction == "customer",
+            )
+            .order_by(ChatMessage.id.desc())
+            .first()
+        )
+        assert row is not None
+        conversation_id = int(row.conversation_id)
+        assert str(row.original_text or "") == "before edit ui"
+        assert bool(row.is_deleted_by_customer) is True
+
+    chat_page = client.get(
+        f"/admin/chats?conversation_id={conversation_id}",
+        cookies=cookies,
+        follow_redirects=False,
+    )
+    assert chat_page.status_code == 200
+    chat_html = chat_page.text
+    assert "Ред." in chat_html
+    assert "before edit ui" in chat_html
+    assert "after edit ui" in chat_html
+    assert "customer-deleted" in chat_html
+    assert "Пользователь удалил сообщение" in chat_html
 
 
 def _run_max_edit_remove_docs_contract_smoke(client: TestClient, *, cookies) -> None:
@@ -1548,6 +1643,7 @@ def run() -> None:
         _run_customer_message_edited_smoke(client, cookies=cookies)
         _run_customer_edit_does_not_retrigger_prestart_smoke(client, cookies=cookies)
         _run_customer_message_removed_smoke(client, cookies=cookies)
+        _run_edit_delete_ui_markers_smoke(client, cookies=cookies)
         _run_max_edit_remove_docs_contract_smoke(client, cookies=cookies)
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
         _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
