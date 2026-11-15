@@ -4806,16 +4806,30 @@ async def apply_incoming_customer_message_edit(
     if not message_mid:
         return {"ok": True, "ignored": "message_edited_missing_mid"}
 
-    msg = (
-        db.query(ChatMessage)
-        .filter(
-            ChatMessage.workspace_id == workspace_id,
-            ChatMessage.max_message_mid == message_mid,
-            ChatMessage.direction == "customer",
-        )
-        .order_by(ChatMessage.id.desc())
-        .first()
+    chat_id = str(event.chat_id or "").strip()
+    query = db.query(ChatMessage).filter(
+        ChatMessage.workspace_id == workspace_id,
+        ChatMessage.max_message_mid == message_mid,
+        ChatMessage.direction == "customer",
     )
+    if chat_id:
+        conversation_id = (
+            db.query(Conversation.id)
+            .filter(
+                Conversation.workspace_id == workspace_id,
+                Conversation.chat_id == chat_id,
+            )
+            .scalar()
+        )
+        if conversation_id is None:
+            return {
+                "ok": True,
+                "ignored": "message_edited_unknown_chat",
+                "message_mid": message_mid,
+            }
+        query = query.filter(ChatMessage.conversation_id == int(conversation_id))
+
+    msg = query.order_by(ChatMessage.id.desc()).first()
     if msg is None:
         return {
             "ok": True,
@@ -4834,6 +4848,7 @@ async def apply_incoming_customer_message_edit(
         msg.text = new_text
         changed = True
 
+    sync_media_urls: list[str] | None = None
     if incoming_image_urls:
         normalized_image_urls = await _materialize_incoming_image_urls(
             image_urls=incoming_image_urls,
@@ -4841,12 +4856,14 @@ async def apply_incoming_customer_message_edit(
             workspace_id=workspace_id,
         )
         next_image_url = normalized_image_urls[0] if normalized_image_urls else None
-        next_image_urls_json = (
-            json.dumps(normalized_image_urls, ensure_ascii=False)
-            if normalized_image_urls
-            else "[]"
+        next_image_urls_json = _normalize_image_urls_json(
+            (
+                json.dumps(normalized_image_urls, ensure_ascii=False)
+                if normalized_image_urls
+                else "[]"
+            ),
+            next_image_url,
         )
-        next_image_urls_json = _normalize_image_urls_json(next_image_urls_json, next_image_url)
         prev_image_urls_json = _normalize_image_urls_json(
             getattr(msg, "image_urls_json", None),
             getattr(msg, "image_url", None),
@@ -4858,14 +4875,9 @@ async def apply_incoming_customer_message_edit(
             msg.image_url = next_image_url
             msg.image_urls_json = next_image_urls_json
             changed = True
-            linked_media_paths = _chat_message_media_paths(msg)
-            if linked_media_paths:
-                _link_chat_message_media_assets(
-                    db,
-                    chat_message_id=int(msg.id),
-                    workspace_id=int(msg.workspace_id or workspace_id),
-                    media_paths=linked_media_paths,
-                )
+            # Prefer explicit URL list: _chat_message_media_paths() would return
+            # stale asset links and skip newly materialized edit media.
+            sync_media_urls = list(normalized_image_urls)
 
     if not changed:
         return {
@@ -4879,6 +4891,13 @@ async def apply_incoming_customer_message_edit(
     db.add(msg)
     db.commit()
     db.refresh(msg)
+    if sync_media_urls is not None:
+        _sync_chat_message_media_links(
+            db,
+            chat_message_id=int(msg.id),
+            workspace_id=int(msg.workspace_id or workspace_id),
+            image_urls=sync_media_urls,
+        )
     return {
         "ok": True,
         "flow": "message_edited",

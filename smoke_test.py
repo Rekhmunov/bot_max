@@ -520,6 +520,99 @@ def _run_customer_message_edited_smoke(client: TestClient, *, cookies) -> None:
         )
         assert follow_up == 1
 
+    # Media edit must replace stale asset links, not keep old ones.
+    import asyncio
+    from unittest.mock import AsyncMock, patch
+
+    from app.manager_bridge import apply_incoming_customer_message_edit
+    from app.max_client import MaxClient
+    from app.models import ChatMessageMedia, MediaAsset
+    from app.schemas import MaxWebhookEvent
+
+    media_mid = f"mid_media_{uuid4().hex[:8]}"
+    media_created = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_created",
+            "message": {
+                "sender": {"user_id": buyer_id, "first_name": "Edit Buyer"},
+                "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                "body": {"mid": media_mid, "text": "with photo"},
+            },
+        },
+    )
+    assert media_created.status_code == 200
+    with SessionLocal() as db:
+        media_msg = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.workspace_id == 1,
+                ChatMessage.max_message_mid == media_mid,
+            )
+            .one()
+        )
+        old_asset = MediaAsset(
+            workspace_id=1,
+            storage_provider="local",
+            storage_key="old-edit.jpg",
+            public_url="/static/old-edit.jpg",
+            mime_type="image/jpeg",
+            byte_size=1,
+        )
+        db.add(old_asset)
+        db.commit()
+        db.refresh(old_asset)
+        db.add(
+            ChatMessageMedia(
+                workspace_id=1,
+                chat_message_id=int(media_msg.id),
+                media_asset_id=int(old_asset.id),
+                sort_order=0,
+                role="image",
+            )
+        )
+        media_msg.image_url = "/static/old-edit.jpg"
+        media_msg.image_urls_json = '["/static/old-edit.jpg"]'
+        db.add(media_msg)
+        db.commit()
+        settings_row = get_or_create_settings(db, workspace_id=1)
+        edit_event = MaxWebhookEvent(
+            chat_id=chat_id,
+            sender_id=buyer_id,
+            text="with photo edited",
+            update_type="message_edited",
+            message_mid=media_mid,
+            image_urls=["/static/new-edit.jpg"],
+        )
+
+        async def _apply_media_edit():
+            with patch(
+                "app.manager_bridge._materialize_incoming_image_urls",
+                AsyncMock(return_value=["/static/new-edit.jpg"]),
+            ):
+                return await apply_incoming_customer_message_edit(
+                    db,
+                    client=MaxClient(token="token_message_edit_ws1"),
+                    settings=settings_row,
+                    event=edit_event,
+                )
+
+        media_edit_result = asyncio.run(_apply_media_edit())
+        assert media_edit_result.get("flow") == "message_edited"
+        db.refresh(media_msg)
+        assert str(media_msg.text or "") == "with photo edited"
+        assert str(media_msg.image_url or "") == "/static/new-edit.jpg"
+        linked_urls = [
+            str(asset.public_url or "")
+            for _link, asset in (
+                db.query(ChatMessageMedia, MediaAsset)
+                .join(MediaAsset, MediaAsset.id == ChatMessageMedia.media_asset_id)
+                .filter(ChatMessageMedia.chat_message_id == int(media_msg.id))
+                .all()
+            )
+        ]
+        assert linked_urls == ["/static/new-edit.jpg"]
+
 
 def _run_scroll_near_bottom_snap_smoke(client: TestClient, *, cookies) -> None:
     page = client.get("/admin/chats", cookies=cookies, follow_redirects=False)
