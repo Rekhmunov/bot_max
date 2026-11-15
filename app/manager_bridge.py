@@ -2050,7 +2050,7 @@ def _has_substantive_customer_history(
     for row in customer_history_rows:
         row_text = str((row[0] if row else "") or "").strip().lower()
         has_service_marker = bool((row[1] if row else None) or (row[2] if row else None))
-        if row_text in {"", "/start", "start", "bot_started", "bot_start"}:
+        if (not row_text) or _is_start_command_text(row_text):
             continue
         # Contact share can arrive with empty text + service marker.
         if has_service_marker and not row_text:
@@ -4440,6 +4440,38 @@ def _parse_manager_callback_action(
     return None
 
 
+def _normalize_start_command_text(value: str | None) -> str:
+    """Normalize user/button start texts so variants still match."""
+    text = str(value or "")
+    # Strip zero-width / BOM characters that Max clients sometimes preserve.
+    for ch in ("\ufeff", "\u200b", "\u200c", "\u200d", "\u2060"):
+        text = text.replace(ch, "")
+    text = text.strip().lower()
+    # Message buttons / clients may use backslash or unicode slashes.
+    for slash in ("\\", "\u2215", "\uff0f", "\u2044"):
+        text = text.replace(slash, "/")
+    text = " ".join(text.split())
+    if text.startswith("/") and " " in text:
+        # Keep "/start ..." payloads comparable on the command token.
+        text = text.split(" ", 1)[0]
+    return text
+
+
+_START_COMMAND_TEXTS = {
+    "/start",
+    "start",
+    "bot_started",
+    "bot_start",
+    "начать",
+    "start/начать",
+    "start / начать",
+}
+
+
+def _is_start_command_text(value: str | None) -> bool:
+    return _normalize_start_command_text(value) in _START_COMMAND_TEXTS
+
+
 def _is_start_intent_event(event: MaxWebhookEvent) -> bool:
     update_type = str(event.update_type or "").strip().lower()
     if update_type in {"bot_started", "bot_start"}:
@@ -4448,8 +4480,7 @@ def _is_start_intent_event(event: MaxWebhookEvent) -> bool:
     # Backward compatibility for previously sent callback-based start buttons.
     if callback_payload == "customer:start_fallback":
         return True
-    text_value = str(event.text or "").strip().lower()
-    if text_value in {"/start", "start", "bot_started", "bot_start"}:
+    if _is_start_command_text(event.text):
         return True
     return False
 
@@ -4518,9 +4549,9 @@ async def _send_start_fallback_prompt(
                 "buttons": [
                     [
                         {
-                            # Primary start path should produce normal message_created text "/start".
+                            # Visible label matches prestart copy; also recognized as start intent.
                             "type": "message",
-                            "text": "/start",
+                            "text": "Start / Начать",
                         }
                     ]
                 ]
@@ -4915,6 +4946,13 @@ async def handle_customer_event(
 ) -> dict:
     workspace_id = settings.workspace_id or DEFAULT_WORKSPACE_ID
     require_phone = bool(getattr(settings, "request_customer_phone", True))
+    update_type_early = str(event.update_type or "").strip().lower()
+    # Defense in depth: edits/removes must never run onboarding/prestart side effects.
+    if update_type_early in {"message_edited", "message_removed"}:
+        return {
+            "ok": True,
+            "ignored": f"{update_type_early}_via_customer_handler",
+        }
     existing_customer_conversation_before = (
         db.query(Conversation)
         .filter(
@@ -4952,6 +4990,28 @@ async def handle_customer_event(
         phone_number=event.contact_phone,
         workspace_id=workspace_id,
     )
+    # If Max redelivers an edit as message_created (same mid, new update_id),
+    # update in place and skip bot automation / duplicate rows.
+    existing_mid = str(event.message_mid or "").strip()
+    if existing_mid and update_type_early in {"", "message_created", "new_message"}:
+        existing_by_mid = (
+            db.query(ChatMessage.id)
+            .filter(
+                ChatMessage.workspace_id == int(workspace_id),
+                ChatMessage.conversation_id == int(conversation.id),
+                ChatMessage.max_message_mid == existing_mid,
+                ChatMessage.direction == "customer",
+            )
+            .order_by(ChatMessage.id.desc())
+            .first()
+        )
+        if existing_by_mid is not None:
+            return await apply_incoming_customer_message_edit(
+                db=db,
+                client=client,
+                settings=settings,
+                event=event,
+            )
     if _is_onboarding_template_echo_event(
         db,
         workspace_id=int(workspace_id),
@@ -5154,8 +5214,7 @@ async def handle_customer_event(
     # Message before Start (custom behavior for message_created before start)
     # Do not intercept explicit /start text commands here: they should enter
     # the normal start flow and not loop back to prestart.
-    text_value_normalized = str(event.text or "").strip().lower()
-    is_manual_start_command = text_value_normalized in {"/start", "start", "bot_start", "bot_started"}
+    is_manual_start_command = _is_start_command_text(event.text)
     if (
         not meta.start_prompt_sent
         and is_message_event
@@ -5165,14 +5224,39 @@ async def handle_customer_event(
     ):
         prestart_text = get_template_text(db, TEMPLATE_PRESTART, workspace_id=workspace_id)
         if prestart_text:
-            await _send_start_fallback_prompt(
-                db=db,
-                conversation_id=int(conversation.id),
-                client=client,
-                chat_id=event.chat_id,
-                user_id=event.sender_id,
-                text=prestart_text,
-            )
+            # Send the Start prompt at most once per dialog. Re-sending on every
+            # pre-start message (including edit redeliveries) spams the customer.
+            prestart_normalized = _normalize_template_like_text(prestart_text)
+            already_sent_prestart = False
+            if prestart_normalized:
+                recent_bot_texts = (
+                    db.query(ChatMessage.text)
+                    .filter(
+                        ChatMessage.workspace_id == int(workspace_id),
+                        ChatMessage.conversation_id == int(conversation.id),
+                        ChatMessage.direction == "bot",
+                        ChatMessage.source == "bot_system",
+                    )
+                    .order_by(ChatMessage.id.desc())
+                    .limit(8)
+                    .all()
+                )
+                already_sent_prestart = any(
+                    _normalize_template_like_text(str((row[0] if row else "") or ""))
+                    == prestart_normalized
+                    for row in recent_bot_texts
+                )
+            if not already_sent_prestart:
+                await _send_start_fallback_prompt(
+                    db=db,
+                    conversation_id=int(conversation.id),
+                    client=client,
+                    chat_id=event.chat_id,
+                    user_id=event.sender_id,
+                    text=prestart_text,
+                )
+                return {"ok": True, "flow": "prestart"}
+            return {"ok": True, "flow": "prestart_already_sent"}
         return {"ok": True, "flow": "prestart"}
 
     # Unified deterministic start/onboarding flow in one helper.
