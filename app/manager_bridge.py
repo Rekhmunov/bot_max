@@ -4938,6 +4938,78 @@ async def apply_incoming_customer_message_edit(
     }
 
 
+async def apply_incoming_customer_message_remove(
+    db: Session,
+    settings: BotSettings,
+    event: MaxWebhookEvent,
+) -> dict:
+    """
+    Apply Max message_removed for a customer message already stored by mid.
+
+    Local-only: Max already deleted the message; do not call delete_message again.
+    Unknown mid is ignored (do not invent a row from a remove event).
+    """
+    workspace_id = int(settings.workspace_id or DEFAULT_WORKSPACE_ID)
+    message_mid = str(event.message_mid or "").strip()
+    if not message_mid:
+        return {"ok": True, "ignored": "message_removed_missing_mid"}
+
+    chat_id = str(event.chat_id or "").strip()
+    query = db.query(ChatMessage).filter(
+        ChatMessage.workspace_id == workspace_id,
+        ChatMessage.max_message_mid == message_mid,
+        ChatMessage.direction == "customer",
+    )
+    if chat_id:
+        conversation_id = (
+            db.query(Conversation.id)
+            .filter(
+                Conversation.workspace_id == workspace_id,
+                Conversation.chat_id == chat_id,
+            )
+            .scalar()
+        )
+        if conversation_id is None:
+            return {
+                "ok": True,
+                "ignored": "message_removed_unknown_chat",
+                "message_mid": message_mid,
+            }
+        query = query.filter(ChatMessage.conversation_id == int(conversation_id))
+
+    msg = query.order_by(ChatMessage.id.desc()).first()
+    if msg is None:
+        return {
+            "ok": True,
+            "ignored": "message_removed_unknown_mid",
+            "message_mid": message_mid,
+        }
+
+    conversation_id = int(msg.conversation_id)
+    chat_message_id = int(msg.id)
+    media_paths = _chat_message_media_paths(msg)
+    _remove_chat_message_media_links(
+        db,
+        chat_message_ids=[chat_message_id],
+        workspace_id=int(getattr(msg, "workspace_id", 0) or 0) or workspace_id,
+    )
+    db.delete(msg)
+    db.commit()
+    for media_path in media_paths:
+        _try_delete_unreferenced_media_file(
+            db,
+            media_path=media_path,
+            skip_chat_message_id=chat_message_id,
+        )
+    return {
+        "ok": True,
+        "flow": "message_removed",
+        "conversation_id": conversation_id,
+        "chat_message_id": chat_message_id,
+        "message_mid": message_mid,
+    }
+
+
 async def handle_customer_event(
     db: Session,
     client: MaxClient,

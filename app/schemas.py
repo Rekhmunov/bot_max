@@ -65,6 +65,10 @@ def _normalize_update_type(value: Any) -> str | None:
         "message_edited": "message_edited",
         "message_edit": "message_edited",
         "edited_message": "message_edited",
+        "message_removed": "message_removed",
+        "message_remove": "message_removed",
+        "message_deleted": "message_removed",
+        "deleted_message": "message_removed",
         "message_read": "message_read",
         "messages_read": "message_read",
         "read": "message_read",
@@ -142,6 +146,10 @@ class MaxWebhookEvent(BaseModel):
             return (
                 f"edit:{self.chat_id}:{self.sender_id}:{self.message_mid}:{digest}"
             )
+        # Removals reuse the same mid as message_created; a distinct prefix
+        # keeps delete events from being dropped as duplicates of create.
+        if update_type == "message_removed" and self.message_mid:
+            return f"removed:{self.chat_id}:{self.sender_id}:{self.message_mid}"
         if self.update_id:
             return f"update:{self.update_id}"
         if update_type == "message_read" and self.read_message_mid:
@@ -604,9 +612,11 @@ class MaxWebhookEvent(BaseModel):
                 update_type = "message_created"
 
         is_read_event = (str(update_type or "").strip().lower() == "message_read")
-        if is_read_event:
-            # Read receipts from providers can be partial: keep the event parseable
-            # even when one side identifier is omitted.
+        is_removed_event = (str(update_type or "").strip().lower() == "message_removed")
+        if is_read_event or is_removed_event:
+            # Read receipts / removals from Max can be partial: keep the event
+            # parseable even when one side identifier is omitted. Removals are
+            # keyed by message_id (+ chat_id when present).
             if chat_id is None:
                 chat_id = _pick_first(
                     recipient.get("chat_id"),
@@ -632,9 +642,11 @@ class MaxWebhookEvent(BaseModel):
                     "",
                 )
 
-        if not is_read_event and (chat_id is None or sender_id is None):
+        if not is_read_event and not is_removed_event and (chat_id is None or sender_id is None):
             return None
         if is_read_event and chat_id is None and sender_id is None:
+            return None
+        if is_removed_event and message_mid is None and chat_id is None and sender_id is None:
             return None
 
         event_uid = _pick_first(

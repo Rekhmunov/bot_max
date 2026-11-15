@@ -739,6 +739,183 @@ def _run_customer_edit_does_not_retrigger_prestart_smoke(client: TestClient, *, 
         assert "ещё раз" in str(customer_rows[0].text or "")
 
 
+def _run_customer_message_removed_smoke(client: TestClient, *, cookies) -> None:
+    from app.models import ChatMessage
+    from app.services import get_or_create_settings
+
+    buyer_id = f"buyer_rm_{uuid4().hex[:8]}"
+    chat_id = f"chat_rm_{uuid4().hex[:8]}"
+    message_mid = f"mid_rm_{uuid4().hex[:10]}"
+
+    with SessionLocal() as db:
+        ws1_settings = get_or_create_settings(db, workspace_id=1)
+        ws1_settings.bot_token = "token_message_remove_ws1"
+        ws1_settings.webhook_key = "ws1key"
+        db.add(ws1_settings)
+        db.commit()
+
+    created = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_created",
+            "message": {
+                "sender": {"user_id": buyer_id, "first_name": "Remove Buyer"},
+                "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                "body": {"mid": message_mid, "text": "please delete me"},
+            },
+        },
+    )
+    assert created.status_code == 200
+    assert created.json().get("ok") is True
+
+    with SessionLocal() as db:
+        row = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.workspace_id == 1,
+                ChatMessage.max_message_mid == message_mid,
+                ChatMessage.direction == "customer",
+            )
+            .order_by(ChatMessage.id.desc())
+            .first()
+        )
+        assert row is not None
+        conversation_id = int(row.conversation_id)
+        message_id = int(row.id)
+        messages_before = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.workspace_id == 1,
+                ChatMessage.conversation_id == conversation_id,
+                ChatMessage.direction == "customer",
+            )
+            .count()
+        )
+
+    # Official Max MessageRemovedUpdate shape (top-level message_id/chat_id/user_id).
+    removed = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_removed",
+            "timestamp": 1_710_000_000,
+            "message_id": message_mid,
+            "chat_id": chat_id,
+            "user_id": buyer_id,
+        },
+    )
+    assert removed.status_code == 200
+    removed_payload = removed.json()
+    assert removed_payload.get("ok") is True
+    assert removed_payload.get("flow") == "message_removed"
+    assert int(removed_payload.get("chat_message_id") or 0) == message_id
+
+    with SessionLocal() as db:
+        row = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
+        assert row is None
+        messages_after = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.workspace_id == 1,
+                ChatMessage.conversation_id == conversation_id,
+                ChatMessage.direction == "customer",
+            )
+            .count()
+        )
+        assert messages_after == messages_before - 1
+
+    # Same remove redelivery must be ignored by dedupe and must not recreate rows.
+    removed_again = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_removed",
+            "timestamp": 1_710_000_001,
+            "message_id": message_mid,
+            "chat_id": chat_id,
+            "user_id": buyer_id,
+        },
+    )
+    assert removed_again.status_code == 200
+    assert removed_again.json().get("ignored") == "duplicate_event"
+
+    # Unknown mid must not create a customer message.
+    unknown = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_removed",
+            "message_id": f"mid_missing_{uuid4().hex[:8]}",
+            "chat_id": chat_id,
+            "user_id": buyer_id,
+        },
+    )
+    assert unknown.status_code == 200
+    assert unknown.json().get("ignored") == "message_removed_unknown_mid"
+    with SessionLocal() as db:
+        customer_count = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.workspace_id == 1,
+                ChatMessage.conversation_id == conversation_id,
+                ChatMessage.direction == "customer",
+            )
+            .count()
+        )
+        assert customer_count == messages_after
+
+    # Bot-direction rows with the same mid must not be deleted by customer remove.
+    bot_mid = f"mid_bot_{uuid4().hex[:8]}"
+    with SessionLocal() as db:
+        bot_row = ChatMessage(
+            workspace_id=1,
+            conversation_id=conversation_id,
+            direction="bot",
+            text="operator text",
+            max_message_mid=bot_mid,
+        )
+        db.add(bot_row)
+        db.commit()
+        bot_id = int(bot_row.id)
+
+    bot_removed = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_removed",
+            "message_id": bot_mid,
+            "chat_id": chat_id,
+            "user_id": buyer_id,
+        },
+    )
+    assert bot_removed.status_code == 200
+    assert bot_removed.json().get("ignored") == "message_removed_unknown_mid"
+    with SessionLocal() as db:
+        assert db.query(ChatMessage).filter(ChatMessage.id == bot_id).first() is not None
+
+    # Regular message_created path must still create a new row after removes.
+    created_next = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_created",
+            "message": {
+                "sender": {"user_id": buyer_id, "first_name": "Remove Buyer"},
+                "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                "body": {"mid": f"mid_next_rm_{uuid4().hex[:8]}", "text": "still here"},
+            },
+        },
+    )
+    assert created_next.status_code == 200
+    assert created_next.json().get("ok") is True
+    with SessionLocal() as db:
+        follow_up = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.workspace_id == 1,
+                ChatMessage.conversation_id == conversation_id,
+                ChatMessage.text == "still here",
+            )
+            .count()
+        )
+        assert follow_up == 1
+
+
 def _run_scroll_near_bottom_snap_smoke(client: TestClient, *, cookies) -> None:
     page = client.get("/admin/chats", cookies=cookies, follow_redirects=False)
     assert page.status_code == 200
@@ -1269,6 +1446,7 @@ def run() -> None:
         _run_thread_list_pagination_smoke(client, cookies=cookies)
         _run_customer_message_edited_smoke(client, cookies=cookies)
         _run_customer_edit_does_not_retrigger_prestart_smoke(client, cookies=cookies)
+        _run_customer_message_removed_smoke(client, cookies=cookies)
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
         _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
 
