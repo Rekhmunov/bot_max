@@ -9617,6 +9617,15 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
     )
     link_mid_value = str(getattr(item, "link_mid", "") or "").strip()
     link_preview_text = str(getattr(item, "link_preview_text", "") or "").strip()
+    edited_at_raw = getattr(item, "edited_at", None)
+    is_edited = isinstance(edited_at_raw, datetime)
+    original_text_value = (
+        str(getattr(item, "original_text", "") or "")
+        if is_edited
+        else ""
+    )
+    is_deleted_by_customer = bool(getattr(item, "is_deleted_by_customer", False))
+    deleted_at_raw = getattr(item, "deleted_at", None)
     return {
         "id": int(item.id),
         "direction": str(item.direction or ""),
@@ -9630,6 +9639,19 @@ def _message_summary_dict(item: ChatMessage) -> dict[str, object]:
         "link_mid": link_mid_value,
         "link_preview_text": link_preview_text,
         "is_read_by_customer": bool(getattr(item, "is_read_by_customer", False)),
+        "is_edited": is_edited,
+        "original_text": original_text_value,
+        "edited_at": (
+            edited_at_raw.isoformat()
+            if isinstance(edited_at_raw, datetime)
+            else ""
+        ),
+        "is_deleted_by_customer": is_deleted_by_customer,
+        "deleted_at": (
+            deleted_at_raw.isoformat()
+            if isinstance(deleted_at_raw, datetime)
+            else ""
+        ),
         "read_at": (
             item.read_at.isoformat()
             if isinstance(getattr(item, "read_at", None), datetime)
@@ -9828,7 +9850,10 @@ def _messages_signature(messages: list[object]) -> str:
             f"{str(getattr(item, 'image_url', '') or '')}:"
             f"{str(getattr(item, 'text', '') or '')}:"
             f"{str(getattr(item, 'link_mid', '') or '')}:"
-            f"{str(getattr(item, 'link_preview_text', '') or '')}"
+            f"{str(getattr(item, 'link_preview_text', '') or '')}:"
+            f"{1 if bool(getattr(item, 'is_deleted_by_customer', False)) else 0}:"
+            f"{(getattr(item, 'edited_at').isoformat() if isinstance(getattr(item, 'edited_at', None), datetime) else '')}:"
+            f"{str(getattr(item, 'original_text', '') or '')}"
         )
         for item in messages
     )

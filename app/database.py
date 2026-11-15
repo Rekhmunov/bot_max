@@ -110,6 +110,19 @@ def _ensure_lightweight_migrations() -> None:
                         "WHERE created_at IS NULL"
                     )
                 )
+            if "original_text" not in chat_columns:
+                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN original_text TEXT"))
+            if "edited_at" not in chat_columns:
+                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN edited_at DATETIME"))
+            if "is_deleted_by_customer" not in chat_columns:
+                conn.execute(
+                    text(
+                        "ALTER TABLE chat_messages "
+                        "ADD COLUMN is_deleted_by_customer INTEGER DEFAULT 0"
+                    )
+                )
+            if "deleted_at" not in chat_columns:
+                conn.execute(text("ALTER TABLE chat_messages ADD COLUMN deleted_at DATETIME"))
 
         if "conversation_meta" in table_names:
             meta_columns = {col["name"] for col in inspector.get_columns("conversation_meta")}

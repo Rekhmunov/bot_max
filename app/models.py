@@ -307,6 +307,12 @@ class ChatMessage(Base):
     delivery_error: Mapped[str] = mapped_column(Text, default="")
     delivery_retry_count: Mapped[int] = mapped_column(Integer, default=0)
     delivery_next_retry_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Customer edit: keep the first pre-edit text for the «Ред.» desktop tooltip.
+    original_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edited_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    # Customer soft-delete: keep the row, mark status in UI (red border).
+    is_deleted_by_customer: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     conversation: Mapped[Conversation] = relationship(back_populates="chat_messages")

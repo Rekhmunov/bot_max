@@ -4874,8 +4874,12 @@ async def apply_incoming_customer_message_edit(
         for url in (getattr(event, "image_urls", []) or [])
         if str(url).strip()
     ]
+    previous_text = str(msg.text or "")
     changed = False
-    if str(msg.text or "") != new_text:
+    if previous_text != new_text:
+        # Keep the first pre-edit body for the «Ред.» desktop tooltip.
+        if getattr(msg, "original_text", None) is None and getattr(msg, "edited_at", None) is None:
+            msg.original_text = previous_text
         msg.text = new_text
         changed = True
 
@@ -4903,6 +4907,8 @@ async def apply_incoming_customer_message_edit(
             str(msg.image_url or "") != str(next_image_url or "")
             or prev_image_urls_json != next_image_urls_json
         ):
+            if getattr(msg, "original_text", None) is None and getattr(msg, "edited_at", None) is None:
+                msg.original_text = previous_text
             msg.image_url = next_image_url
             msg.image_urls_json = next_image_urls_json
             changed = True
@@ -4919,6 +4925,7 @@ async def apply_incoming_customer_message_edit(
             "message_mid": message_mid,
         }
 
+    msg.edited_at = datetime.utcnow()
     db.add(msg)
     db.commit()
     db.refresh(msg)
@@ -4987,20 +4994,20 @@ async def apply_incoming_customer_message_remove(
 
     conversation_id = int(msg.conversation_id)
     chat_message_id = int(msg.id)
-    media_paths = _chat_message_media_paths(msg)
-    _remove_chat_message_media_links(
-        db,
-        chat_message_ids=[chat_message_id],
-        workspace_id=int(getattr(msg, "workspace_id", 0) or 0) or workspace_id,
-    )
-    db.delete(msg)
+    if bool(getattr(msg, "is_deleted_by_customer", False)):
+        return {
+            "ok": True,
+            "flow": "message_removed_noop",
+            "conversation_id": conversation_id,
+            "chat_message_id": chat_message_id,
+            "message_mid": message_mid,
+        }
+
+    # Soft-delete: keep the row for chat history, mark status in the UI.
+    msg.is_deleted_by_customer = True
+    msg.deleted_at = datetime.utcnow()
+    db.add(msg)
     db.commit()
-    for media_path in media_paths:
-        _try_delete_unreferenced_media_file(
-            db,
-            media_path=media_path,
-            skip_chat_message_id=chat_message_id,
-        )
     return {
         "ok": True,
         "flow": "message_removed",
