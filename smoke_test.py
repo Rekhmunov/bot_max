@@ -933,6 +933,10 @@ def _run_edit_delete_ui_markers_smoke(client: TestClient, *, cookies) -> None:
     assert "customer-deleted" in html
     assert "Пользователь удалил сообщение" in html
     assert "@media (hover: hover) and (pointer: fine)" in html
+    # Live updates must rebuild when existing bubble fingerprints drift
+    # (edit / soft-delete), not only append new ids.
+    assert "previousFingerprint !== nextFingerprint" in html
+    assert "bubbleRenderFingerprint(row)" in html
 
     buyer_id = f"buyer_ui_{uuid4().hex[:8]}"
     chat_id = f"chat_ui_{uuid4().hex[:8]}"
