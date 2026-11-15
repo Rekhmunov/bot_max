@@ -614,6 +614,131 @@ def _run_customer_message_edited_smoke(client: TestClient, *, cookies) -> None:
         assert linked_urls == ["/static/new-edit.jpg"]
 
 
+def _run_customer_edit_does_not_retrigger_prestart_smoke(client: TestClient, *, cookies) -> None:
+    """Editing a customer message must not re-send the prestart welcome."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.models import ChatMessage, Conversation
+    from app.services import get_or_create_settings
+
+    buyer_id = f"buyer_edit_pre_{uuid4().hex[:8]}"
+    chat_id = f"chat_edit_pre_{uuid4().hex[:8]}"
+    message_mid = f"mid_edit_pre_{uuid4().hex[:10]}"
+
+    with SessionLocal() as db:
+        ws1_settings = get_or_create_settings(db, workspace_id=1)
+        ws1_settings.bot_token = "token_edit_no_prestart"
+        ws1_settings.webhook_key = "ws1key"
+        db.add(ws1_settings)
+        db.commit()
+
+    with patch("app.manager_bridge._send_system_message_direct", new_callable=AsyncMock) as send_mock:
+        send_mock.return_value = {"success": True, "message": {"body": {"mid": "bot_pre"}}}
+
+        created = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_created",
+                "update_id": f"uid_create_{uuid4().hex[:8]}",
+                "message": {
+                    "sender": {"user_id": buyer_id, "first_name": "Edit Buyer"},
+                    "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                    "body": {"mid": message_mid, "text": "Добрый день!"},
+                },
+            },
+        )
+        assert created.status_code == 200
+        assert created.json().get("flow") == "prestart"
+        assert send_mock.await_count == 1
+
+        # Proper Max edit event: local update only, no second bot send.
+        edited = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_edited",
+                "update_id": f"uid_edit_{uuid4().hex[:8]}",
+                "message": {
+                    "sender": {"user_id": buyer_id, "first_name": "Edit Buyer"},
+                    "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                    "body": {"mid": message_mid, "text": "Добрый день! (правка)"},
+                },
+            },
+        )
+        assert edited.status_code == 200
+        assert edited.json().get("flow") == "message_edited"
+        assert send_mock.await_count == 1
+
+        # Same mid redelivered as message_created with a new update_id must be
+        # treated as an in-place edit, not another prestart.
+        recreate = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_created",
+                "update_id": f"uid_recreate_{uuid4().hex[:8]}",
+                "message": {
+                    "sender": {"user_id": buyer_id, "first_name": "Edit Buyer"},
+                    "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                    "body": {"mid": message_mid, "text": "Добрый день! (ещё раз)"},
+                },
+            },
+        )
+        assert recreate.status_code == 200
+        assert recreate.json().get("flow") in {"message_edited", "message_edited_noop"}
+        assert send_mock.await_count == 1
+
+        # Another ordinary pre-start message must not spam a second prestart.
+        followup = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_created",
+                "update_id": f"uid_follow_{uuid4().hex[:8]}",
+                "message": {
+                    "sender": {"user_id": buyer_id, "first_name": "Edit Buyer"},
+                    "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                    "body": {"mid": f"{message_mid}_next", "text": "ещё сообщение"},
+                },
+            },
+        )
+        assert followup.status_code == 200
+        assert followup.json().get("flow") == "prestart_already_sent"
+        assert send_mock.await_count == 1
+
+        # Button-style start text must still advance out of prestart.
+        started = client.post(
+            "/webhook/max/ws1key",
+            json={
+                "update_type": "message_created",
+                "update_id": f"uid_start_{uuid4().hex[:8]}",
+                "message": {
+                    "sender": {"user_id": buyer_id, "first_name": "Edit Buyer"},
+                    "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                    "body": {"mid": f"{message_mid}_start", "text": "Start / Начать"},
+                },
+            },
+        )
+        assert started.status_code == 200
+        assert started.json().get("flow") == "start_prompt"
+        assert send_mock.await_count == 2
+
+    with SessionLocal() as db:
+        conversation = (
+            db.query(Conversation)
+            .filter(Conversation.workspace_id == 1, Conversation.chat_id == chat_id)
+            .one()
+        )
+        customer_rows = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.conversation_id == int(conversation.id),
+                ChatMessage.direction == "customer",
+                ChatMessage.max_message_mid == message_mid,
+            )
+            .all()
+        )
+        assert len(customer_rows) == 1
+        assert "ещё раз" in str(customer_rows[0].text or "")
+
+
 def _run_scroll_near_bottom_snap_smoke(client: TestClient, *, cookies) -> None:
     page = client.get("/admin/chats", cookies=cookies, follow_redirects=False)
     assert page.status_code == 200
@@ -1143,6 +1268,7 @@ def run() -> None:
         _run_scroll_near_bottom_snap_smoke(client, cookies=cookies)
         _run_thread_list_pagination_smoke(client, cookies=cookies)
         _run_customer_message_edited_smoke(client, cookies=cookies)
+        _run_customer_edit_does_not_retrigger_prestart_smoke(client, cookies=cookies)
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
         _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
 
@@ -1313,21 +1439,49 @@ def run() -> None:
         )
         assert webhook_customer_start.status_code == 200
         assert webhook_customer_start.json().get("flow") == "start_prompt"
-        # Regression: fallback "Start / Начать" callback after prestart must switch
-        # flow to start_prompt (and not loop in prestart).
+        # Regression: fallback "Start / Начать" message button after prestart must
+        # switch flow to start_prompt (and not loop in prestart).
         fallback_chat_id = f"chat_fb_{uuid4().hex[:8]}"
         fallback_sender_id = f"buyer_fb_{uuid4().hex[:8]}"
-        webhook_customer_prestart = client.post(
-            "/webhook/max/ws1key",
-            json={
-                "update_type": "message_created",
-                "chat_id": fallback_chat_id,
-                "sender_id": fallback_sender_id,
-                "text": "Привет",
-            },
-        )
-        assert webhook_customer_prestart.status_code == 200
-        assert webhook_customer_prestart.json().get("flow") == "prestart"
+        with patch("app.manager_bridge._send_system_message_direct", new_callable=AsyncMock) as prestart_send_mock:
+            prestart_send_mock.return_value = {
+                "success": True,
+                "message": {"body": {"mid": f"bot_pre_{uuid4().hex[:6]}"}},
+            }
+            webhook_customer_prestart = client.post(
+                "/webhook/max/ws1key",
+                json={
+                    "update_type": "message_created",
+                    "chat_id": fallback_chat_id,
+                    "sender_id": fallback_sender_id,
+                    "text": "Привет",
+                },
+            )
+            assert webhook_customer_prestart.status_code == 200
+            assert webhook_customer_prestart.json().get("flow") == "prestart"
+            assert prestart_send_mock.await_count >= 1
+            send_kwargs = prestart_send_mock.await_args.kwargs if prestart_send_mock.await_args else {}
+            attachments = send_kwargs.get("attachments") if isinstance(send_kwargs, dict) else None
+            if not isinstance(attachments, list):
+                attachments = []
+            first_attachment = attachments[0] if attachments else {}
+            assert isinstance(first_attachment, dict)
+            keyboard_payload = (
+                first_attachment.get("payload")
+                if isinstance(first_attachment.get("payload"), dict)
+                else {}
+            )
+            buttons = keyboard_payload.get("buttons") if isinstance(keyboard_payload, dict) else []
+            first_button = (
+                buttons[0][0]
+                if isinstance(buttons, list) and buttons and isinstance(buttons[0], list) and buttons[0]
+                else {}
+            )
+            # Prestart start button must send a regular message start command,
+            # not callback payload-based fallback.
+            assert str(first_button.get("type") or "").strip().lower() == "message"
+            assert str(first_button.get("text") or "").strip().lower() == "start / начать"
+            assert not str(first_button.get("payload") or "").strip()
         with SessionLocal() as db:
             prestart_conv = (
                 db.query(Conversation)
@@ -1349,37 +1503,13 @@ def run() -> None:
             prestart_text = str(getattr(prestart_msg, "text", "") or "")
             # Regression: prestart text should stay template-only; start action is a button.
             assert "https://max.ru/id111111111_bot" not in prestart_text
-            prestart_outbox = (
-                db.query(OutboxMessage)
-                .filter(
-                    OutboxMessage.workspace_id == 1,
-                    OutboxMessage.conversation_id == int(prestart_conv.id),
-                    OutboxMessage.operation == "send_message",
-                )
-                .order_by(OutboxMessage.id.desc())
-                .first()
-            )
-            assert prestart_outbox is not None
-            payload = json.loads(str(getattr(prestart_outbox, "payload_json", "") or "{}"))
-            attachments = payload.get("attachments") if isinstance(payload, dict) else []
-            assert isinstance(attachments, list) and attachments
-            first_attachment = attachments[0] if attachments else {}
-            assert isinstance(first_attachment, dict)
-            keyboard_payload = first_attachment.get("payload") if isinstance(first_attachment.get("payload"), dict) else {}
-            buttons = keyboard_payload.get("buttons") if isinstance(keyboard_payload, dict) else []
-            first_button = buttons[0][0] if isinstance(buttons, list) and buttons and isinstance(buttons[0], list) and buttons[0] else {}
-            # Prestart start button must send regular message '/start',
-            # not callback payload-based fallback.
-            assert str(first_button.get("type") or "").strip().lower() == "message"
-            assert str(first_button.get("text") or "").strip().lower() == "/start"
-            assert not str(first_button.get("payload") or "").strip()
         webhook_customer_start_via_message = client.post(
             "/webhook/max/ws1key",
             json={
                 "update_type": "message_created",
                 "chat_id": fallback_chat_id,
                 "sender_id": fallback_sender_id,
-                "text": "/start",
+                "text": "Start / Начать",
             },
         )
         assert webhook_customer_start_via_message.status_code == 200
