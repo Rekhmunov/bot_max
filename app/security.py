@@ -25,6 +25,24 @@ def verify_hmac_signature(*, body: bytes, secret: str, provided_signature: str) 
     return hmac.compare_digest(expected, normalized_sig)
 
 
+def verify_max_webhook_secret(*, secret: str, provided_secret: str) -> bool:
+    """
+    Max Bot API sends the subscription secret verbatim in
+    X-Max-Bot-Api-Secret (not an HMAC of the body).
+
+    Docs: POST /subscriptions `secret` is echoed on every webhook delivery.
+    """
+    normalized_secret = (secret or "").strip()
+    normalized_provided = (provided_secret or "").strip()
+    if not normalized_secret or not normalized_provided:
+        return False
+    # compare_digest requires equal length on some Python builds; unequal
+    # secrets must fail closed without raising.
+    if len(normalized_secret) != len(normalized_provided):
+        return False
+    return hmac.compare_digest(normalized_secret, normalized_provided)
+
+
 def is_same_origin(*, origin: str, host_url: str) -> bool:
     if not origin or not host_url:
         return False

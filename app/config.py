@@ -16,8 +16,9 @@ class AppSettings(BaseSettings):
     admin_username: str = "admin"
     admin_password: str = "admin123"
 
-    # Max messenger API configuration
-    max_api_base_url: str = "https://platform-api.max.ru"
+    # Max messenger API configuration.
+    # Max docs: use platform-api2.max.ru for bots/mini-apps.
+    max_api_base_url: str = "https://platform-api2.max.ru"
     max_bot_token: str = ""
     max_bot_account_id: str = ""
     # Public profile URL used for customer-facing redirects (/c/{code}).

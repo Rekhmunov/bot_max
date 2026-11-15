@@ -167,7 +167,14 @@ from app.ops import (
     delete_sqlite_backup,
     restore_sqlite_backup,
 )
-from app.security import InMemoryRateLimiter, is_safe_image, is_same_origin, verify_hmac_signature, safe_json_dumps
+from app.security import (
+    InMemoryRateLimiter,
+    is_safe_image,
+    is_same_origin,
+    verify_hmac_signature,
+    verify_max_webhook_secret,
+    safe_json_dumps,
+)
 from app.schemas import MaxWebhookEvent
 from app.storage import (
     ensure_storage_ready,
@@ -1268,6 +1275,67 @@ def _extract_max_error_message(result: dict) -> str:
     return ""
 
 
+# Max docs (Update / POST /subscriptions): to add or change event types you must
+# call POST /subscriptions again. Without message_edited / message_removed in
+# update_types Max will never deliver those events to our webhook.
+REQUIRED_WEBHOOK_UPDATE_TYPES: list[str] = [
+    "message_created",
+    "message_edited",
+    "message_removed",
+    "message_callback",
+    "bot_started",
+]
+
+# Max POST /subscriptions secret: ^[a-zA-Z0-9_-]{5,256}$
+_MAX_WEBHOOK_SECRET_RE = re.compile(r"^[A-Za-z0-9_-]{5,256}$")
+
+
+def _max_webhook_secret_for_subscribe(*, log_invalid: bool = False) -> str | None:
+    """
+    Return webhook secret only when it matches Max API constraints.
+
+    Invalid secrets must not be sent: Max rejects the whole POST /subscriptions
+    and the bot would keep an outdated update_types list.
+    """
+    value = (settings.webhook_secret or "").strip()
+    if not value:
+        return None
+    if not _MAX_WEBHOOK_SECRET_RE.fullmatch(value):
+        if log_invalid:
+            logging.getLogger(__name__).warning(
+                "[WEBHOOK_SUB] WEBHOOK_SECRET ignored: must match ^[A-Za-z0-9_-]{5,256}$"
+            )
+        return None
+    return value
+
+
+def _subscription_update_types(subscription: dict) -> set[str] | None:
+    """
+    Return the subscribed update_types set for one Max Subscription object.
+
+    None means Max returned null/omitted types (treat as "all types").
+    """
+    if not isinstance(subscription, dict):
+        return set()
+    raw_types = subscription.get("update_types")
+    if raw_types is None:
+        return None
+    if not isinstance(raw_types, list):
+        return set()
+    return {str(item).strip() for item in raw_types if str(item).strip()}
+
+
+def _subscription_missing_required_types(subscription: dict | None) -> list[str]:
+    if subscription is None:
+        return list(REQUIRED_WEBHOOK_UPDATE_TYPES)
+    current = _subscription_update_types(subscription)
+    if current is None:
+        # Explicit null = subscribed to all update types.
+        return []
+    required = set(REQUIRED_WEBHOOK_UPDATE_TYPES)
+    return sorted(required - current)
+
+
 async def _auto_subscribe_workspace_webhook(settings_row: BotSettings) -> tuple[bool, str | None]:
     client, client_error = _workspace_client_or_error(settings_row)
     if client is None:
@@ -1279,16 +1347,10 @@ async def _auto_subscribe_workspace_webhook(settings_row: BotSettings) -> tuple[
     if public_url.scheme != "https" or host in {"localhost", "127.0.0.1", "::1"}:
         # In local/dev environments we skip remote subscribe and keep save flow intact.
         return True, None
-    webhook_secret_value = (settings.webhook_secret or "").strip() or None
+    webhook_secret_value = _max_webhook_secret_for_subscribe(log_invalid=True)
     subscribe_result = await client.subscribe_webhook(
         url=webhook_workspace_url,
-        update_types=[
-            "message_created",
-            "message_edited",
-            "message_removed",
-            "message_callback",
-            "bot_started",
-        ],
+        update_types=list(REQUIRED_WEBHOOK_UPDATE_TYPES),
         secret=webhook_secret_value,
     )
     success = bool(
@@ -1297,11 +1359,24 @@ async def _auto_subscribe_workspace_webhook(settings_row: BotSettings) -> tuple[
         or subscribe_result.get("result")
         or subscribe_result.get("mock")
     )
+    _sub_log = logging.getLogger(__name__)
     if success:
+        _sub_log.warning(
+            "[WEBHOOK_SUB] subscribed ok workspace=%s url=%s types=%s",
+            int(getattr(settings_row, "workspace_id", 0) or 0),
+            str(webhook_workspace_url)[:120],
+            ",".join(REQUIRED_WEBHOOK_UPDATE_TYPES),
+        )
         return True, None
 
     status_code = subscribe_result.get("status_code")
     error_details = _extract_max_error_message(subscribe_result)
+    _sub_log.warning(
+        "[WEBHOOK_SUB] subscribe failed workspace=%s status=%s details=%s",
+        int(getattr(settings_row, "workspace_id", 0) or 0),
+        status_code,
+        str(error_details or "")[:160],
+    )
     if status_code == 401:
         return False, "Неверный токен бота Max. Проверьте токен и сохраните снова."
     if status_code == 403:
@@ -1311,6 +1386,121 @@ async def _auto_subscribe_workspace_webhook(settings_row: BotSettings) -> tuple[
         return False, f"Не удалось автоматически подключить webhook в Max{suffix}"
     suffix = f" ({error_details})" if error_details else ""
     return False, f"Не удалось автоматически подключить webhook в Max. Код: {status_code or 'unknown'}{suffix}"
+
+
+async def _ensure_workspace_webhook_subscription(
+    settings_row: BotSettings,
+) -> tuple[bool, str | None, dict]:
+    """
+    Ensure Max webhook subscription includes REQUIRED_WEBHOOK_UPDATE_TYPES.
+
+    Per Max docs (Update / POST /subscriptions): to add or change event types you
+    must call POST /subscriptions again. Production bots that subscribed before
+    message_edited / message_removed were added never receive those events until
+    we re-subscribe. Always POST on ensure so deploys cannot leave stale types.
+    """
+    details: dict = {
+        "workspace_id": int(getattr(settings_row, "workspace_id", 0) or 0),
+        "action": "skip",
+        "missing_types": [],
+    }
+    client, client_error = _workspace_client_or_error(settings_row)
+    if client is None:
+        details["action"] = "no_token"
+        return False, client_error or "Укажите токен вашего бота Max в настройках.", details
+
+    webhook_workspace_url = _workspace_webhook_url(settings_row)
+    public_url = urlsplit(webhook_workspace_url)
+    host = (public_url.hostname or "").lower()
+    if public_url.scheme != "https" or host in {"localhost", "127.0.0.1", "::1"}:
+        details["action"] = "local_skip"
+        return True, None, details
+
+    _sub_log = logging.getLogger(__name__)
+    matched_subscription: dict | None = None
+    list_result = await client.list_subscriptions()
+    subscriptions = list_result.get("subscriptions") if isinstance(list_result, dict) else None
+    if isinstance(subscriptions, list):
+        for item in subscriptions:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("url") or "").strip() == webhook_workspace_url:
+                matched_subscription = item
+                break
+    elif isinstance(list_result, dict) and list_result.get("success") is False and not list_result.get("mock"):
+        _sub_log.warning(
+            "[WEBHOOK_SUB] list failed workspace=%s status=%s; forcing resubscribe",
+            int(getattr(settings_row, "workspace_id", 0) or 0),
+            list_result.get("status_code"),
+        )
+
+    missing = _subscription_missing_required_types(matched_subscription)
+    details["missing_types"] = missing
+    details["previous_types"] = sorted(
+        _subscription_update_types(matched_subscription) or []
+    ) if matched_subscription is not None else []
+    # Always re-POST: Max docs require a fresh POST /subscriptions to change
+    # update_types. Skipping when "already_current" left production stuck when
+    # list parsing or URL matching was wrong.
+    details["action"] = "resubscribe" if matched_subscription is not None else "subscribe"
+    if missing:
+        _sub_log.warning(
+            "[WEBHOOK_SUB] missing types workspace=%s missing=%s previous=%s",
+            int(getattr(settings_row, "workspace_id", 0) or 0),
+            ",".join(missing),
+            ",".join(details["previous_types"]),
+        )
+    ok, error = await _auto_subscribe_workspace_webhook(settings_row)
+    details["ok"] = bool(ok)
+    if error:
+        details["error"] = str(error)
+    return ok, error, details
+
+
+async def _ensure_all_workspace_webhook_subscriptions() -> dict:
+    """Startup/maintenance: refresh Max webhook update_types for every configured bot."""
+    from app.database import SessionLocal
+
+    summary = {"checked": 0, "updated": 0, "already_current": 0, "skipped": 0, "failed": 0}
+    _sub_log = logging.getLogger(__name__)
+    with SessionLocal() as db:
+        rows = (
+            db.query(BotSettings)
+            .filter(BotSettings.bot_token.isnot(None))
+            .order_by(BotSettings.workspace_id.asc())
+            .all()
+        )
+        for settings_row in rows:
+            if not str(getattr(settings_row, "bot_token", "") or "").strip():
+                continue
+            summary["checked"] += 1
+            try:
+                ok, error, details = await _ensure_workspace_webhook_subscription(settings_row)
+            except Exception:
+                summary["failed"] += 1
+                _sub_log.exception(
+                    "[WEBHOOK_SUB] ensure crashed workspace=%s",
+                    int(getattr(settings_row, "workspace_id", 0) or 0),
+                )
+                continue
+            action = str(details.get("action") or "")
+            if action in {"local_skip", "no_token"}:
+                summary["skipped"] += 1
+            elif ok and action in {"subscribe", "resubscribe"}:
+                summary["updated"] += 1
+            elif ok:
+                summary["already_current"] += 1
+            else:
+                summary["failed"] += 1
+                _sub_log.warning(
+                    "[WEBHOOK_SUB] ensure failed workspace=%s action=%s missing=%s error=%s",
+                    int(getattr(settings_row, "workspace_id", 0) or 0),
+                    action,
+                    ",".join(details.get("missing_types") or []),
+                    str(error or "")[:160],
+                )
+    _sub_log.warning("[WEBHOOK_SUB] startup ensure summary=%s", summary)
+    return summary
 
 
 async def _auto_unsubscribe_workspace_webhook(settings_row: BotSettings) -> tuple[bool, str | None]:
@@ -3305,6 +3495,13 @@ async def startup() -> None:
         for workspace_id in workspace_ids:
             get_or_create_subscription(db, workspace_id=int(workspace_id))
         _ensure_superadmin_credentials(db)
+    # Max only delivers update_types that were listed at POST /subscriptions time.
+    # Re-sync on every boot so message_edited / message_removed are not missing
+    # after deploys that add new event types.
+    try:
+        await _ensure_all_workspace_webhook_subscriptions()
+    except Exception:
+        logging.getLogger(__name__).exception("[WEBHOOK_SUB] startup ensure failed")
     if settings.outbox_worker_enabled:
         _outbox_worker_task = asyncio.create_task(_outbox_worker_loop())
         _maintenance_worker_task = asyncio.create_task(_maintenance_worker_loop())
@@ -6798,19 +6995,34 @@ async def app_update_settings(
         page.status_code = 400
         return page
     _ensure_workspace_webhook_key(settings_row)
-    should_sync_webhook = bool(token_clean) or not previous_webhook_key
+    # Re-sync webhook update_types whenever a bot token is present (Max docs:
+    # new event types require another POST /subscriptions). Hard-fail only when
+    # the token is being set/rotated or the webhook key is first created — a
+    # transient Max outage must not block saving unrelated settings.
+    token_being_set = bool(token_clean)
+    webhook_key_is_new = not previous_webhook_key
+    should_sync_webhook = bool((settings_row.bot_token or "").strip()) or webhook_key_is_new
     if should_sync_webhook:
-        subscribed_ok, subscribe_error = await _auto_subscribe_workspace_webhook(settings_row)
+        subscribed_ok, subscribe_error, _sub_details = await _ensure_workspace_webhook_subscription(
+            settings_row
+        )
         if not subscribed_ok:
-            db.rollback()
-            page = _render_app_settings_page(
-                request,
-                db=db,
-                current_user=current_user,
-                error=_user_friendly_bot_connection_error(),
+            hard_fail = token_being_set or webhook_key_is_new
+            if hard_fail:
+                db.rollback()
+                page = _render_app_settings_page(
+                    request,
+                    db=db,
+                    current_user=current_user,
+                    error=_user_friendly_bot_connection_error(),
+                )
+                page.status_code = 400
+                return page
+            logging.getLogger(__name__).warning(
+                "[WEBHOOK_SUB] settings save continued after soft sync failure workspace=%s error=%s",
+                int(workspace_id),
+                str(subscribe_error or "")[:160],
             )
-            page.status_code = 400
-            return page
     settings_row.admin_account_id = admin_account_id.strip()
     mode = (routing_mode or "round_robin").strip().lower()
     if mode not in {"round_robin", "random"}:
@@ -11090,20 +11302,41 @@ async def max_webhook(
         scope="webhook",
         limit=max(int(settings.rate_limit_webhook_per_minute), 1),
     )
-    webhook_secret = (settings.webhook_secret or "").strip()
+    # Max docs: when POST /subscriptions includes `secret`, Max echoes it in
+    # X-Max-Bot-Api-Secret on every delivery. Only enforce when the secret is
+    # valid for Max (same rules used when subscribing).
+    webhook_secret = _max_webhook_secret_for_subscribe() or ""
     if webhook_secret:
-        signature = (
-            request.headers.get("X-Webhook-Signature")
-            or request.headers.get("X-Hub-Signature-256")
-            or ""
-        )
-        raw_body = await request.body()
-        if not verify_hmac_signature(
-            body=raw_body,
-            secret=webhook_secret,
-            provided_signature=signature,
-        ):
-            raise HTTPException(status_code=403, detail="invalid_webhook_signature")
+        max_secret_header = str(request.headers.get("X-Max-Bot-Api-Secret") or "").strip()
+        if max_secret_header:
+            if not verify_max_webhook_secret(
+                secret=webhook_secret,
+                provided_secret=max_secret_header,
+            ):
+                raise HTTPException(status_code=403, detail="invalid_webhook_secret")
+        else:
+            # Transition / non-Max callers: accept legacy HMAC if present.
+            # If Max still delivers without the header (subscription created
+            # before secret was set), do not drop the event — startup ensure
+            # re-POSTs the subscription with secret so later deliveries include it.
+            signature = (
+                request.headers.get("X-Webhook-Signature")
+                or request.headers.get("X-Hub-Signature-256")
+                or ""
+            )
+            if signature.strip():
+                raw_body = await request.body()
+                if not verify_hmac_signature(
+                    body=raw_body,
+                    secret=webhook_secret,
+                    provided_signature=signature,
+                ):
+                    raise HTTPException(status_code=403, detail="invalid_webhook_signature")
+            else:
+                logging.getLogger(__name__).warning(
+                    "[WEBHOOK] missing X-Max-Bot-Api-Secret while WEBHOOK_SECRET is set; "
+                    "allowing request until subscription is re-synced"
+                )
     event = MaxWebhookEvent.from_payload(payload)
     _wh_log = logging.getLogger(__name__)
     if event is None:
