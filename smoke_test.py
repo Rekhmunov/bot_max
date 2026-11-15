@@ -367,6 +367,160 @@ def _run_thread_list_pagination_smoke(client: TestClient, *, cookies) -> None:
     assert len(updates_payload.get("threads") or []) <= THREAD_PAGE_SIZE + 20
 
 
+def _run_customer_message_edited_smoke(client: TestClient, *, cookies) -> None:
+    from app.models import ChatMessage
+    from app.services import get_or_create_settings
+
+    buyer_id = f"buyer_edit_{uuid4().hex[:8]}"
+    chat_id = f"chat_edit_{uuid4().hex[:8]}"
+    message_mid = f"mid_edit_{uuid4().hex[:10]}"
+
+    with SessionLocal() as db:
+        ws1_settings = get_or_create_settings(db, workspace_id=1)
+        ws1_settings.bot_token = "token_message_edit_ws1"
+        ws1_settings.webhook_key = "ws1key"
+        db.add(ws1_settings)
+        db.commit()
+
+    created = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_created",
+            "message": {
+                "sender": {"user_id": buyer_id, "first_name": "Edit Buyer"},
+                "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                "body": {"mid": message_mid, "text": "original text"},
+            },
+        },
+    )
+    assert created.status_code == 200
+    assert created.json().get("ok") is True
+
+    with SessionLocal() as db:
+        row = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.workspace_id == 1,
+                ChatMessage.max_message_mid == message_mid,
+                ChatMessage.direction == "customer",
+            )
+            .order_by(ChatMessage.id.desc())
+            .first()
+        )
+        assert row is not None
+        assert str(row.text or "") == "original text"
+        conversation_id = int(row.conversation_id)
+        message_id = int(row.id)
+        messages_before = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.workspace_id == 1,
+                ChatMessage.conversation_id == conversation_id,
+                ChatMessage.direction == "customer",
+            )
+            .count()
+        )
+
+    edited = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_edited",
+            "message": {
+                "sender": {"user_id": buyer_id, "first_name": "Edit Buyer"},
+                "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                "body": {"mid": message_mid, "text": "edited text"},
+            },
+        },
+    )
+    assert edited.status_code == 200
+    edited_payload = edited.json()
+    assert edited_payload.get("ok") is True
+    assert edited_payload.get("flow") == "message_edited"
+    assert int(edited_payload.get("chat_message_id") or 0) == message_id
+
+    with SessionLocal() as db:
+        row = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
+        assert row is not None
+        assert str(row.text or "") == "edited text"
+        messages_after = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.workspace_id == 1,
+                ChatMessage.conversation_id == conversation_id,
+                ChatMessage.direction == "customer",
+            )
+            .count()
+        )
+        assert messages_after == messages_before
+
+    # Same edit redelivery must be ignored by dedupe and must not create rows.
+    edited_again = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_edited",
+            "message": {
+                "sender": {"user_id": buyer_id, "first_name": "Edit Buyer"},
+                "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                "body": {"mid": message_mid, "text": "edited text"},
+            },
+        },
+    )
+    assert edited_again.status_code == 200
+    assert edited_again.json().get("ignored") == "duplicate_event"
+
+    # Unknown mid must not create a new customer message.
+    unknown = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_edited",
+            "message": {
+                "sender": {"user_id": buyer_id, "first_name": "Edit Buyer"},
+                "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                "body": {"mid": f"mid_missing_{uuid4().hex[:8]}", "text": "ghost edit"},
+            },
+        },
+    )
+    assert unknown.status_code == 200
+    assert unknown.json().get("ignored") == "message_edited_unknown_mid"
+    with SessionLocal() as db:
+        ghost_count = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.workspace_id == 1,
+                ChatMessage.conversation_id == conversation_id,
+                ChatMessage.text == "ghost edit",
+            )
+            .count()
+        )
+        assert ghost_count == 0
+
+    # Regular message_created path must still create a new row.
+    created_next = client.post(
+        "/webhook/max/ws1key",
+        json={
+            "update_type": "message_created",
+            "message": {
+                "sender": {"user_id": buyer_id, "first_name": "Edit Buyer"},
+                "recipient": {"chat_id": chat_id, "chat_type": "dialog"},
+                "body": {"mid": f"mid_next_{uuid4().hex[:8]}", "text": "follow up"},
+            },
+        },
+    )
+    assert created_next.status_code == 200
+    assert created_next.json().get("ok") is True
+    with SessionLocal() as db:
+        follow_up = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.workspace_id == 1,
+                ChatMessage.conversation_id == conversation_id,
+                ChatMessage.text == "follow up",
+            )
+            .count()
+        )
+        assert follow_up == 1
+
+
 def _run_scroll_near_bottom_snap_smoke(client: TestClient, *, cookies) -> None:
     page = client.get("/admin/chats", cookies=cookies, follow_redirects=False)
     assert page.status_code == 200
@@ -895,6 +1049,7 @@ def run() -> None:
         _run_websocket_resync_event_shape_smoke(client, cookies=cookies)
         _run_scroll_near_bottom_snap_smoke(client, cookies=cookies)
         _run_thread_list_pagination_smoke(client, cookies=cookies)
+        _run_customer_message_edited_smoke(client, cookies=cookies)
         _run_targeted_media_and_quick_reply_regressions(client, cookies=cookies)
         _run_targeted_chat_history_media_visibility_regression(client, cookies=cookies)
 

@@ -4789,6 +4789,105 @@ def is_conversation_customer_blocked(
     return bool(meta.is_blocked) if meta else False
 
 
+async def apply_incoming_customer_message_edit(
+    db: Session,
+    client: MaxClient,
+    settings: BotSettings,
+    event: MaxWebhookEvent,
+) -> dict:
+    """
+    Apply Max message_edited for a customer message already stored by mid.
+
+    Intentionally narrow: no new ChatMessage, no unread/start/prestart side effects.
+    Unknown mid is ignored (do not invent a row from an edit event).
+    """
+    workspace_id = int(settings.workspace_id or DEFAULT_WORKSPACE_ID)
+    message_mid = str(event.message_mid or "").strip()
+    if not message_mid:
+        return {"ok": True, "ignored": "message_edited_missing_mid"}
+
+    msg = (
+        db.query(ChatMessage)
+        .filter(
+            ChatMessage.workspace_id == workspace_id,
+            ChatMessage.max_message_mid == message_mid,
+            ChatMessage.direction == "customer",
+        )
+        .order_by(ChatMessage.id.desc())
+        .first()
+    )
+    if msg is None:
+        return {
+            "ok": True,
+            "ignored": "message_edited_unknown_mid",
+            "message_mid": message_mid,
+        }
+
+    new_text = str(event.text or "")
+    incoming_image_urls = [
+        str(url).strip()
+        for url in (getattr(event, "image_urls", []) or [])
+        if str(url).strip()
+    ]
+    changed = False
+    if str(msg.text or "") != new_text:
+        msg.text = new_text
+        changed = True
+
+    if incoming_image_urls:
+        normalized_image_urls = await _materialize_incoming_image_urls(
+            image_urls=incoming_image_urls,
+            client=client,
+            workspace_id=workspace_id,
+        )
+        next_image_url = normalized_image_urls[0] if normalized_image_urls else None
+        next_image_urls_json = (
+            json.dumps(normalized_image_urls, ensure_ascii=False)
+            if normalized_image_urls
+            else "[]"
+        )
+        next_image_urls_json = _normalize_image_urls_json(next_image_urls_json, next_image_url)
+        prev_image_urls_json = _normalize_image_urls_json(
+            getattr(msg, "image_urls_json", None),
+            getattr(msg, "image_url", None),
+        )
+        if (
+            str(msg.image_url or "") != str(next_image_url or "")
+            or prev_image_urls_json != next_image_urls_json
+        ):
+            msg.image_url = next_image_url
+            msg.image_urls_json = next_image_urls_json
+            changed = True
+            linked_media_paths = _chat_message_media_paths(msg)
+            if linked_media_paths:
+                _link_chat_message_media_assets(
+                    db,
+                    chat_message_id=int(msg.id),
+                    workspace_id=int(msg.workspace_id or workspace_id),
+                    media_paths=linked_media_paths,
+                )
+
+    if not changed:
+        return {
+            "ok": True,
+            "flow": "message_edited_noop",
+            "conversation_id": int(msg.conversation_id),
+            "chat_message_id": int(msg.id),
+            "message_mid": message_mid,
+        }
+
+    db.add(msg)
+    db.commit()
+    db.refresh(msg)
+    return {
+        "ok": True,
+        "flow": "message_edited",
+        "conversation_id": int(msg.conversation_id),
+        "chat_message_id": int(msg.id),
+        "message_mid": message_mid,
+    }
+
+
 async def handle_customer_event(
     db: Session,
     client: MaxClient,
