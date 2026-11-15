@@ -79,6 +79,7 @@ from app.manager_bridge import (
     mark_conversation_messages_read_by_customer,
     _try_delete_unreferenced_media_file,
     handle_customer_event,
+    apply_incoming_customer_message_edit,
     handle_manager_message,
     backfill_chat_message_media_assets,
     cleanup_orphan_chat_message_media_links,
@@ -1282,6 +1283,7 @@ async def _auto_subscribe_workspace_webhook(settings_row: BotSettings) -> tuple[
         url=webhook_workspace_url,
         update_types=[
             "message_created",
+            "message_edited",
             "message_callback",
             "bot_started",
         ],
@@ -11152,6 +11154,7 @@ async def max_webhook(
 
     accepted_update_types = {
         "message_created",
+        "message_edited",
         "message_callback",
         "new_message",
         "message_read",
@@ -11235,6 +11238,33 @@ async def max_webhook(
             "marked_read_count": int(changed),
             "read_message_mid": str(event.read_message_mid or ""),
         }
+
+    if update_type == "message_edited":
+        edit_result = await apply_incoming_customer_message_edit(
+            db=db,
+            client=max_client,
+            settings=settings_db,
+            event=event,
+        )
+        _wh_log.warning(
+            "[WEBHOOK] handled type=message_edited key=%s workspace=%s flow=%s mid=%s",
+            str(webhook_key or "")[:24],
+            int(workspace_id),
+            str((edit_result or {}).get("flow") or (edit_result or {}).get("ignored") or "-"),
+            str(event.message_mid or "")[:48],
+        )
+        # Refresh open chat UIs when an existing customer message changed.
+        if str((edit_result or {}).get("flow") or "") == "message_edited":
+            with suppress(Exception):
+                conversation_hint_id = _extract_conversation_id_from_result(edit_result)
+                asyncio.create_task(
+                    _broadcast_workspace_chat_update(
+                        workspace_id=workspace_id,
+                        conversation_id=conversation_hint_id,
+                        source="incoming_customer_message_edited",
+                    )
+                )
+        return edit_result
 
     result = await handle_customer_event(
         db=db,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Any
 
@@ -61,6 +62,9 @@ def _normalize_update_type(value: Any) -> str | None:
         "message_created": "message_created",
         "message_callback": "message_callback",
         "incoming_message_received": "message_created",
+        "message_edited": "message_edited",
+        "message_edit": "message_edited",
+        "edited_message": "message_edited",
         "message_read": "message_read",
         "messages_read": "message_read",
         "read": "message_read",
@@ -126,8 +130,21 @@ class MaxWebhookEvent(BaseModel):
     def event_uid_value(self) -> str | None:
         if self.update_id:
             return f"update:{self.update_id}"
-        if (self.update_type or "").strip().lower() == "message_read" and self.read_message_mid:
+        update_type = (self.update_type or "").strip().lower()
+        if update_type == "message_read" and self.read_message_mid:
             return f"read:{self.chat_id}:{self.sender_id}:{self.read_message_mid}"
+        # Edits reuse the same message mid as message_created; include content
+        # fingerprint so a real edit is not dropped by webhook dedupe.
+        if update_type == "message_edited" and self.message_mid:
+            images_key = ",".join(
+                str(url).strip() for url in (self.image_urls or []) if str(url).strip()
+            )
+            digest = hashlib.sha256(
+                f"{self.text or ''}|{images_key}".encode("utf-8")
+            ).hexdigest()[:12]
+            return (
+                f"edit:{self.chat_id}:{self.sender_id}:{self.message_mid}:{digest}"
+            )
         if self.message_mid:
             return f"message:{self.chat_id}:{self.sender_id}:{self.message_mid}"
         if self.message_mid:
