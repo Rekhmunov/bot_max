@@ -6995,23 +6995,34 @@ async def app_update_settings(
         page.status_code = 400
         return page
     _ensure_workspace_webhook_key(settings_row)
-    # Always re-sync webhook update_types when a bot token is present.
-    # Max docs: new event types require another POST /subscriptions.
-    should_sync_webhook = bool((settings_row.bot_token or "").strip()) or not previous_webhook_key
+    # Re-sync webhook update_types whenever a bot token is present (Max docs:
+    # new event types require another POST /subscriptions). Hard-fail only when
+    # the token is being set/rotated or the webhook key is first created — a
+    # transient Max outage must not block saving unrelated settings.
+    token_being_set = bool(token_clean)
+    webhook_key_is_new = not previous_webhook_key
+    should_sync_webhook = bool((settings_row.bot_token or "").strip()) or webhook_key_is_new
     if should_sync_webhook:
         subscribed_ok, subscribe_error, _sub_details = await _ensure_workspace_webhook_subscription(
             settings_row
         )
         if not subscribed_ok:
-            db.rollback()
-            page = _render_app_settings_page(
-                request,
-                db=db,
-                current_user=current_user,
-                error=_user_friendly_bot_connection_error(),
+            hard_fail = token_being_set or webhook_key_is_new
+            if hard_fail:
+                db.rollback()
+                page = _render_app_settings_page(
+                    request,
+                    db=db,
+                    current_user=current_user,
+                    error=_user_friendly_bot_connection_error(),
+                )
+                page.status_code = 400
+                return page
+            logging.getLogger(__name__).warning(
+                "[WEBHOOK_SUB] settings save continued after soft sync failure workspace=%s error=%s",
+                int(workspace_id),
+                str(subscribe_error or "")[:160],
             )
-            page.status_code = 400
-            return page
     settings_row.admin_account_id = admin_account_id.strip()
     mode = (routing_mode or "round_robin").strip().lower()
     if mode not in {"round_robin", "random"}:
